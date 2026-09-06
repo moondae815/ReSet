@@ -10,7 +10,6 @@
 # 그 파일에 취소를 삼키는 catch가 없다는 뜻은 아니다.
 ReSet.Core/Services/AiService.cs=3
 ReSet.Core/Services/MetadataExporter.cs=1
-ReSet.Core/Services/SettlementPolicyService.cs=1
 ReSet.Core/Services/SnapshotManager.cs=2
 ReSet.Validator.Cli/Program.cs=9
 ReSet.Validator.Core/Services/CSharpReflectionRunner.cs=2

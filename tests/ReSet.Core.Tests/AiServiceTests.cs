@@ -1275,47 +1275,6 @@ END",
         }
 
         [Fact]
-        public async Task GenerateSettlementPolicyRulebookAsync_Success_ReturnsContent()
-        {
-            // Arrange
-            var spDefs = new System.Collections.Generic.List<SpDefinition>
-            {
-                new SpDefinition 
-                { 
-                    Schema = "dbo", 
-                    Name = "USP_Test", 
-                    DdlText = "SELECT 1;",
-                    Dependencies = new System.Collections.Generic.List<DependencyInfo>
-                    {
-                        new DependencyInfo 
-                        { 
-                            Schema = "dbo", Name = "TestTable", Type = "TABLE",
-                            Columns = new System.Collections.Generic.List<ColumnInfo>
-                            {
-                                new ColumnInfo { ColumnName = "Id", DataType = "int", Description = "Primary Key" },
-                                new ColumnInfo { ColumnName = "Status", DataType = "varchar" }
-                            }
-                        }
-                    }
-                }
-            };
-            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 1. 개요 및 목적\\n테스트 정책서\"}}]}";
-            var mockHandler = new MockHttpMessageHandler(mockResponse);
-            var httpClient = new HttpClient(mockHandler);
-
-            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
-            IAiService service = new AiService(client, 0.2f);
-
-            // Act
-            var result = await service.GenerateSettlementPolicyRulebookAsync(spDefs, "{\"profiling\": {}}");
-
-            // Assert
-            Assert.Equal("## 1. 개요 및 목적\n테스트 정책서", result.Content);
-            Assert.Contains("TestTable", result.UserPrompt);
-            Assert.Contains("Primary Key", result.UserPrompt);
-            Assert.Contains("No description", result.UserPrompt);
-        }
-        [Fact]
         public async Task DeconstructSpLogicAsync_WithRichSpDef_CoversFormattingMethods()
         {
             // Arrange

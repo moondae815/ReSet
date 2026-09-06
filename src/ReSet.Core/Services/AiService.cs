@@ -4808,71 +4808,6 @@ Output ONLY the final JSON payload. Do not include markdown block markers (```js
             return content;
         }
 
-        public async Task<AiResult> GenerateSettlementPolicyRulebookAsync(System.Collections.Generic.List<SpDefinition> spDefs, string profilingDataJson, CancellationToken cancellationToken = default)
-        {
-            var systemPrompt = @"You are a principal settlement policy analyst consolidating database stored procedure logic (DDL) and code/configuration settings (Data Profiling) into a business-level 'Settlement Rulebook'.
-Combine the conditional logic and data mappings of SPs with common code master data, and write a policy rulebook in natural Korean.
-
-[Required Content & Rules]
-1. Map constants/status variables in code (e.g., WHERE Status = 'S02') to their actual business meanings in common code tables (e.g., 'S02' = 'Settlement Pending').
-2. Write the policy rulebook in Korean Markdown format using exactly these 5 H2 headers:
-   ## 1. 개요 및 목적
-   ## 2. 핵심 정산 비즈니스 규칙 정의
-   ## 3. 코드값 및 마스터 데이터 매핑 정보
-   ## 4. 프로그램별 정산 영향도 매핑
-   ## 5. 예외 처리 및 제약 사항
-3. Utilize tables and diagrams where possible to optimize readability.
-4. Do not wrap the entire response in a markdown code block. However, you MUST use ```mermaid blocks for flowcharts.";
-
-            var userPrompt = new StringBuilder();
-            userPrompt.AppendLine("[Stored Procedure DDL & Dependecy Info]");
-            foreach (var sp in spDefs)
-            {
-                userPrompt.AppendLine($"### SP: {sp.Schema}.{sp.Name}");
-                userPrompt.AppendLine("#### [DDL Source]");
-                userPrompt.AppendLine("```sql");
-                userPrompt.AppendLine(sp.DdlText);
-                userPrompt.AppendLine("```");
-                userPrompt.AppendLine("#### [Dependencies]");
-                foreach (var dep in sp.Dependencies)
-                {
-                    userPrompt.AppendLine($"- Object: {dep.Schema}.{dep.Name} ({dep.Type})");
-                    if (dep.Columns != null && dep.Columns.Count > 0)
-                    {
-                        userPrompt.AppendLine("  * Columns:");
-                        foreach (var col in dep.Columns)
-                        {
-                            var desc = string.IsNullOrEmpty(col.Description) ? "No description" : col.Description;
-                            userPrompt.AppendLine($"    - {col.ColumnName} ({col.DataType}): {desc}");
-                        }
-                    }
-                }
-                userPrompt.AppendLine();
-            }
-
-            userPrompt.AppendLine("[Master/Common Code Data Profiling Results (JSON)]");
-            userPrompt.AppendLine("```json");
-            userPrompt.AppendLine(profilingDataJson);
-            userPrompt.AppendLine("```");
-            userPrompt.AppendLine();
-            Log.Information("AI 정산 정책서 생성 요청 전송");
-            Log.Debug("[AI 요청 System Prompt]:\n{SystemPrompt}\n[AI 요청 User Prompt]:\n{UserPrompt}", systemPrompt, userPrompt.ToString());
-
-            var aiResult = await _aiClient.ChatAsync(systemPrompt, userPrompt.ToString(), _temperature, effort: null, cancellationToken: cancellationToken);
-
-            if (aiResult == null)
-            {
-                aiResult = new AiResult();
-            }
-            aiResult.SystemPrompt = systemPrompt;
-            aiResult.UserPrompt = userPrompt.ToString();
-
-            Log.Information("AI 정산 정책서 생성 완료 - 응답 길이: {Length}", aiResult.Content?.Length ?? 0);
-            Log.Debug("[AI 응답 내용]:\n{Response}", aiResult.Content);
-
-            return aiResult;
-        }
-
         /// <summary>
         /// 완성된 명세서 하나만을 근거로 요구사항 문서를 도출한다.
         ///
@@ -4927,7 +4862,7 @@ Your ONLY source is the Korean specification document supplied by the user. You 
             Log.Information("AI 요구사항 문서 도출 요청 전송 - 대상: {Object}", objectLabel);
 
             // cancellationToken을 위치 인자로 넘기면 volatileUserSuffix에 바인딩된다.
-            // 명명 인자를 쓴다 - 기존 호출부(바로 위 GenerateSettlementPolicyRulebookAsync)도
+            // 명명 인자를 쓴다 - 기존 호출부(GenerateBatchMigrationPlanAsync 등)도
             // 모두 이 방식이다.
             var aiResult = await _aiClient.ChatAsync(
                 systemPrompt,
