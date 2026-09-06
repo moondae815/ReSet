@@ -131,6 +131,42 @@ CRUD 점수: {review.ScoreCrud}/10
         return yamlFrontMatter + MetadataHeader(provider, modelName, effort, timestamp, string.Empty, statusNote) + body;
     }
 
+    /// <summary>
+    /// 근거가 여러 편일 때 쓰는 진입점. 종료 상태를 세어 한 줄로 싣는다.
+    ///
+    /// [왜 필요한가] 정책서의 근거는 명세서 14편이고 그중 일부가 품질 미달일 수 있다.
+    /// 단수 오버로드(sourceOutcome 하나)로는 그 사실을 실을 자리가 없어, 지금까지
+    /// 정책서는 자기가 무엇 위에 서 있는지 말하지 못했다.
+    /// </summary>
+    public static string FormatUnverifiedDocument(
+        string body,
+        IReadOnlyDictionary<string, int> sourceStatusCounts,
+        string provider,
+        string modelName,
+        string? effort,
+        DateTime timestamp)
+    {
+        var sourceLine = sourceStatusCounts.Count > 0
+            ? "근거 명세서 검증 상태: "
+              + string.Join(" · ", sourceStatusCounts
+                  .OrderByDescending(kv => kv.Value)
+                  .ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                  .Select(kv => $"{kv.Key} {kv.Value}"))
+              + "\n"
+            : string.Empty;
+
+        var yamlFrontMatter = $@"---
+검증 상태: 검증 없음 # 이 문서는 L1/L2 검증을 거치지 않음
+{sourceLine}---
+
+";
+
+        var statusNote =
+            "> **검증 상태**: 이 문서는 검증 파이프라인을 거치지 않았습니다. 내용을 직접 검토하십시오.\n";
+
+        return yamlFrontMatter + MetadataHeader(provider, modelName, effort, timestamp, string.Empty, statusNote) + body;
+    }
+
     private static string MetadataHeader(
         string provider,
         string modelName,

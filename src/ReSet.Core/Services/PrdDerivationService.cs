@@ -73,7 +73,7 @@ namespace ReSet.Core.Services
             // 빈 줄을 내므로 별도 삽입 없이 두 콜아웃이 합쳐지지 않고 갈라져 렌더링된다.
             var banner = PrdAttributionReport.BuildBanner(validation);
             var document = VerificationDocumentFormatter.FormatUnverifiedDocument(
-                banner + body, null, _aiService.ProviderName, _aiService.ModelName, effort, DateTime.Now);
+                banner + body, (ReSet.Core.Models.VerificationOutcome?)null, _aiService.ProviderName, _aiService.ModelName, effort, DateTime.Now);
 
             var prdPath = Path.Combine(docsDirectory, OutputPathResolver.PrdFileName);
             await File.WriteAllTextAsync(prdPath, document, cancellationToken);

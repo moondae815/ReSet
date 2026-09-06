@@ -1,4 +1,4 @@
-using ReSet.Cli;
+using ReSet.Core.Services;
 using Xunit;
 
 namespace ReSet.Core.Tests;

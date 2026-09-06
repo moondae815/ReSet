@@ -1,6 +1,6 @@
 using System;
 
-namespace ReSet.Cli
+namespace ReSet.Core.Services
 {
     /// <summary>명세서 상단 YAML 헤더에서 검증 상태와 점수를 읽는다.</summary>
     public sealed record SpecHeader(
