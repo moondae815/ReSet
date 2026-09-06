@@ -61,6 +61,52 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task 단계_프롬프트는_계약의_표구분자를_그대로_싣는다()
+        {
+            var (service, _) = Build();
+
+            var result = await service.GeneratePolicyStageAsync(
+                1, "수수료율 스냅샷 적재", Sources(), CodeValues());
+
+            Assert.NotNull(result.SystemPrompt);
+            Assert.Contains(PolicySectionContract.TableSeparator, result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task 단계_프롬프트는_근거_칸의_구분자를_계약에서_읽는다()
+        {
+            var (service, _) = Build();
+
+            var result = await service.GeneratePolicyStageAsync(
+                1, "수수료율 스냅샷 적재", Sources(), CodeValues());
+
+            Assert.NotNull(result.SystemPrompt);
+            // 구분자 하나만 재면(" · ") 다른 문맥에서 우연히 같은 글자를 쓴 경우와
+            // 계약을 실제로 읽는 경우를 못 가른다 - 프롬프트가 근거 칸 형식을
+            // 설명하는 문장 안에서 그 자리에 쓰였는지까지 재야 한다.
+            Assert.Contains(
+                $"<procedure> {PolicySectionContract.LabelSeparator}## <specification heading>",
+                result.SystemPrompt);
+        }
+
+        [Fact]
+        public async Task 단계_프롬프트는_코드값_없음_표기를_계약에서_읽는다()
+        {
+            var (service, _) = Build();
+
+            var result = await service.GeneratePolicyStageAsync(
+                1, "수수료율 스냅샷 적재", Sources(), CodeValues());
+
+            Assert.NotNull(result.SystemPrompt);
+            // NoCodeValue는 "-" 한 글자라 프롬프트 어디서나 우연히 나타난다
+            // (예: "S1-01"의 하이픈). 코드값 규칙을 설명하는 문장 안에서 그
+            // 자리에 쓰였는지까지 재야 계약을 실제로 읽는지 가려진다.
+            Assert.Contains(
+                $"MUST be either `{PolicySectionContract.NoCodeValue}` or",
+                result.SystemPrompt);
+        }
+
+        [Fact]
         public async Task 매칭된_코드값은_의미와_함께_싣는다()
         {
             var (service, _) = Build();
@@ -87,8 +133,14 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
-        public async Task 그_단계의_명세서만_싣는다()
+        public async Task 넘겨받은_명세서가_프롬프트에_그대로_실린다()
         {
+            // 이 테스트는 "넘겨받은 sources가 프롬프트에 실리는지"만 잰다.
+            // GeneratePolicyStageAsync는 넘겨받은 sources만 그대로 도므로,
+            // 하나만 넘기고 넘기지 않은 문자열의 부재를 확인하는 것은 그
+            // 사실의 재확인일 뿐 교차 단계 유출을 막는 방어를 재는 것이 아니다.
+            // 단계별로 무엇을 이 메서드에 넘길지 고르는 일(선별)은 호출부의
+            // 책임이고, 그 선별은 T10(SettlementPolicyService)이 잠근다.
             var (service, _) = Build();
 
             var result = await service.GeneratePolicyStageAsync(
