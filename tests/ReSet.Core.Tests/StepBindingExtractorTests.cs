@@ -49,6 +49,26 @@ UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_v_valIncVat AS INT);
             Assert.Empty(StepBindingExtractor.Extract(markdown));
         }
 
+        // 이름을 가정하지 않는 자(「식별자 `(` + 첫 인자 식별자 + 최상위 중괄호」)로 훑으면
+        // 바인딩 객체를 진 호출이 493 이고, 그중 14 가 네 이름 **밖**이다 -
+        // `chunkRanges` 7 · `query` 6 · `queryAll` 1, 그 안에 사실 22 개.
+        // 네 이름으로만 세던 자로는 이 물음 자체를 못 던진다.
+        [Fact]
+        public void Extract_ReadsCallFormsBeyondTheOriginalFour()
+        {
+            var markdown = "### S02\n\n```pseudocode\n" +
+                           "for r in chunkRanges(SQL_RANGES, { p_batchYmd: batchYmd })\n" +
+                           "rows = query(SQL_PICK, { p_clientId: clientId, p_rate: 1.1 })\n" +
+                           "all = queryAll(SQL_ALL, { p_ymd: ymd })\n```";
+
+            var facts = StepBindingExtractor.Extract(markdown);
+
+            Assert.Equal(4, facts.Count);
+            Assert.Contains(facts, f => f.CallName == "chunkRanges" && f.Key == "p_batchYmd");
+            Assert.Contains(facts, f => f.CallName == "query" && f.Value == "1.1");
+            Assert.Contains(facts, f => f.CallName == "queryAll" && f.Key == "p_ymd");
+        }
+
         // 실측(2026-09-07, 단계 본문 386 편): 여러 줄에 걸친 바인딩 객체가 20 자리 있고
         // 그 안에 사실 157 개가 산다 - 전체 872 의 18%. 줄 단위로 앵커한 구현은 이
         // 157 에 눈이 먼다. Batch5/S14:52 실물의 모양이다.
