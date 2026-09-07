@@ -261,11 +261,13 @@ namespace ReSet.Core.Services
         //     43행에서 **52행**(NULL확정 31 · 중립 21)으로 늘었다. 실물은
         //     UF_GET_COMM4CLIENT4INTEREST:35·UF_GET_COMM4PG4INTEREST:42
         //     (`CASE … END / 100.0` - 최상위가 분기식을 품은 산술식) ·
-        //     UF_GET_EXTRACOMM4CLIENT:41·53·66·UF_Get_ExtraCardCommissionAmt:42·47
-        //     (`ISNULL(CASE … THEN 컬럼-컬럼 산술식 … ELSE 0 END, 0)`) ·
-        //     UF_GET_PGCommOption:21(`CASE … THEN 컬럼 … ELSE 0 END`) ·
-        //     UF_GET_SETTLE_EXCHANGERATE:26(컬럼 산술 + 중첩 IIF, 그 IIF 결과가
-        //     리터럴·컬럼·산술식)이다. 집계 대장은 10행으로 무변경 -
+        //     UF_GET_EXTRACOMM4CLIENT:41·53·66(`ISNULL(CASE … THEN 컬럼-컬럼 산술식
+        //     … ELSE 0 END, 0)`) · UF_Get_ExtraCardCommissionAmt:42·47(`ISNULL(CASE
+        //     … THEN 컬럼 … ELSE 0 END, 0)` - THEN이 맨 컬럼이고 리터럴은 ELSE뿐,
+        //     EXTRACOMM4CLIENT와는 다른 모양이다) · UF_GET_PGCommOption:21(`CASE …
+        //     THEN 컬럼 … ELSE 0 END`) · UF_GET_SETTLE_EXCHANGERATE:26(컬럼 산술 +
+        //     곱셈으로 묶인 **형제** `IIF` 둘, 그중 하나의 결과가 리터럴·컬럼·산술식)
+        //     이다. 집계 대장은 10행으로 무변경 -
         //     `AggregateAssignmentExtractor`는 이 판정을 쓰지 않는다. 통째 완화(모든
         //     산술식 재귀 허용)를 먼저 실측했으나 원본 줄 주석이 대상 칸 안으로 섞여
         //     드는 부작용이 나와(중첩 분기식·함수 호출·하위 질의 다섯 자리) 그 셋을
