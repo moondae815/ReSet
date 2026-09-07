@@ -254,6 +254,26 @@ namespace ReSet.Core.Services
         //     인자를 생략한 낡은 표기 그대로인 명세서가 그대로 배송된다.
         //     번호 충돌 확인: main·origin/main·integration/settlement-policy·
         //     feat/settlement-policy-redesign 전부 18이고 19는 비어 있음을 확인했다.
+        //     [2026-09-07 2 회차 - 같은 19 안에서 비집계 갈래가 다시 넓어졌다] 분기식
+        //     (`IIF`/`CASE`)의 결과(THEN·ELSE) 판정이 "전부 컬럼 참조"에서 "컬럼 참조 /
+        //     리터럴 / 그 둘의 산술식"으로 넓어졌다(한 겹만 - 결과 안에 또 분기식이
+        //     오거나 함수 호출·하위 질의가 오면 여전히 침묵한다). 비집계 코퍼스 대장이
+        //     43행에서 **52행**(NULL확정 31 · 중립 21)으로 늘었다. 실물은
+        //     UF_GET_COMM4CLIENT4INTEREST:35·UF_GET_COMM4PG4INTEREST:42
+        //     (`CASE … END / 100.0` - 최상위가 분기식을 품은 산술식) ·
+        //     UF_GET_EXTRACOMM4CLIENT:41·53·66·UF_Get_ExtraCardCommissionAmt:42·47
+        //     (`ISNULL(CASE … THEN 컬럼-컬럼 산술식 … ELSE 0 END, 0)`) ·
+        //     UF_GET_PGCommOption:21(`CASE … THEN 컬럼 … ELSE 0 END`) ·
+        //     UF_GET_SETTLE_EXCHANGERATE:26(컬럼 산술 + 중첩 IIF, 그 IIF 결과가
+        //     리터럴·컬럼·산술식)이다. 집계 대장은 10행으로 무변경 -
+        //     `AggregateAssignmentExtractor`는 이 판정을 쓰지 않는다. 통째 완화(모든
+        //     산술식 재귀 허용)를 먼저 실측했으나 원본 줄 주석이 대상 칸 안으로 섞여
+        //     드는 부작용이 나와(중첩 분기식·함수 호출·하위 질의 다섯 자리) 그 셋을
+        //     배제하는 좁은 술어로 되돌렸다 - 늘어난 9행 전량을 원본 DDL로 대조해
+        //     거짓 행 0·주석 섞임 0을 확인했다. **캐시 형식 버전은 20으로 올리지
+        //     않는다** - 19가 아직 어떤 산출물에도 적용되지 않았다(명세서 재생성 전).
+        //     설계는 `docs/superpowers/specs/2026-09-06-대입-감쌈-벗기기-design.md`
+        //     §10에 있다.
         private const int CurrentCacheFormatVersion = 19;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
