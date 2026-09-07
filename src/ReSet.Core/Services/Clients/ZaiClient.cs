@@ -113,6 +113,8 @@ namespace ReSet.Core.Services.Clients
                     throw new InvalidOperationException($"Z.ai API 에러 응답 수신: {errMsg}");
                 }
 
+                ChatCompletionsUsage.Read(root).WriteToLog(ProviderName);
+
                 if (!root.TryGetProperty("choices", out var choicesElement) || choicesElement.GetArrayLength() == 0)
                 {
                     Log.Error("Z.ai API 응답 choices 속성 누락 또는 빈 배열");

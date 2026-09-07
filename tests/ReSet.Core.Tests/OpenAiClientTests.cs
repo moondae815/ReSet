@@ -10,6 +10,50 @@ namespace ReSet.Core.Tests
 {
     public class OpenAiClientTests
     {
+        // Responses API 는 채팅 규격과 이름이 다르다(input_tokens ·
+        // input_tokens_details.cached_tokens). 같은 클라이언트가 경로 둘을 쓰므로
+        // 판독기도 둘이어야 한다 - 채팅 규격 매핑을 여기 재사용하면 전부 미보고가 된다.
+        [Fact]
+        public void ReadResponsesUsage_ExtractsInputOutputCachedAndReasoning()
+        {
+            using var doc = JsonDocument.Parse(@"{""usage"":{
+                ""input_tokens"":217945,
+                ""input_tokens_details"":{""cached_tokens"":204800},
+                ""output_tokens"":1873,
+                ""output_tokens_details"":{""reasoning_tokens"":1024}}}");
+
+            var usage = OpenAiClient.ReadResponsesUsage(doc.RootElement);
+
+            Assert.Equal(217945, usage.Input);
+            Assert.Equal(204800, usage.CacheRead);
+            Assert.Equal(1873, usage.Output);
+            Assert.Equal(1024, usage.Thinking);
+        }
+
+        // Responses 규격에도 캐시 쓰기 칸은 없다.
+        [Fact]
+        public void ReadResponsesUsage_MarksCacheWriteUnreported()
+        {
+            using var doc = JsonDocument.Parse(@"{""usage"":{""input_tokens"":10}}");
+
+            var usage = OpenAiClient.ReadResponsesUsage(doc.RootElement);
+
+            Assert.Null(usage.CacheWrite);
+        }
+
+        [Fact]
+        public void ReadResponsesUsage_WithoutAUsageObject_ReportsNothing()
+        {
+            using var doc = JsonDocument.Parse(@"{""output"":[]}");
+
+            var usage = OpenAiClient.ReadResponsesUsage(doc.RootElement);
+
+            Assert.Null(usage.Input);
+            Assert.Null(usage.Output);
+            Assert.Null(usage.CacheRead);
+            Assert.Null(usage.Thinking);
+        }
+
         [Fact]
         public async Task ChatAsync_WithGpt5_ShouldUseResponsesApiAndParseOutput()
         {

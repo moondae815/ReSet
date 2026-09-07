@@ -10,6 +10,60 @@ namespace ReSet.Core.Tests
 {
     public class GoogleClientTests
     {
+        // Google 은 집계를 usage 가 아니라 usageMetadata 에 담고 이름도 전부 다르다.
+        // 캐시 읽기는 cachedContentTokenCount 이고, 추론은 thoughtsTokenCount 다.
+        [Fact]
+        public void ReadUsage_ExtractsGoogleUsageMetadata()
+        {
+            using var doc = JsonDocument.Parse(@"{""usageMetadata"":{
+                ""promptTokenCount"":423110,
+                ""candidatesTokenCount"":1204,
+                ""cachedContentTokenCount"":409600,
+                ""thoughtsTokenCount"":612}}");
+
+            var usage = GoogleClient.ReadUsage(doc.RootElement);
+
+            Assert.Equal(423110, usage.Input);
+            Assert.Equal(1204, usage.Output);
+            Assert.Equal(409600, usage.CacheRead);
+            Assert.Equal(612, usage.Thinking);
+        }
+
+        // 명시적 캐시는 별개 API(cachedContents)로 만들고, generateContent 응답은
+        // 그 생성량을 보고하지 않는다. 0 이 아니라 미보고다.
+        [Fact]
+        public void ReadUsage_MarksCacheWriteUnreported()
+        {
+            using var doc = JsonDocument.Parse(@"{""usageMetadata"":{""promptTokenCount"":10}}");
+
+            var usage = GoogleClient.ReadUsage(doc.RootElement);
+
+            Assert.Null(usage.CacheWrite);
+        }
+
+        [Fact]
+        public void ReadUsage_WithoutUsageMetadata_ReportsNothing()
+        {
+            using var doc = JsonDocument.Parse(@"{""candidates"":[]}");
+
+            var usage = GoogleClient.ReadUsage(doc.RootElement);
+
+            Assert.Null(usage.Input);
+            Assert.Null(usage.Output);
+            Assert.Null(usage.CacheRead);
+            Assert.Null(usage.Thinking);
+        }
+
+        [Fact]
+        public void ReadUsage_WithMalformedMetadata_ReportsNothingWithoutThrowing()
+        {
+            using var doc = JsonDocument.Parse(@"{""usageMetadata"":{""promptTokenCount"":null}}");
+
+            var usage = GoogleClient.ReadUsage(doc.RootElement);
+
+            Assert.Null(usage.Input);
+        }
+
         [Fact]
         public async Task ChatAsync_WithNoEffort_ShouldNotIncludeThinkingConfig()
         {

@@ -190,6 +190,8 @@ namespace ReSet.Core.Services.Clients
                     throw new InvalidOperationException($"Ollama API 에러 응답 수신: {errMsg}");
                 }
 
+                ReadUsage(root).WriteToLog(ProviderName);
+
                 if (!root.TryGetProperty("message", out var messageElement))
                 {
                     throw new InvalidOperationException("Ollama API 응답 내에 message 속성이 존재하지 않습니다.");
@@ -280,5 +282,20 @@ namespace ReSet.Core.Services.Clients
 
             return result;
         }
+
+        /// <summary>
+        /// 응답 루트에서 토큰 집계를 읽는다.
+        ///
+        /// Ollama만 집계를 usage 객체로 감싸지 않고 루트에 그대로 놓는다
+        /// (prompt_eval_count · eval_count). 캐시 항목은 아예 없으므로 셋 다
+        /// 미보고다 - 0으로 적으면 로컬 모델을 두고 캐시 거동을 논하게 된다.
+        /// </summary>
+        public static TokenUsage ReadUsage(JsonElement root) =>
+            new TokenUsage(
+                Input: TokenUsage.ReadCounter(root, "prompt_eval_count"),
+                Output: TokenUsage.ReadCounter(root, "eval_count"),
+                CacheWrite: null,
+                CacheRead: null,
+                Thinking: null);
     }
 }

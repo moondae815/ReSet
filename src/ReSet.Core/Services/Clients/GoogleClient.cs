@@ -158,6 +158,8 @@ namespace ReSet.Core.Services.Clients
             {
                 var root = doc.RootElement;
 
+                ReadUsage(root).WriteToLog(ProviderName);
+
                 // promptFeedback 차단 여부 확인
                 if (root.TryGetProperty("promptFeedback", out var promptFeedback))
                 {
@@ -241,6 +243,29 @@ namespace ReSet.Core.Services.Clients
                     ThinkingText = thinkingText
                 };
             }
+        }
+
+        /// <summary>
+        /// 응답의 usageMetadata에서 토큰 집계를 읽는다.
+        ///
+        /// Google만 봉투 이름이 usage가 아니라 usageMetadata이고 항목 이름도 전부
+        /// 다르다. 캐시 읽기는 cachedContentTokenCount, 추론은 thoughtsTokenCount다.
+        /// 캐시 쓰기는 별개 API(cachedContents)에서 일어나고 이 응답이 보고하지
+        /// 않으므로 언제나 미보고다 - 0은 "재보니 안 썼다"는 다른 말이 된다.
+        /// </summary>
+        public static TokenUsage ReadUsage(JsonElement root)
+        {
+            if (!root.TryGetProperty("usageMetadata", out var usage) || usage.ValueKind != JsonValueKind.Object)
+            {
+                return new TokenUsage(null, null, null, null, null);
+            }
+
+            return new TokenUsage(
+                Input: TokenUsage.ReadCounter(usage, "promptTokenCount"),
+                Output: TokenUsage.ReadCounter(usage, "candidatesTokenCount"),
+                CacheWrite: null,
+                CacheRead: TokenUsage.ReadCounter(usage, "cachedContentTokenCount"),
+                Thinking: TokenUsage.ReadCounter(usage, "thoughtsTokenCount"));
         }
     }
 }

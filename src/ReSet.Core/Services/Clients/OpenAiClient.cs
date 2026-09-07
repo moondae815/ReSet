@@ -162,6 +162,8 @@ namespace ReSet.Core.Services.Clients
                         throw new InvalidOperationException($"OpenAI Responses API 에러 응답 수신: {errMsg}");
                     }
 
+                    ReadResponsesUsage(root).WriteToLog(ProviderName);
+
                     // root 자체는 Object이고, 실제 결과 목록은 "output" 프로퍼티(Array)에 들어있음
                     if (root.TryGetProperty("output", out var outputElem) && outputElem.ValueKind == JsonValueKind.Array)
                     {
@@ -364,6 +366,8 @@ namespace ReSet.Core.Services.Clients
                         throw new InvalidOperationException($"OpenAI API 에러 응답 수신: {errMsg}");
                     }
 
+                    ChatCompletionsUsage.Read(root).WriteToLog(ProviderName);
+
                     if (!root.TryGetProperty("choices", out var choicesElement) || choicesElement.GetArrayLength() == 0)
                     {
                         Log.Error("OpenAI API 응답 choices 속성 누락 또는 빈 배열");
@@ -451,6 +455,32 @@ namespace ReSet.Core.Services.Clients
                     };
                 }
             }
+        }
+
+        /// <summary>
+        /// Responses API 응답의 usage에서 토큰 집계를 읽는다.
+        ///
+        /// 같은 클라이언트가 경로를 둘 쓰는데 봉투 이름이 다르다. Responses는
+        /// input_tokens · input_tokens_details.cached_tokens이고, 채팅 경로는
+        /// prompt_tokens · prompt_tokens_details.cached_tokens다(<see
+        /// cref="ChatCompletionsUsage"/>). 한쪽 매핑을 다른 쪽에 쓰면 예외 없이
+        /// 전부 미보고가 되어, 캐시가 죽은 것처럼 보인다.
+        ///
+        /// 캐시 쓰기는 이 규격에도 칸이 없으므로 언제나 미보고다.
+        /// </summary>
+        public static TokenUsage ReadResponsesUsage(JsonElement root)
+        {
+            if (!root.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object)
+            {
+                return new TokenUsage(null, null, null, null, null);
+            }
+
+            return new TokenUsage(
+                Input: TokenUsage.ReadCounter(usage, "input_tokens"),
+                Output: TokenUsage.ReadCounter(usage, "output_tokens"),
+                CacheWrite: null,
+                CacheRead: TokenUsage.ReadNestedCounter(usage, "input_tokens_details", "cached_tokens"),
+                Thinking: TokenUsage.ReadNestedCounter(usage, "output_tokens_details", "reasoning_tokens"));
         }
     }
 }

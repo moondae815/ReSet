@@ -191,6 +191,11 @@ namespace ReSet.Core.Services.Clients
                 throw new InvalidOperationException($"OpenRouter API 에러 응답 수신: {errMsg}");
             }
 
+            // 캐시가 실제로 걸렸는지 볼 수 있는 유일한 신호다. hy4 의 캐시 히트율을
+            // 재려고 OpenRouter 생성 기록 API 를 사후에 뒤져야 했던 것은 이 줄이
+            // 없어서였다.
+            ChatCompletionsUsage.Read(root).WriteToLog(ProviderName);
+
             if (!root.TryGetProperty("choices", out var choicesElement)
                 || choicesElement.ValueKind != JsonValueKind.Array
                 || choicesElement.GetArrayLength() == 0)
