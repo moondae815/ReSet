@@ -286,6 +286,23 @@ namespace ReSet.Core.Services
         //     형제(집계를 품었거나 `SelectSetVariable`이 아닌) 요소를 침묵 조건으로
         //     추가해 닫았다 - 코퍼스(52행)에 두 모양 다 0건이라 대장 행이 한 행도 안
         //     줄었다. 설계는 위 §10과 같은 문서 §11-5(다)·§11-9에 있다.
+        //     [2026-09-07 3 회차(설계서 §12) - 진리 조건을 단일 재귀 술어로 접는다]
+        //     위 두 회차가 더한 조기 반환들(FROM 절 집계·HAVING·GROUP BY·형제)은
+        //     FROM 절 집계 하나만 하위로 훑고 나머지는 최상위 질의 한 층만 봤다 -
+        //     그래서 같은 위험한 모양(집계 없이 무결과가 1행이 되는 조건)이 파생
+        //     테이블·APPLY 안으로 한 층만 들어가면 판정을 벗어나 다시 열렸다(3 회차
+        //     검토가 세 번째로 낸 Critical). 이 회차는 조건의 집합을 넓히거나
+        //     좁히지 않고 흩어진 여섯 조기 반환을 단일 재귀 술어
+        //     (`GuaranteesZeroRowsWhenSourcesAreEmpty`)로 접는다 - FROM의 각 원천
+        //     (이름 있는 테이블·파생 테이블·INNER/LEFT/RIGHT/FULL 조인·CROSS/OUTER
+        //     APPLY·VALUES·TVF·PIVOT/UNPIVOT·테이블 변수)에 같은 질문을 재귀로
+        //     던진다. 코퍼스 대장은 52행 그대로다(비집계) - 층을 넘나드는 이 모양이
+        //     코퍼스에 0건이라서다. 집계 대장도 10행 그대로다 -
+        //     `AggregateAssignmentExtractor`는 이 술어를 쓰지 않는다. 같은 회차가
+        //     `AggregateNames`에 `JSON_ARRAYAGG`·`JSON_OBJECTAGG`도 더했다(§12-5).
+        //     프롬프트·출력 형식은 바뀌지 않아(추출기 내부 판정만 재구성했을 뿐
+        //     담김/침묵의 경계는 그대로다) **캐시 형식 버전은 20으로 올리지 않는다**.
+        //     설계는 위와 같은 문서 §12에 있다.
         private const int CurrentCacheFormatVersion = 19;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
