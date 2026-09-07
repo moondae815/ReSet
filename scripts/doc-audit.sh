@@ -14,6 +14,11 @@
 #
 #   ./scripts/doc-audit.sh 20 133     §2 카탈로그 구간을 감사한다
 #
+# 2026-09-07부터 architecture.md는 허브와 docs/architecture/ 절 파일로 갈렸다.
+# 두 자리를 함께 grep 하지 않으면 모든 행이 "근거없음(이동필요)"으로 뒤집혀,
+# 이 파일 머리가 경고하는 위험한 방향의 오류를 그대로 낸다 — 지우면 안 되는
+# 서술을 지우게 만드는 쪽이다.
+#
 # 출력: 줄번호 | 바이트 | 대상식별자 | architecture.md 분량 | 코드주석 분량 | 판정
 # 마지막 줄에 "감사 완료: N행 처리"를 낸다. set -eu 아래에서 파이프에 붙은 while은
 # 도중에 실패해도 표를 조용히 잘라낼 수 있어, 이 표시가 없으면 잘린 결과를 완전한
@@ -69,13 +74,13 @@ while IFS="$(printf '\t')" read -r ln body; do
   [ -z "$sym" ] && { printf '%-6s %-7s %-34s %-9s %-9s %s\n' "$ln" "$bytes" "-" "-" "-" "산문(수동판정)"; continue; }
 
   if [ -n "$path" ] && [ -e "$path" ]; then
-    arch=$(LC_ALL=C grep -F -h "$path" docs/architecture.md 2>/dev/null | LC_ALL=C wc -c | tr -d ' ')
+    arch=$(LC_ALL=C grep -F -h "$path" docs/architecture.md docs/architecture/*.md 2>/dev/null | LC_ALL=C wc -c | tr -d ' ')
     doc=$(awk '/\/\/\//{c+=length($0)} END{print c+0}' "$path")
   else
     # path가 비었거나(fallback) 존재하지 않는 파일을 가리키면(오타·이동 등) 이름
     # 기반으로 물러난다. 이 갈래도 "(이름판정)" 표시를 남긴다.
     fallback="1"
-    arch=$(LC_ALL=C grep -h "$sym" docs/architecture.md 2>/dev/null | LC_ALL=C wc -c | tr -d ' ')
+    arch=$(LC_ALL=C grep -h "$sym" docs/architecture.md docs/architecture/*.md 2>/dev/null | LC_ALL=C wc -c | tr -d ' ')
     f=$(find src tests -name "$sym.cs" | head -1)
     if [ -n "$f" ]; then
       doc=$(awk '/\/\/\//{c+=length($0)} END{print c+0}' "$f")
