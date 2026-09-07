@@ -9,7 +9,7 @@
 * **순차 단일 선택 루프**: 다중 선택 UI 컴포넌트가 사용자의 선택 물리적 입력 순서를 리턴 목록에 보장하지 않는 한계를 극복하기 위해, 배치 전환 시나리오의 단계별 실행 흐름에 맞게 사용자가 목록에서 순서대로 하나씩 SP를 선택해 큐(Queue)에 적재하고 최종 `[-- 완료 --]` 메뉴 선택 시 루프를 종료해 물리적 배치 전환 순서 정합성을 완벽히 확보합니다.
 
 ### 5.3. 외부 코딩 에이전트 연동용 마이그레이션 지시서 번들링 및 자동 기동 브릿지
-* **마이그레이션 지시서 번들 구성**: 최종 승인된 통합 배치 계획을 하나의 거대한 마크다운으로 넘기지 않고, 진입점 지시서(`agent/MigrationInstructions.md`)와 공통 문서(`agent/common/`), 단계 본문(`agent/steps/<코드>.md`), 회차별 작업 지시서(`agent/task-NN-<코드>.md`)로 나눠 씁니다. 진입점에는 [DataAccessPolicy.InstructionRules](../src/ReSet.Core/Services/DataAccessPolicy.cs)가 생성하는 SQL/ORM 경계 규칙이 삽입되고, 함께 생성되는 `AbstractSettleTasklet` 스텁에는 `TaskletOrmComment`가 ORM 사용 시 지켜야 할 커넥션/트랜잭션 참여 방법을 실행 코드가 아닌 주석으로만 남깁니다. 나누는 이유와 회차 실행 방식은 4.11절에 있습니다.
+* **마이그레이션 지시서 번들 구성**: 최종 승인된 통합 배치 계획을 하나의 거대한 마크다운으로 넘기지 않고, 진입점 지시서(`agent/MigrationInstructions.md`)와 공통 문서(`agent/common/`), 단계 본문(`agent/steps/<코드>.md`), 회차별 작업 지시서(`agent/task-NN-<코드>.md`)로 나눠 씁니다. 진입점에는 [DataAccessPolicy.InstructionRules](../../src/ReSet.Core/Services/DataAccessPolicy.cs)가 생성하는 SQL/ORM 경계 규칙이 삽입되고, 함께 생성되는 `AbstractSettleTasklet` 스텁에는 `TaskletOrmComment`가 ORM 사용 시 지켜야 할 커넥션/트랜잭션 참여 방법을 실행 코드가 아닌 주석으로만 남깁니다. 나누는 이유와 회차 실행 방식은 4.11절에 있습니다.
 * **회차 진행 상태의 소유권**: `agent/progress.json`은 도구가 쓰고 `agent/todo.md`는 그 상태에서 렌더링되는 파생 산출물입니다. 에이전트에게 자기 체크리스트를 채점하게 하면 신뢰성이 의심되는 주체가 유일한 완료 기록을 쓰게 되므로, 진행 상태를 도구 쪽으로 옮겼습니다. 상태 파일은 임시 파일 교체로 원자적으로 쓰이고, 읽지 못한 파일은 덮어쓰지 않고 `.corrupt`로 보존됩니다.
 * **대화형/무인 배치 인자 분리**: 엔진 인자는 `Arguments`(대화형)와 `BatchArguments`(무인)로 나뉩니다. 대화형 TUI 형식은 무인 실행에서 TTY를 열지 못해 종료 코드 0인 채 조용히 실패하므로 폴백하지 않으며, `BatchArguments`가 비면 그 엔진은 무인 배치 미지원으로 간주해 기동 전에 거부합니다. 지시서가 작업 디렉터리 바깥에 있으므로 `{jobDir}` 자리표시자로 접근 범위를 열어 주고, 원본 명세서는 Job 루트의 하위가 아니라 형제이므로 `{specRoot}`로 따로 열어 줍니다(4.11절).
 * **기존 지시서로 재기동할 때의 분류**: 스탠드얼론 메뉴가 고른 지시서 파일은 실행 전에 레거시 단일 문서인지 회차 번들인지 판정됩니다. 번들이면 디스크의 `steps/`에서 회차 목록을 복원해 회차 경로로 보내고, 번들인데 복원이 성립하지 않으면 전체 Job 경로로 떨어뜨리지 않고 사유를 설명하며 거부합니다 — 회차용 문서를 전체 Job 경로에 먹이는 조합만은 만들지 않기 위해서입니다.
@@ -30,7 +30,7 @@
 * **마크업 자동 정화**: 로그 파일 저장 직전, Serilog 로그 파이프라인 내에서 Spectre.Console의 스타일 마크업 태그들을 정규식(`StripMarkup`)으로 자동 정화 처리해 순수한 문자열 로그 형태로만 보존함으로써 실행 파일의 가독성을 높입니다.
 
 ### 5.6. 검증 파이프라인 진행 표시 규칙 (Progress Display Conventions)
-* **메인 상태와 하위 진행 행의 역할 분리**: `NotifyStatus`가 잡 이름·공급자·모델명·Effort·시도 회차를 담은 한 줄 상태 메시지를 콘솔에 남기고, `IMultiProgressScope.AddTask`가 관리하는 하위 진행 행은 그 정보를 반복하지 않습니다. 전체 3단계 흐름(브레인스토밍 → 목차 설계 → 골격/최종 생성)에 속한 행에만 괄호 없는 `n/3. <설명>` 형식으로 순번을 붙이고(예: `1/3. 브레인스토밍 중...`, `3/3. 최종 생성 중 (단일 호출)...`), 목차 재설계처럼 그 3단계 흐름 밖의 단발 작업에는 순번을 붙이지 않습니다([VerificationPipelineOrchestrator.cs](../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs)).
+* **메인 상태와 하위 진행 행의 역할 분리**: `NotifyStatus`가 잡 이름·공급자·모델명·Effort·시도 회차를 담은 한 줄 상태 메시지를 콘솔에 남기고, `IMultiProgressScope.AddTask`가 관리하는 하위 진행 행은 그 정보를 반복하지 않습니다. 전체 3단계 흐름(브레인스토밍 → 목차 설계 → 골격/최종 생성)에 속한 행에만 괄호 없는 `n/3. <설명>` 형식으로 순번을 붙이고(예: `1/3. 브레인스토밍 중...`, `3/3. 최종 생성 중 (단일 호출)...`), 목차 재설계처럼 그 3단계 흐름 밖의 단발 작업에는 순번을 붙이지 않습니다([VerificationPipelineOrchestrator.cs](../../src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs)).
 
 ### 5.7. DDL 커버리지 맵 (Coverage Map)
 
