@@ -1,7 +1,7 @@
 ---
 name: reset-doc-sync
 description: >
-  ReSet 프로젝트의 핵심 문서 3종(README.md, AGENTS.md, docs/architecture.md)을 소스 코드와 동기화한다.
+  ReSet 프로젝트의 핵심 문서(README.md, AGENTS.md, docs/architecture.md 허브와 docs/architecture/ 절 파일들)를 소스 코드와 동기화한다.
   "문서 업데이트", "docs 동기화", "README 갱신", "AGENTS 업데이트", "아키텍처 문서 갱신", "문서 싱크"
   같은 요청이나, 코드 변경 후 문서가 오래된 것 같다는 언급이 있을 때 사용한다.
   새 클래스/서비스 추가, 설정 키 추가, 아키텍처 변경 직후에도 적용 대상이다.
@@ -17,7 +17,8 @@ ReSet의 소스 코드 변화를 3개의 핵심 문서에 정확하게 반영하
 | 문서 | 담당 정보 | 갱신 트리거 |
 |---|---|---|
 | `README.md` | 외부 개발자 대상 기능 소개, 설정(`appsettings.json`) 레퍼런스, 실행 방법, 프로젝트 구조 트리 | 새 기능/설정 키 추가, 사용 방법 변경 |
-| `docs/architecture.md` | 내부 모듈 구조, 클래스 목록(2.2 테이블), 데이터 흐름, 핵심 메커니즘 | 새 클래스/서비스 추가, 리팩토링, 알고리즘 변경 |
+| `docs/architecture.md` (허브) | 제목·서문·§1 개요·§2.1 레이어링과 **절 목차**. 8,000바이트 예산이 걸려 있다 | 절이 늘거나 파일명이 바뀔 때만 |
+| `docs/architecture/*.md` | 내부 모듈 구조, 클래스 목록(`2.2-module-catalog.md`), 데이터 흐름, 핵심 메커니즘 | 새 클래스/서비스 추가, 리팩토링, 알고리즘 변경 |
 | `AGENTS.md` | AI 에이전트용 **행동 규칙**, 라우팅 표, 작업 완료 체크리스트 | 새 **규칙** 추가, 검증 항목 변경. **새 클래스가 생겼다는 사실만으로는 트리거가 아니다** |
 
 **범위 밖:** `docs/roadmap.md`는 사업 일정·마일스톤 문서로 코드에서 도출되지 않는다. 사용자가 명시적으로 요청할 때만 손댄다.
@@ -26,9 +27,9 @@ ReSet의 소스 코드 변화를 3개의 핵심 문서에 정확하게 반영하
 
 ### 1단계: 변경 범위 확정 및 표적 스캔
 
-세 문서는 합계 250KB에 육박한다(README 약 60KB, AGENTS 약 45KB, architecture 약 140KB —
+세 문서는 합계 250KB에 육박한다(README 약 77KB, AGENTS 약 35KB, architecture 허브 약 5KB + 절 파일 합 약 298KB —
 실측은 뒤에서 계속 바뀐다는 사실 자체가 이 문단의 요점이므로, 정확한 값은 항상
-`LC_ALL=C wc -c README.md AGENTS.md docs/architecture.md`로 직접 재측정한다).
+`LC_ALL=C wc -c README.md AGENTS.md docs/architecture.md docs/architecture/*.md`로 직접 재측정한다).
 **전문을 읽지 말고 목차부터 확보한 뒤 필요한 섹션만 부분 읽기**를 한다.
 전문 읽기는 "문서 전면 개편" 요청일 때만 허용한다.
 
@@ -41,7 +42,7 @@ ReSet의 소스 코드 변화를 3개의 핵심 문서에 정확하게 반영하
 각 문서 하단에는 동기화 지점이 주석으로 박혀 있다(4-2에서 갱신한다). 이 값을 우선 사용한다.
 
 ```bash
-BASE=$(grep -ho 'synced-through: [0-9a-f]\{7,40\}' README.md AGENTS.md docs/architecture.md \
+BASE=$(grep -ho 'synced-through: [0-9a-f]\{7,40\}' README.md AGENTS.md docs/architecture.md docs/output-artifacts.md \
        | awk '{print $2}' | xargs git merge-base)
 git log --oneline "$BASE"..HEAD
 git diff --stat "$BASE"..HEAD -- src/ tests/
@@ -50,11 +51,16 @@ git diff --stat "$BASE"..HEAD -- src/ tests/
 주석이 아직 없는 문서가 있으면 그 문서만 최종 갱신 커밋으로 대체한다.
 
 ```bash
-BASE=$(git merge-base $(for f in README.md AGENTS.md docs/architecture.md; do
+BASE=$(git merge-base $(for f in README.md AGENTS.md docs/architecture.md docs/output-artifacts.md; do
          grep -ho 'synced-through: [0-9a-f]\{7,40\}' "$f" | awk '{print $2}' \
            || git log -n 1 --format=%H -- "$f"
        done))
 ```
+
+**`docs/architecture/` 절 파일에는 `synced-through`를 두지 않는다.** 동기화 지점은
+「문서 묶음」의 속성이지 파일의 속성이 아니다 — 17개를 매번 갱신하게 만들면 빠뜨리고,
+빠뜨린 파일은 다음 회차의 스캔 범위 밖으로 나간다. 원장은 위 **넷**이 대표한다.
+(`docs/output-artifacts.md`는 2026-09-07까지 주석은 박혀 있는데 이 계산에서 빠져 있었다.)
 
 **타임스탬프로 정렬하지 않는다.** `%ct`(author date) 정렬은 위상 순서와 어긋난다 —
 오래 살아 있던 브랜치의 커밋은 날짜가 옛날이면서 병합은 늦게 되므로, 날짜순 최솟값이
@@ -72,14 +78,14 @@ BASE=$(git merge-base $(for f in README.md AGENTS.md docs/architecture.md; do
 **1-3. 문서 목차 확보** — 전문 대신 헤딩만 읽는다.
 
 ```bash
-grep -n "^#\{1,3\} " README.md AGENTS.md docs/architecture.md
+grep -n "^#\{1,3\} " README.md AGENTS.md docs/architecture.md docs/architecture/*.md
 ```
 
 **1-4. 표적 부분 읽기** — 1-2에서 나온 키워드로 관련 섹션 위치를 특정한 뒤, 해당 범위만 offset/limit으로 읽는다.
 새 클래스가 이미 문서화됐는지는 전문 읽기 없이 검색으로 판정한다.
 
 ```bash
-grep -rn "NewClassName\|NewSettingKey" README.md AGENTS.md docs/architecture.md
+grep -rn "NewClassName\|NewSettingKey" README.md AGENTS.md docs/architecture.md docs/architecture/*.md
 ```
 
 **1-5. 역검색: 바뀐 식별자로 문서를 훑는다** — 1-4까지는 "새로 생긴 것이 문서에 있는가"를 묻는다.
@@ -91,8 +97,11 @@ git diff "$BASE"..HEAD -- src/ \
   | grep -E "^[+-]" | grep -v "^[+-][+-]" \
   | grep -oE '\b[A-Z][A-Za-z0-9]{3,}\b' | sort -u > /tmp/changed-symbols.txt
 
-grep -nFf /tmp/changed-symbols.txt README.md AGENTS.md docs/architecture.md
+grep -nFf /tmp/changed-symbols.txt README.md AGENTS.md docs/architecture.md docs/architecture/*.md
 ```
+
+**대상 목록에 `docs/architecture/*.md`가 빠지면 이 검색은 허브만 훑고 발화 0을 낸다.**
+발화 0이 「거짓이 된 서술이 없다」인지 「안 봤다」인지 가르려면 훑은 파일 수를 함께 세라.
 
 여기 걸린 줄은 **바뀐 동작을 서술하는 문장**이므로 예외 없이 다시 읽는다.
 빈도 상위 식별자부터 보면 효율이 높다.
@@ -124,7 +133,7 @@ git diff "$BASE"..HEAD -- src/ | grep -E "^[+-]" | grep -v "^[+-][+-]" \
 
 ```bash
 grep -nE "무관|하지 않|않습니다|사용하지|없습니다|불가능|미지원|제외" \
-  README.md AGENTS.md docs/architecture.md
+  README.md AGENTS.md docs/architecture.md docs/architecture/*.md
 ```
 
 건수가 많으면 1-5 역검색 결과와 겹치는 줄부터 본다. 부정형 단언은 근거를 확인하기 전까지
@@ -145,7 +154,7 @@ grep -nE "무관|하지 않|않습니다|사용하지|없습니다|불가능|미
 |---|---|---|
 | 테스트가 잡는다 | 테스트 게이트 | 규칙 한 줄 + 테스트 이름 |
 | 그 파일을 여는 사람만 잡는다 | 해당 클래스 `<summary>` | 없음 |
-| 여러 파일을 함께 봐야 안다 | `docs/architecture.md §4.x` | 라우팅 표 한 줄 |
+| 여러 파일을 함께 봐야 안다 | `docs/architecture/4.x-*.md` (§ 번호가 파일명이다) | 라우팅 표 한 줄 |
 | **사람/에이전트의 판단만이 잡는다** | **`AGENTS.md` 본문** | **규칙 전문** |
 
 마지막 칸일 때만 AGENTS.md에 쓴다. AGENTS.md는 매 세션 컨텍스트에 통째로 로드되므로,
@@ -163,10 +172,10 @@ grep -nE "무관|하지 않|않습니다|사용하지|없습니다|불가능|미
 - 산문 설명에는 클래스명 등 내부 구현 세부사항을 넣지 않는다.
   **단 `## 📂 프로젝트 구조` 트리 섹션은 예외**로, 파일·디렉터리명을 명시하는 것이 정상이다
 
-**docs/architecture.md 작성 원칙**
-- `### 2.2. 핵심 모듈 및 클래스 목록` 테이블에 새 클래스/인터페이스 행 추가 (기존 열 구성과 `<br/>` 사용 형식 유지)
-- 링크는 이 문서 기준 상대 경로: `[ClassName](../src/...)`
-- `## 4. 핵심 아키텍처 메커니즘` 섹션은 알고리즘/패턴이 실제로 바뀔 때만 수정
+**docs/architecture/ 작성 원칙**
+- `docs/architecture/2.2-module-catalog.md`의 테이블에 새 클래스/인터페이스 행 추가 (기존 열 구성과 `<br/>` 사용 형식 유지)
+- 링크는 **그 파일 기준** 상대 경로다. 절 파일은 `docs/architecture/` 안에 있으므로 `[ClassName](../../src/...)`이고, 허브는 `[ClassName](../src/...)`이다. 깊이를 헷갈리면 `scripts/doc-link-check.sh`가 잡는다.
+- `4.x-*.md` 절 파일은 알고리즘/패턴이 실제로 바뀔 때만 수정. **새 절을 만들면 허브 목차에 행을 더한다** — 안 더하면 그 절은 주소가 없는 미아가 된다.
 - 기존 설명 스타일(한국어, 기술적 서술) 유지
 
 **AGENTS.md 작성 원칙**
@@ -224,13 +233,11 @@ HEAD_SHA=$(git rev-parse --short HEAD)
 **4-3. 검증** — 적용 직후 반드시 실행한다.
 
 ```bash
-# 링크 유효성: architecture.md의 상대 경로
-grep -o '](\.\./src/[^)]*)' docs/architecture.md | sed 's/](\(.*\))/\1/' \
-  | while read -r p; do [ -e "docs/$p" ] || echo "BROKEN architecture.md: $p"; done
-
-# 링크 유효성: AGENTS.md / README.md의 레포 루트 기준 경로
-grep -ho '](\./[^)]*)' AGENTS.md README.md | sed 's/](\(.*\))/\1/' \
-  | while read -r p; do [ -e "$p" ] || echo "BROKEN: $p"; done
+# 링크 유효성 — 파일별 dirname 기준이라 문서가 몇 겹으로 갈리든 따라간다.
+# 종전 검사는 `docs/architecture.md`와 `](../src/`를 동시에 못박아, 문서가 갈리면
+# 0개를 검사하고 조용히 통과했다. 이 스크립트는 **확인한 링크 수**를 함께 낸다 —
+# "0개 깨짐"이 「성하다」인지 「안 봤다」인지 그 수로 가른다.
+./scripts/doc-link-check.sh
 
 # 테스트 — 체크리스트가 요구하는 것은 개수가 아니라 "실패 0, 건너뜀 0"이다.
 # 워크트리라면 코퍼스 재료 둘을 심링크해야 0이 된다(AGENTS.md의 워크트리 코퍼스 절).
@@ -243,19 +250,24 @@ dotnet test --filter DocumentationBudget 2>&1 | tail -3
 
 # 동기화 지점 갱신 확인 — 손댄 문서가 현재 HEAD를 가리켜야 함
 git rev-parse --short HEAD
-grep -n 'synced-through' README.md AGENTS.md docs/architecture.md
+grep -n 'synced-through' README.md AGENTS.md docs/architecture.md docs/output-artifacts.md
 ```
 
 Mermaid 블록을 수정했다면 렌더링까지 확인한다. `alt`/`loop` 중첩을 바꾼 경우 `end` 짝이
 어긋나도 눈으로는 드러나지 않는다.
 
 ```bash
-awk '/^```mermaid/{f=1;next}/^```$/{f=0}f' docs/architecture.md > /tmp/d.mmd
-mmdc -i /tmp/d.mmd -o /tmp/d.svg && echo "MERMAID OK"
+for f in docs/architecture.md docs/architecture/*.md; do
+  awk '/^```mermaid/{f=1;next}/^```$/{f=0}f' "$f" > /tmp/d.mmd
+  [ -s /tmp/d.mmd ] || continue
+  mmdc -i /tmp/d.mmd -o /tmp/d.svg && echo "MERMAID OK: $f"
+done
 ```
 
-(문서에 Mermaid 블록이 여러 개면 수정한 절만 잘라 검사한다. `mmdc`가 없으면 건너뛰되
-그 사실을 보고에 남긴다.)
+한 파일에 블록이 여럿이면 이어 붙인 결과가 하나의 다이어그램이 아니라 렌더가 실패한다 —
+그때는 **수정한 절만 잘라** 검사한다(원래 주석이 말하던 것과 같다).
+
+(`mmdc`가 없으면 건너뛰되 그 사실을 보고에 남긴다.)
 
 깨진 링크·개수 불일치·렌더링 실패가 나오면 그 자리에서 고치고 재검증한다.
 
