@@ -534,6 +534,41 @@ END";
         }
 
         [Fact]
+        public void Extract_ArithmeticWrappingANestedCaseInABranch_StaysSilent()
+        {
+            // 좁게 유지 - 분기 결과가 "산술식이 분기식을 감싼" 모양이어도 담지 않는다.
+            // 산술식 재귀가 분기 재허용을 실어 보내면(뮤턴트) 여기서 뚫린다 - 그 뮤턴트를
+            // 돌려 이 시험이 실패로 잡는 것을 확인했다(리뷰 라운드 1, FINDING I2).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = IIF(A.Flag = 1, A.RateA * CASE WHEN A.Flag2 = 1 THEN A.RateB ELSE A.RateC END, A.RateD)
+    FROM   dbo.T A WITH(NOLOCK)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_ParenthesizedCaseInABranch_StaysSilent()
+        {
+            // 좁게 유지 - 분기 결과가 괄호로 감싼 분기식이어도 담지 않는다. 괄호 벗기기가
+            // 분기 재허용을 실어 보내면(뮤턴트) 여기서 뚫린다(리뷰 라운드 1, FINDING I2).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = IIF(A.Flag = 1, (CASE WHEN A.Flag2 = 1 THEN A.RateB ELSE A.RateC END), A.RateD)
+    FROM   dbo.T A WITH(NOLOCK)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
         public void Extract_FunctionCallInABranch_StaysSilent()
         {
             // 좁게 유지 - 분기 결과가 함수 호출이면 담지 않는다.
@@ -625,17 +660,23 @@ END";
             // 붙드는 것은 도입 **후**의 행뿐이고, "전후 동일"은 단언 밖의 일회 실측으로
             // 남는다. 넓게 말하지 않으려고 적어 둔다.
             //
-            // [2026-09-07 2 회차 - 분기 결과를 컬럼·리터럴·산술식까지 넓힌다] 위에서
-            // "기각"이라 적은 다섯 자리 중 넷과, 별도로 새로 발견된 다섯 자리 중 둘이
-            // 이번에 담긴다 - 43행에서 52행(+9)으로 늘었다(설계서 §10-3 사전 예측 그대로
-            // 어긋남 0). 담긴 아홉은 UF_GET_COMM4CLIENT4INTEREST:35·
-            // UF_GET_COMM4PG4INTEREST:42(`CASE … END / 100.0` - 최상위가 분기식을 품은
-            // 산술식, ELSE가 리터럴), UF_GET_EXTRACOMM4CLIENT:41·53·66(`ISNULL(CASE …
-            // THEN 컬럼-컬럼 산술식 … ELSE 0 END, 0)`), UF_Get_ExtraCardCommissionAmt:42·
-            // 47(같은 모양), UF_GET_PGCommOption:21(`CASE … THEN 컬럼 … ELSE 0 END`),
-            // UF_GET_SETTLE_EXCHANGERATE:26(컬럼 산술 + 중첩 IIF, 그 IIF의 결과가
-            // 리터럴·컬럼·산술식)이다. 늘어난 행 전량을 원본 DDL로 대조해 대상 칸이
-            // 원문 그대로이고 거짓 행이 없음을 확인했다(설계서 §10-4 조건 ⑤).
+            // [2026-09-07 2 회차 - 분기 결과를 컬럼·리터럴·산술식까지 넓힌다] 위 두 불릿
+            // (그 위 "기각" 문단)이 세는 일곱 자리 — 첫 불릿의 둘(UF_GET_COMM4PG4INTEREST:42·
+            // UF_GET_COMM4CLIENT4INTEREST:35, "감쌈 벗기기 대상 자체가 아니다"로 기각됐던
+            // 자리)과 둘째 불릿의 다섯(UF_GET_EXTRACOMM4CLIENT:41·53·66·
+            // UF_Get_ExtraCardCommissionAmt:42·47, "전부 컬럼이 아니다"로 기각됐던 자리) —
+            // 은 **전량** 이번에 담긴다(리뷰 라운드 1이 재확인 - "다섯 중 넷"은 두 읽기
+            // 어느 쪽으로도 틀렸다). 여기에 설계서 §9-6①의 "이번 검토가 처음 찾은 여섯"
+            // (UF_Get_CLComm4MobileCo:25·UF_GET_PGCommOption:21·UF_GET_COLLECTYMD:31·48·
+            // UIF_SettleYMD:39·56) 중 **하나**(UF_GET_PGCommOption:21, `CASE … THEN 컬럼 …
+            // ELSE 0 END`)가 더 담기고 나머지 다섯은 여전히 침묵한다. 마지막 한 자리
+            // UF_GET_SETTLE_EXCHANGERATE:26(컬럼 산술 + 곱셈으로 묶인 **형제** `IIF` 둘
+            // - `IIF(A.ModifyType=1, 1, -1) * IIF(A.ModifyCommType=0, …, A.ModifyCommAmt)`,
+            // 중첩이 아니라 나란히 곱해진 것이다. 원본 DDL 확인, 리뷰 라운드 1 FINDING M1)
+            // 은 설계서 어느 목록에도 이름이 없던 자리다 - 이번 최종 검토가 처음 찾았다.
+            // 합 7 + 1 + 1 = 9, 43행에서 52행(+9)으로 늘었다(설계서
+            // §10-3 사전 예측 그대로 어긋남 0). 늘어난 행 전량을 원본 DDL로 대조해 대상
+            // 칸이 원문 그대로이고 거짓 행이 없음을 확인했다(설계서 §10-4 조건 ⑤).
             //
             // 안 담기는 다섯은 여전히 침묵한다 - 분기 결과 안에 또 분기식(중첩 CASE)이
             // 오거나(UF_GET_COLLECTYMD:31·48, UIF_SettleYMD:39·56) ELSE가 하위 질의라서

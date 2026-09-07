@@ -167,6 +167,27 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void IsCapturableExpression_2RoundArithmeticWrappingANestedCaseInABranch_Fails()
+        {
+            // 좁게 유지 - 분기 결과가 "산술식이 분기식을 감싼" 모양이어도 담지 않는다.
+            // 재귀가 산술식을 타고 내려가는 동안에도 "분기식은 한 겹만" 허용이 계속
+            // 지켜져야 한다 - 산술식 재귀에 분기 재허용을 실어 보내면 이 자리가 뚫린다.
+            Assert.False(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl(
+                    "IIF(A.Flag = 1, A.RateA * CASE WHEN B.Flag = 1 THEN A.RateB ELSE A.RateC END, A.RateD)"))));
+        }
+
+        [Fact]
+        public void IsCapturableExpression_2RoundParenthesizedCaseInABranch_Fails()
+        {
+            // 좁게 유지 - 분기 결과가 괄호로 감싼 분기식이어도 담지 않는다. 괄호 벗기기가
+            // "분기식 한 겹만" 허용을 함께 실어 보내면 이 자리가 뚫린다.
+            Assert.False(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl(
+                    "IIF(A.Flag = 1, (CASE WHEN B.Flag = 1 THEN A.RateB ELSE A.RateC END), A.RateD)"))));
+        }
+
+        [Fact]
         public void IsCapturableExpression_2RoundFunctionCallInABranch_Fails()
         {
             // 좁게 유지 - 분기 결과가 함수 호출이면 담지 않는다.
@@ -181,6 +202,26 @@ namespace ReSet.Core.Tests
             // UF_Get_CLComm4MobileCo:25 실측 모양이다.
             Assert.False(AssignmentExpressionUnwrapper.IsCapturableExpression(
                 RightHandSide(Ddl("CASE WHEN A.Flag = 1 THEN (SELECT TOP 1 Rate FROM dbo.T2) ELSE A.RateB END"))));
+        }
+
+        [Fact]
+        public void IsCapturableExpression_2RoundTopLevelBareLiteral_Succeeds()
+        {
+            // 구현이 §10-2 의 글보다 넓다 - 최상위가 분기식 없이 맨 리터럴이어도 담긴다
+            // (`SELECT @v = 0 FROM T`류). 문장이 참이고 코퍼스 영향이 0 이라 좁히지
+            // 않기로 했고(리뷰 라운드 1, FINDING M3), 그 대신 이 넓은 동작을 잠근다.
+            Assert.True(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("0"))));
+        }
+
+        [Fact]
+        public void IsCapturableExpression_2RoundTopLevelArithmeticOfColumnsWithNoBranchAnywhere_Succeeds()
+        {
+            // 구현이 §10-2 의 글보다 넓다 - 최상위가 분기식 없이 컬럼 간 산술식이어도
+            // 담긴다(`SELECT @v = A.x - B.y`류). FINDING M3와 같은 이유로 좁히지 않고
+            // 잠근다.
+            Assert.True(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("A.x - B.y"))));
         }
 
         [Fact]
