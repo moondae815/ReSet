@@ -11641,5 +11641,179 @@ UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_valIncVat AS INT);
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("@v_valIncVat"));
         }
+
+        // ── N6: 원본의 단일 트랜잭션이 여러 단계로 갈렸다 ───────────────────────
+        //
+        // 사전 선언: docs/audit-reports/2026-09-07-N6-사전선언.md
+        // 오라클은 원본 DDL이다(비순환) - 명세서의 트랜잭션 경계 표는 모델 전사라
+        // 재생성이 지우면 검사가 조용해진다. N5 §10과 같은 방향이다.
+        //
+        // 픽스처는 실물 모양을 옮겼다(작성 계약 테스트 관례) - 호출자
+        // UP_Util_Settle_Summary가 BEGIN TRAN 안에서 AcqManual·SUMMARY_EXTRA를
+        // EXEC하고, 그 둘은 자기 DDL에 트랜잭션이 없다(코퍼스 14편 중 정확히 이 둘).
+
+        private const string SummaryCallerDdl = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary @p CHAR(8)
+AS
+BEGIN
+    BEGIN TRAN
+    DELETE FROM dbo.TSettleByTX WHERE YMD = @p;
+    INSERT INTO dbo.TSettleByTX (YMD, Amt) SELECT YMD, SUM(TxAmt) FROM dbo.TSettleMst WHERE YMD = @p GROUP BY YMD;
+    EXEC dbo.UP_Util_Settle_Summary_AcqManual @p;
+    COMMIT TRAN
+END";
+
+        // 호출자가 트랜잭션을 열기 **전에** 부른다 - 원자성이 애초에 없었다.
+        private const string SummaryCallerDdlWithExecOutsideTransaction = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary @p CHAR(8)
+AS
+BEGIN
+    EXEC dbo.UP_Util_Settle_Summary_AcqManual @p;
+    BEGIN TRAN
+    DELETE FROM dbo.TSettleByTX WHERE YMD = @p;
+    COMMIT TRAN
+END";
+
+        // 명시적 트랜잭션이 없는 호출자 - 귀속할 구간이 없다.
+        private const string SummaryCallerDdlWithoutTransaction = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary @p CHAR(8)
+AS
+BEGIN
+    DELETE FROM dbo.TSettleByTX WHERE YMD = @p;
+    EXEC dbo.UP_Util_Settle_Summary_AcqManual @p;
+END";
+
+        private const string AcqManualCalleeDdl = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary_AcqManual @p CHAR(8)
+AS
+BEGIN
+    DELETE FROM dbo.TSettleByOUT WHERE YMD = @p;
+    INSERT INTO dbo.TSettleByOUT (YMD, Amt) SELECT YMD, SUM(TxAmt) FROM dbo.TSettleMst WHERE YMD = @p GROUP BY YMD;
+END";
+
+        private const string AcqManualCalleeDdlWithOwnTransaction = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary_AcqManual @p CHAR(8)
+AS
+BEGIN
+    BEGIN TRAN
+    DELETE FROM dbo.TSettleByOUT WHERE YMD = @p;
+    COMMIT TRAN
+END";
+
+        private static BatchStepPlan SummaryStep(string code) => new(
+            Code: code, Name: $"{code} 단계",
+            LegacyProcedures: new[] { "dbo.UP_Util_Settle_Summary" },
+            TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleByTX" },
+            ErrorCodes: Array.Empty<string>(), Chunkable: false, SchemaTables: Array.Empty<string>());
+
+        private static BatchStepPlan CalleeStep(string code) => new(
+            Code: code, Name: $"{code} 단계",
+            LegacyProcedures: new[] { "dbo.UP_Util_Settle_Summary_AcqManual" },
+            TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleByOUT" },
+            ErrorCodes: Array.Empty<string>(), Chunkable: false, SchemaTables: Array.Empty<string>());
+
+        private static IReadOnlyDictionary<string, string> SummaryDdlMap(
+            string caller = SummaryCallerDdl, string callee = AcqManualCalleeDdl) =>
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_Util_Settle_Summary"] = caller,
+                ["UP_Util_Settle_Summary_AcqManual"] = callee
+            };
+
+        private const string SummaryStepMarkdown =
+            "### S11 단계\n\n```sql\nDELETE FROM dbo.TSettleByTX WHERE YMD = @p;\n```\n";
+
+        private static StepValidationResult ValidateSummaryStep(
+            IReadOnlyList<BatchStepPlan>? allSteps,
+            IReadOnlyDictionary<string, string>? ddl) =>
+            new MechanicalValidator().ValidateBatchStep(
+                SummaryStepMarkdown, SummaryStep("S11"), Array.Empty<string>(),
+                new Dictionary<string, SpecConditions>(), null, null,
+                null, allSteps, null, null, ddl);
+
+        [Fact]
+        public void ValidateBatchStep_CheckTransactionSpanSplit_ReportsACalleeHoistedToItsOwnStep()
+        {
+            // 원본은 BEGIN TRAN 안에서 AcqManual을 부르고, AcqManual은 자기 트랜잭션이
+            // 없다 - 언제나 호출자 트랜잭션 안에서 돌았다. 이행이 S12로 승격시키면
+            // 그 원자성이 사라진다.
+            var result = ValidateSummaryStep(
+                new[] { SummaryStep("S11"), CalleeStep("S12") }, SummaryDdlMap());
+
+            Assert.Contains(result.Errors, e =>
+                e.Contains("트랜잭션이 단계로 갈렸습니다") && e.Contains("UP_Util_Settle_Summary_AcqManual"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckTransactionSpanSplit_StaysSilentWhenTheCalleeHasItsOwnTransaction()
+        {
+            // 피호출자가 원래 자기 트랜잭션을 가졌다면 갈라도 원자성이 안 바뀐다.
+            // 코퍼스 14편 중 12편이 이 갈래라 이것이 오탐을 막는 주된 자다.
+            var result = ValidateSummaryStep(
+                new[] { SummaryStep("S11"), CalleeStep("S12") },
+                SummaryDdlMap(callee: AcqManualCalleeDdlWithOwnTransaction));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("트랜잭션이 단계로 갈렸습니다"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckTransactionSpanSplit_StaysSilentWhenTheCalleeStaysInTheSameStep()
+        {
+            // 같은 단계가 둘 다 맡으면 보존된 것이다.
+            var merged = new BatchStepPlan(
+                Code: "S11", Name: "S11 단계",
+                LegacyProcedures: new[] { "dbo.UP_Util_Settle_Summary", "dbo.UP_Util_Settle_Summary_AcqManual" },
+                TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleByTX" },
+                ErrorCodes: Array.Empty<string>(), Chunkable: false, SchemaTables: Array.Empty<string>());
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                SummaryStepMarkdown, merged, Array.Empty<string>(),
+                new Dictionary<string, SpecConditions>(), null, null,
+                null, new[] { merged }, null, null, SummaryDdlMap());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("트랜잭션이 단계로 갈렸습니다"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckTransactionSpanSplit_StaysSilentWhenTheExecIsOutsideTheTransaction()
+        {
+            // 트랜잭션 밖에서 부르던 것은 원자성이 애초에 없었다 - 갈라도 잃을 것이 없다.
+            var result = ValidateSummaryStep(
+                new[] { SummaryStep("S11"), CalleeStep("S12") },
+                SummaryDdlMap(caller: SummaryCallerDdlWithExecOutsideTransaction));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("트랜잭션이 단계로 갈렸습니다"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckTransactionSpanSplit_StaysSilentWhenTheCallerHasNoExplicitTransaction()
+        {
+            // 귀속할 구간이 없으면 침묵한다(작성 계약 7).
+            var result = ValidateSummaryStep(
+                new[] { SummaryStep("S11"), CalleeStep("S12") },
+                SummaryDdlMap(caller: SummaryCallerDdlWithoutTransaction));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("트랜잭션이 단계로 갈렸습니다"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckTransactionSpanSplit_StaysSilentWithoutTheOriginalDdl()
+        {
+            // 재료가 없으면 종전 동작 그대로다. 이 가드를 지우면 DDL 없는 호출부에서
+            // 검사가 조용히 죽는 대신 던진다.
+            var result = ValidateSummaryStep(new[] { SummaryStep("S11"), CalleeStep("S12") }, null);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("트랜잭션이 단계로 갈렸습니다"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckTransactionSpanSplit_StaysSilentWithoutAllSteps()
+        {
+            // allSteps가 없으면 "다른 단계인가"를 판정할 수 없다 - 침묵한다.
+            var result = ValidateSummaryStep(null, SummaryDdlMap());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("트랜잭션이 단계로 갈렸습니다"));
+        }
+
     }
 }
