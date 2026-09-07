@@ -6227,6 +6227,36 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// mermaid 라벨에 큰따옴표가 필요한 특수문자. 노드 라벨과 엣지 라벨이 이 하나를
+        /// 함께 본다 - 2026-09-07 에 엣지 쪽만 이 판정이 없어(오히려 따옴표를 벗겨서)
+        /// 모델이 올바르게 쓴 다이어그램이 부서졌다.
+        ///
+        /// `@`가 들어 있는 이유: Mermaid 11 에서 따옴표 없는 `@`는 링크 ID 문법으로 해석돼
+        /// 파스 에러가 난다(실측: "got 'LINK_ID'"). 따옴표만 씌우면 정상이다.
+        /// </summary>
+        private static readonly char[] MermaidLabelSpecialChars =
+            { '(', ')', '[', ']', '{', '}', ',', '\'', ':', '-', '>', '<', '/', '\\', '@' };
+
+        /// <summary>
+        /// 라벨을 다듬고, 특수문자가 있으면 큰따옴표로 감싼다. 이미 감싸져 있으면 그대로 둔다.
+        /// </summary>
+        private static string QuoteMermaidLabelIfNeeded(string label)
+        {
+            var trimmed = (label ?? string.Empty).Trim();
+            if (trimmed.Length == 0)
+            {
+                return trimmed;
+            }
+
+            if (trimmed.Length >= 2 && trimmed.StartsWith("\"") && trimmed.EndsWith("\""))
+            {
+                return trimmed;
+            }
+
+            return trimmed.IndexOfAny(MermaidLabelSpecialChars) >= 0 ? $"\"{trimmed}\"" : trimmed;
+        }
+
+        /// <summary>
         /// [왜 flowchart 계열에만 도는가 - 반복 실행 R3·F1·F2 를 태운 결함(2026-09-04)]
         /// 아래 규칙은 전부 flowchart 문법을 전제한다 - 노드 셰이프(<c>A[...]</c>), 링크
         /// 라벨(<c>--&gt;|label|</c>), <c>subgraph</c>. sequenceDiagram 에는 그 문법이 아예
@@ -6282,11 +6312,30 @@ namespace ReSet.Core.Services
 
                 var processedLine = line;
 
-                // 1. 화살표 라벨 따옴표 제거 및 표준화 (하이픈 제거 추가)
-                // -- "텍스트" --> 또는 -->| "텍스트" | 또는 -->|"텍스트"| 등을 -->|텍스트| 로 변환하되 하이픈(-)은 제거
-                processedLine = Regex.Replace(processedLine, @"-->\s*\|""?\s*([^""|]+?)\s*""?\|", m => "-->|" + m.Groups[1].Value.Replace("-", "").Trim() + "|");
-                processedLine = Regex.Replace(processedLine, @"--\s*""\s*([^"">]+?)\s*""\s*-->", m => "-->|" + m.Groups[1].Value.Replace("-", "").Trim() + "|");
-                processedLine = Regex.Replace(processedLine, @"--\s*([^"">]+?)\s*-->", m => "-->|" + m.Groups[1].Value.Replace("-", "").Trim() + "|");
+                // 1. 화살표 라벨 모양 표준화
+                // -- "텍스트" --> 또는 -->| "텍스트" | 등 여러 표기를 -->|텍스트| 한 모양으로 모은다.
+                //
+                // [2026-09-07 - 따옴표를 벗기던 것을 뒤집었다]
+                // 이 세 줄은 모아 놓은 라벨에서 큰따옴표를 **무조건 벗기고** 하이픈까지 지웠다.
+                // mermaid 는 라벨에 `(` 같은 특수문자가 있으면 따옴표를 요구하므로, 모델이
+                // 올바르게 쓴 다이어그램이 여기를 지나며 부서졌다. mmdc 11.16.0 실측:
+                // `-->|일치 행 없음 (0행)|` 는 파스 실패, `-->|"일치 행 없음 (0행)"|` 는 성공이다.
+                // 노드 라벨에는 씌우는 규칙이 있는데(아래 4번) 엣지에는 없고 오히려 벗겼다.
+                //
+                // 증거는 지워지지 않았다 - 정화 전 출력인 docs/Thinking.md 에는 모델이 쓴
+                // 따옴표가 남아 있고, 정화 후인 배송본 Spec.md 전량에는 엣지 라벨 280 개 중
+                // 따옴표 있는 것이 0 개다. 「모델이 안 썼다」가 아니라 「썼는데 벗겨졌다」다.
+                // 이 저장소가 정화기에 물린 세 번째 자리다(첫째는 sequenceDiagram, ad90c004).
+                //
+                // 하이픈 제거도 함께 걷었다. 하이픈이 있으면 <see cref="QuoteMermaidLabelIfNeeded"/>가
+                // 따옴표를 씌우므로 안전하고, 지우는 쪽은 `1-5 범위`를 `15 범위`로 만드는
+                // **내용 훼손**이었다. 하이픈이 없는 라벨에는 애초에 아무 일도 하지 않았다.
+                //
+                // 모양 표준화 자체는 그대로 산다 - 이 규칙이 조용히 사 주던 것이라 함께
+                // 버리면 안 된다(MermaidEdgeLabelCleansingTests 요구 5 가 지킨다).
+                processedLine = Regex.Replace(processedLine, @"-->\s*\|""?\s*([^""|]+?)\s*""?\|", m => "-->|" + QuoteMermaidLabelIfNeeded(m.Groups[1].Value) + "|");
+                processedLine = Regex.Replace(processedLine, @"--\s*""\s*([^"">]+?)\s*""\s*-->", m => "-->|" + QuoteMermaidLabelIfNeeded(m.Groups[1].Value) + "|");
+                processedLine = Regex.Replace(processedLine, @"--\s*([^"">]+?)\s*-->", m => "-->|" + QuoteMermaidLabelIfNeeded(m.Groups[1].Value) + "|");
 
                 // 2. 비표준 화살표 조건절 및 누락된 화살표 보정 (예: 'A -- |label| B' -> 'A -->|label| B')
                 processedLine = Regex.Replace(processedLine, @"--\s*\|([^|]+)\|\s*([a-zA-Z0-9_]+)", "-->|$1| $2");
@@ -6337,24 +6386,10 @@ namespace ReSet.Core.Services
                     // 공백 및 언더스코어 제거
                     var cleansedId = testId.Replace(" ", "").Replace("_", "");
                     
-                    // 만약 라벨에 특수문자(괄호, 콜론, 대시 등)가 있는데 큰따옴표가 없으면 큰따옴표로 감싸주기
-                    var trimmedLabel = label.Trim();
-                    if (trimmedLabel.Contains("(") || trimmedLabel.Contains(")") ||
-                        trimmedLabel.Contains("[") || trimmedLabel.Contains("]") ||
-                        trimmedLabel.Contains("{") || trimmedLabel.Contains("}") ||
-                        trimmedLabel.Contains(",") || trimmedLabel.Contains("'") ||
-                        trimmedLabel.Contains(":") || trimmedLabel.Contains("-") ||
-                        trimmedLabel.Contains(">") || trimmedLabel.Contains("<") ||
-                        trimmedLabel.Contains("/") || trimmedLabel.Contains("\\") ||
-                        // Mermaid 11에서 따옴표 없는 '@'는 링크 ID 문법으로 해석돼
-                        // 파스 에러가 난다(실측: "got 'LINK_ID'"). 따옴표만 씌우면 정상이다.
-                        trimmedLabel.Contains("@"))
-                    {
-                        if (!(trimmedLabel.StartsWith("\"") && trimmedLabel.EndsWith("\"")))
-                        {
-                            trimmedLabel = $"\"{trimmedLabel}\"";
-                        }
-                    }
+                    // 라벨에 특수문자가 있는데 큰따옴표가 없으면 씌운다.
+                    // 판별자는 엣지 라벨(위 1번)과 **같은 자**를 쓴다 - 사본을 두면
+                    // 「노드는 되는데 엣지는 안 되는」 상태가 조용히 생긴다.
+                    var trimmedLabel = QuoteMermaidLabelIfNeeded(label);
 
                     if (isSubgraph)
                     {
