@@ -50,6 +50,7 @@ flowchart TD
 | :--- | :--- | :--- |
 | §2.2 | 핵심 모듈 및 클래스 목록 | [2.2-module-catalog.md](./architecture/2.2-module-catalog.md) |
 | §3 | 전체 실행 라이프사이클 및 데이터 흐름 (§3.1–3.4) | [3-execution-lifecycle.md](./architecture/3-execution-lifecycle.md) |
+| **§4** | **핵심 아키텍처 메커니즘 (Key Architectural Mechanisms)** | 그룹 — 아래 §4.1~§4.14 |
 | §4.1 | DFS 기반 재귀적 의존성 수집 및 Soft Fail (§4.1.1 포함) | [4.1-recursive-dependency.md](./architecture/4.1-recursive-dependency.md) |
 | §4.2 | MS_Description 확장 속성 맵핑 및 AI 보완 | [4.2-ms-description.md](./architecture/4.2-ms-description.md) |
 | §4.3 | T-SQL AST 정적 분석 고도화 (ScriptDom) | [4.3-tsql-ast.md](./architecture/4.3-tsql-ast.md) |
@@ -66,4 +67,4 @@ flowchart TD
 | §4.14 | 명세서 기반 요구사항 도출 (PRD Derivation) | [4.14-prd-derivation.md](./architecture/4.14-prd-derivation.md) |
 | §5 | TUI/CLI 부가 기능 및 복구 파이프라인 (§5.1–5.8) | [5-secondary-features.md](./architecture/5-secondary-features.md) |
 
-<!-- synced-through: 7ab3d10c -->
+<!-- synced-through: 47d1c052 -->

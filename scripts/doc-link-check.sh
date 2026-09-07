@@ -9,6 +9,10 @@
 #
 # 경로 해석은 **각 파일의 dirname 기준**이다. 깊이를 가정하지 않으므로 문서가
 # docs/ 아래 몇 겹으로 들어가도 따라간다.
+#
+# 종료 코드: 0 = 전부 성함, 1 = 깨진 링크 있음, 2 = 검사 대상 링크가 0개(검사가
+# 죽은 것 — "0개 확인, 0개 깨짐"이 조용히 통과하던 종전 병리를 그대로 물려받지
+# 않도록 0개는 실패로 취급한다).
 set -eu
 
 ROOT=$(git rev-parse --show-toplevel)
@@ -48,4 +52,7 @@ while IFS="$(printf '\t')" read -r f target; do
 done < "$pairs"
 
 echo "링크 검사 완료: ${total}개 확인, ${broken}개 깨짐"
-[ "$broken" -eq 0 ]
+
+[ "$total" -gt 0 ] || { echo "검사 대상 링크가 0개다 — 검사가 죽었다"; exit 2; }
+[ "$broken" -eq 0 ] || exit 1
+exit 0

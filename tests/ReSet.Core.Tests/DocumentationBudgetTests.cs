@@ -119,6 +119,32 @@ public sealed class DocumentationBudgetTests
             + failures + "\n" + Routing);
     }
 
+    [Fact]
+    public void ReadBaseline_FailsLoudlyWhenArchitectureHubEntryIsMissing()
+    {
+        // I4 회귀: docs/architecture.md 항목 하나만 조용히 지워져도 두 크기
+        // 게이트가 아무것도 검사하지 않고 초록으로 통과하던 침묵을 잡는다.
+        // AGENTS.md만 지키던 가드를 docs/architecture.md까지 넓힌 것을
+        // "없앴을 때"로 판정한다 — baseline에서 그 줄을 지우면 실패해야 한다.
+        var tempRoot = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var testsDir = Path.Combine(tempRoot, "tests", "ReSet.Core.Tests");
+            Directory.CreateDirectory(testsDir);
+            File.WriteAllText(
+                Path.Combine(testsDir, "documentation-budget-baseline.txt"),
+                "AGENTS.md = 40000\n");
+
+            var ex = Assert.Throws<Xunit.Sdk.TrueException>(() => ReadBaseline(tempRoot));
+
+            Assert.Contains("docs/architecture.md", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
     private static List<(string RelativePath, int Budget)> ReadBaseline(string repoRoot)
     {
         var path = Path.Combine(repoRoot, "tests", "ReSet.Core.Tests", "documentation-budget-baseline.txt");
@@ -138,12 +164,15 @@ public sealed class DocumentationBudgetTests
         // 이 게이트는 무엇을 검사할지 스스로 찾아내지 못하고 기준선 파일을 전적으로
         // 신뢰한다. AGENTS.md 항목 하나만 조용히 지워져도 검사 대상이 사라져 두
         // 테스트 모두 초록으로 통과한다 — 검사를 통과한 게 아니라 검사가 꺼진 것이다.
+        // docs/architecture.md도 같은 함정에 걸린다: 이 항목이 지워져도 위 조건만
+        // 있으면 두 테스트 모두 초록이므로 같은 단언에 함께 묶는다.
         Assert.True(
-            entries.Exists(entry => entry.RelativePath == "AGENTS.md"),
-            "기준선 파일에 AGENTS.md 항목이 없습니다. 이 파일이 비었거나 그 줄만 빠지면 "
-            + "크기 게이트 두 개가 아무것도 검사하지 않고 조용히 통과합니다. "
-            + "tests/ReSet.Core.Tests/documentation-budget-baseline.txt에 "
-            + "'AGENTS.md = <상한>' 줄을 복원하십시오.");
+            entries.Exists(entry => entry.RelativePath == "AGENTS.md")
+                && entries.Exists(entry => entry.RelativePath == "docs/architecture.md"),
+            "기준선 파일에 AGENTS.md 또는 docs/architecture.md 항목이 없습니다. 이 파일이 "
+            + "비었거나 그 줄만 빠지면 크기 게이트 두 개가 아무것도 검사하지 않고 조용히 "
+            + "통과합니다. tests/ReSet.Core.Tests/documentation-budget-baseline.txt에 "
+            + "'AGENTS.md = <상한>' 줄과 'docs/architecture.md = <상한>' 줄을 복원하십시오.");
 
         return entries;
     }
