@@ -1,0 +1,15 @@
+Error: Parse error on line 5:
+...)"}    If1 -->|아니오 (1차 조회 결과 있음, IF 분기 
+----------------------^
+Expecting 'SQE', 'DOUBLECIRCLEEND', 'PE', '-)', 'STADIUMEND', 'SUBROUTINEEND', 'PIPE', 'CYLINDEREND', 'DIAMOND_STOP', 'TAGEND', 'TRAPEND', 'INVTRAPEND', 'UNICODE_TEXT', 'TEXT', 'TAGSTART', got 'PS'
+Parser.parseError (https://mermaid-cli-intercept.invalid/opt/homebrew/Cellar/mermaid-cli/11.16.0/libexec/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/mermaid/dist/chunks/mermaid.esm/chunk-YI7H2ERT.mjs:1451:21)
+    at #evaluate (file:///opt/homebrew/Cellar/mermaid-cli/11.16.0/libexec/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/puppeteer/cdp/ExecutionContext.js:388:19)
+    at async ExecutionContext.evaluate (file:///opt/homebrew/Cellar/mermaid-cli/11.16.0/libexec/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/puppeteer/cdp/ExecutionContext.js:274:16)
+    at async IsolatedWorld.evaluate (file:///opt/homebrew/Cellar/mermaid-cli/11.16.0/libexec/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/puppeteer/cdp/IsolatedWorld.js:102:16)
+    at async CdpJSHandle.evaluate (file:///opt/homebrew/Cellar/mermaid-cli/11.16.0/libexec/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/puppeteer/api/JSHandle.js:146:20)
+    at async CdpElementHandle.evaluate (file:///opt/homebrew/Cellar/mermaid-cli/11.16.0/libexec/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/puppeteer/api/ElementHandle.js:343:20)
+    at async CdpElementHandle.$eval (file:///opt/homebrew/Cellar/mermaid-cli/11.16.0/libexec/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/puppeteer/api/ElementHandle.js:497:24)
+    at async CdpFrame.$eval (file:///opt/homebrew/Cellar/mermaid-cli/11.16.0/libexec/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/puppeteer/api/Frame.js:464:20)
+    at async CdpPage.$eval (file:///opt/homebrew/Cellar/mermaid-cli/11.16.0/libexec/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/puppeteer-core/lib/puppeteer/api/Page.js:456:20)
+    at async renderMermaid (file:///opt/homebrew/Cellar/mermaid-cli/11.16.0/libexec/lib/node_modules/@mermaid-js/mermaid-cli/src/index.js:480:22)
+    at fromText (https://mermaid-cli-intercept.invalid/opt/homebrew/Cellar/mermaid-cli/11.16.0/libexec/lib/node_modules/@mermaid-js/mermaid-cli/node_modules/mermaid/dist/mermaid.esm.mjs:1320:17)

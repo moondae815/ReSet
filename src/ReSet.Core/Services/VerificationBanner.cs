@@ -12,12 +12,27 @@ public static class VerificationBanner
     /// <summary>
     /// 배너 간 불릿 리스트 형식 계약을 한 곳에서 지킨다. 여러 배너가 동일한
     /// 불릿 형식(">   - {item}")을 사용하므로 중앙에서 관리한다.
+    ///
+    /// [여러 줄 항목 - 2026-09-07 축 A 감사]
+    /// 예전에는 항목 전체를 한 줄로만 감쌌다. 항목에 줄바꿈이 있으면 <b>둘째 줄부터
+    /// 인용 블록 밖으로 샌다</b> - 실물이 `UF_GET_PGCommOption` 등 세 편의 배송본이고,
+    /// mermaid 컴파일 로그가 문서 본문에 그대로 풀려 나왔다. 자르기만으로는 짧아질 뿐
+    /// 여전히 새므로 여기서 이어지는 줄에 인용 접두사를 붙인다.
     /// </summary>
     private static string RenderBulletList(IReadOnlyList<string> items, string emptyPlaceholder)
     {
         return items is { Count: > 0 }
-            ? string.Join("\n", items.Select(item => $">   - {item}"))
+            ? string.Join("\n", items.Select(RenderBullet))
             : $">   - {emptyPlaceholder}";
+    }
+
+    /// <summary>항목 한 개를 인용 블록 안에 온전히 담는다.</summary>
+    private static string RenderBullet(string item)
+    {
+        var lines = (item ?? string.Empty).Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+
+        return string.Join("\n", lines.Select((line, index) =>
+            index == 0 ? $">   - {line}" : $">     {line}"));
     }
 
     public static string L1Exhausted(IReadOnlyList<string> errors)

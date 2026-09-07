@@ -6075,10 +6075,14 @@ namespace ReSet.Core.Services
                                     // 「모델이 잘 쓰게 됐다」가 아니라 「도구가 부수기를 멈췄다」로 읽어라.
                                     // 강등하지 않는다는 판단 자체는 그대로다 - 도구가 정상 실행되어 보고한
                                     // 파스 오류는 여전히 확정된 발견이다.
+                                    // stderr 를 통째로 싣지 않는다 - 배송 문서(코딩 에이전트의
+                                    // 입력)에 puppeteer 내부 프레임과 로컬 절대경로가 실렸다
+                                    // (2026-09-07 축 A 감사, 실측 세 편). 진단부는 남고
+                                    // 스택은 빠진다. 전체는 바로 아래 로그가 그대로 남긴다.
                                     var message =
                                         "Mermaid 다이어그램이 렌더러에서 컴파일되지 않습니다. " +
                                         "아래 컴파일 로그의 줄 번호와 캐럿(^)이 가리키는 자리를 고치십시오. " +
-                                        $"{stderr}";
+                                        RendererDiagnostics.TrimStackTrace(stderr);
                                     Log.Warning("Mermaid CLI 검증 문법 오류 감지 - Stderr: {Stderr}", stderr);
                                     result.Errors.Add(message);
                                     result.DetailedErrors.Add(new DetailedError
