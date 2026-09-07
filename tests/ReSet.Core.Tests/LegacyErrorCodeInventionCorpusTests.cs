@@ -39,6 +39,13 @@ namespace ReSet.Core.Tests
     ///
     /// [알려진 오탐 계열 - 아직 안 닫았다] <c>RESET_SWEEP_ROOT</c>로 4단계 3차 통제군
     /// 트리를 재면 `POQSettleBatch3/S12`가 `-5`~`-8`을 발명으로 고발하는데 <b>오탐이다</b>.
+    /// <b>[2026-09-07] 그 트리는 이제 없다</b> - `output.bak-stage4-control-20260828`은
+    /// 과거 판 코퍼스 폐기(2026-09-07 사람 결정)로 지워졌으므로 <b>이 관측은 다시 돌릴 수
+    /// 없다.</b> 아래 서술은 그대로 둔다 - 계열의 존재 자체는 현행 `output/`의
+    /// `UP_UTIL_SETTLE_COMM_UPD` `-15`로 남아 있고 그것이 이 문단의 결론을 지탱한다.
+    /// (현행 `output/Jobs`의 동명 `POQSettleBatch3`와 혼동하지 마라 - 그것은 2026-09-06에
+    /// 생겼다가 같은 날 폐기된 별개의 잔해다. 경위:
+    /// docs/audit-reports/2026-09-07-Batch3-코퍼스-제거-판독.md §4)
     /// 그 회차의 `dbo.UP_Util_Settle_Summary` 명세는 그 넷을 「<c>`-5`를 반환합니다</c>」로
     /// 적고 <c>@po_intRetVal = -5</c> 철자를 쓰지 않아 <see cref="SpecReturnCodeExtractor"/>가
     /// 못 뽑는다(그 명세엔 기계 확정 표도 없어 두 번째 오라클도 못 덮는다).
