@@ -152,7 +152,13 @@ namespace ReSet.Core.Services
     /// `ROLLUP`/`CUBE`/`GROUPING SETS` 등 `GROUP BY`의 변형까지 옳게 판정하는 조건이
     /// 새로 필요하고, 그 판정이 한 군데라도 새면 정반대 문장이 「수정 금지」 표에
     /// 실린다(클래스 주석 "집계는 CTE에도 산다"와 같은 논리 - 거짓 행보다 없는 행을
-    /// 고른다). 코퍼스에 `HAVING`을 단 문장이 0건이라 이 선택의 비용은 지금 0이다.
+    /// 고른다). **정정(★ 둘째 재검토)**: 코퍼스에 `HAVING`이 0건이 아니다 -
+    /// `UP_UTIL_SETTLE_COMM_UPD.Procedure`의 원본
+    /// `raw/object_definition.sql:248`에 `HAVING SUM(TxAmt) = 0`이 실재한다(`UPDATE ...
+    /// FROM ...`의 파생 테이블 안, `SelectSetVariable`과 무관한 자리). 참인 문장은
+    /// "**대입 SELECT** 중 `HAVING`을 단 것이 0건"이다 - 이 가드가 보는 것은
+    /// `SelectSetVariable`을 가진 `QuerySpecification`뿐이라, 그 좁은 관할 안에서는
+    /// 이 선택의 비용이 지금도 0이다.
     ///
     /// [형제도 같은 함정을 연다] `SELECT @a = 1, @b = COUNT(*) FROM T`처럼 한
     /// <see cref="QuerySpecification.SelectElements"/> 안에 비집계 대입과 집계 대입이
@@ -174,11 +180,27 @@ namespace ReSet.Core.Services
         /// 집계 함수 이름. AggregateAssignmentExtractor의 목록보다 넓다 - 그쪽은 담을
         /// 사실을 고르는 목록이지만 이쪽은 **거짓을 막는** 목록이라, 하나라도 새면
         /// 정반대 문장이 표에 실린다.
+        ///
+        /// [★ 둘째 재검토 - APPROX_COUNT_DISTINCT · APPROX_PERCENTILE_CONT ·
+        /// APPROX_PERCENTILE_DISC를 더한다] 근거는 Microsoft T-SQL 문서의 "집계 함수
+        /// (Transact-SQL)" 분류다 - 그 분류에 속한 함수는 전부 원본이 비어도(GROUP BY가
+        /// 없으면) 정확히 1행을 돌려주는 동일한 진리조건을 공유한다. 이 셋은 그 분류의
+        /// 구성원이면서 기존 목록에 없었다 - 실행 확인으로도 새는 것을 재현했다
+        /// (`Extract_SiblingApproxCountDistinctInSameSelect_...` ·
+        /// `Extract_AggregateInsideDerivedTable_ApproxCountDistinct_...`).
+        ///
+        /// [뺀 것] `PERCENTILE_CONT`/`PERCENTILE_DISC`(근사가 아닌 쪽)와
+        /// `RANK`/`DENSE_RANK`/`ROW_NUMBER`/`NTILE`/`LAG`/`LEAD`/`FIRST_VALUE`/
+        /// `LAST_VALUE`는 문서에서 "집계 함수"가 아니라 "분석 함수"로 따로 분류되고,
+        /// 반드시 `OVER(...)`를 동반해 행마다 계산되는 윈도 함수라 결과 카디널리티를
+        /// 줄이지 않는다 - 이 목록이 막으려는 "0행이 1행이 된다"는 함정 자체가
+        /// 성립하지 않으므로 넣지 않는다.
         /// </summary>
         private static readonly HashSet<string> AggregateNames = new(StringComparer.OrdinalIgnoreCase)
         {
             "MIN", "MAX", "SUM", "AVG", "COUNT", "COUNT_BIG", "STDEV", "STDEVP",
-            "VAR", "VARP", "CHECKSUM_AGG", "STRING_AGG", "GROUPING", "GROUPING_ID"
+            "VAR", "VARP", "CHECKSUM_AGG", "STRING_AGG", "GROUPING", "GROUPING_ID",
+            "APPROX_COUNT_DISTINCT", "APPROX_PERCENTILE_CONT", "APPROX_PERCENTILE_DISC"
         };
 
         /// <summary>공통 앞머리. 두 갈래 모두 여기서 시작한다.</summary>
@@ -385,6 +407,25 @@ namespace ReSet.Core.Services
                 // 1행을 돌려준다(클래스 주석 "암묵적 그룹화도 진리조건을 뚫는다"). 우변
                 // 모양과 무관하게 이 문장 전체를 침묵한다 - GROUP BY 유무는 가리지 않는다.
                 if (node.HavingClause != null) return;
+
+                // ★ 둘째 재검토 - 같은 진리조건이 GROUP BY 쪽에도 열려 있었다. 총계
+                // 그룹화 집합(grand total grouping set)은 원본이 비어도 그룹을 정확히
+                // 1개 만들어 1행을 돌려준다 - `GROUP BY ()` · `GROUPING SETS(())`(빈
+                // 원소를 하나라도 포함) · `ROLLUP(...)` · `CUBE(...)` · `... WITH ROLLUP`가
+                // 전부 이 모양이고, ScriptDom으로 직접 파싱해 각각의
+                // QuerySpecification.GroupByClause가 non-null임을 확인했다(단위 시험
+                // 일곱 개가 근거). `WITH ROLLUP`형은 우변이 맨 컬럼이어도 합법이라
+                // 2 회차의 리터럴 개방과 무관하게 1 회차부터 열려 있던 자리다.
+                //
+                // 변형을 하나하나 가려서 총계 그룹인 것만 침묵시키는 조건은 새로
+                // 만들지 않는다 - HavingClause 가드와 같은 논리로, 조건이 한 군데라도
+                // 새면 정반대 문장이 「수정 금지」 표에 그대로 실리고 뒤에서 거를 장치가
+                // 없다. 그래서 `GroupByClause`가 있으면 총계 그룹이 실제로 생기든
+                // 안 생기든(평범한 `GROUP BY A.x`처럼 총계 행이 없는 경우까지) 통째로
+                // 침묵한다 - 보수적 선택이다. 코퍼스에 SelectSetVariable을 가진
+                // QuerySpecification 중 GROUP BY를 단 것이 0건이라 이 선택의 비용은
+                // 지금 0이다(아래 코퍼스 시험의 groupByOnSetVariableQueries).
+                if (node.GroupByClause != null) return;
 
                 // 형제 SelectSetVariable이 집계를 품었거나, SelectSetVariable이 아닌
                 // 형제가 있으면 이 SELECT는 HAVING과 같은 함정을 연다(위 주석 "형제도

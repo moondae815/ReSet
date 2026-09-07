@@ -697,6 +697,41 @@ END";
         }
 
         [Fact]
+        public void Extract_SiblingApproxCountDistinctInSameSelect_ShouldSilenceTheNonAggregateSide()
+        {
+            // ★ 둘째 재검토 - AggregateNames 목록에 APPROX_COUNT_DISTINCT가 없어서
+            // HasAggregateSibling(같은 목록을 쓴다)이 이 형제를 못 보고 `@a = 1`을
+            // 그대로 담던 자리. 원본이 비어도 APPROX_COUNT_DISTINCT는 여느 집계처럼
+            // 1행을 돌려주므로 HAVING·GROUP BY와 같은 함정이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @a INT, @b INT
+    SELECT @a = 1, @b = APPROX_COUNT_DISTINCT(A.x) FROM dbo.T A WITH(NOLOCK)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_AggregateInsideDerivedTable_ApproxCountDistinct_ShouldNotBeCollected()
+        {
+            // ★ 둘째 재검토 - 같은 목록 누락이 선재 FROM 가드(AggregateInFromDetector)도
+            // 새게 만든다. 파생 테이블 안의 APPROX_COUNT_DISTINCT를 못 보면 원본이
+            // 비어도 1행이 돌아온다는 사실을 놓치고 담아 버린다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = A.m FROM (SELECT APPROX_COUNT_DISTINCT(x) AS m FROM dbo.U) A
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
         public void Extract_SiblingCaseWithAggregateInSameSelect_ShouldSilenceTheNonAggregateSide()
         {
             // 리뷰가 지목한 파생형 - 형제가 맨 집계가 아니라 분기식으로 감싼 집계여도
@@ -750,6 +785,145 @@ AS
 BEGIN
     DECLARE @v INT
     SELECT @v = A.x FROM dbo.T A WITH(NOLOCK) GROUP BY A.x HAVING COUNT(*) > 0
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        // 아래 일곱은 ★ 둘째 재검토가 연 자리 - HavingClause 가드와 같은 진리 조건이
+        // GroupByClause 쪽에는 없었다. 총계 그룹화 집합(grand total grouping set)은
+        // 원본이 비어도 그룹을 정확히 1개 만들어 1행을 돌려주므로, "무결과 시 대입이
+        // 일어나지 않는다"는 확정 문장이 거짓이 된다 - HAVING과 완전히 같은 함정이다.
+        // 파싱 모양은 짐작하지 않고 직접 재서 확인했다(ScriptDom TSql160Parser로 각
+        // 모양을 파싱해 QuerySpecification.GroupByClause를 리플렉션으로 관찰) - 일곱
+        // 모두 GroupByClause가 non-null이고 GroupingSpecifications가 각각
+        // GrandTotalGroupingSpecification · GroupingSetsGroupingSpecification(2회,
+        // 중첩 유무 무관) · RollupGroupingSpecification · CubeGroupingSpecification ·
+        // ExpressionGroupingSpecification(WITH ROLLUP은 GroupByOption=Rollup, 평범한
+        // GROUP BY는 GroupByOption=None)이다. 그래서 가드는 변형을 하나하나 가리지
+        // 않고 `GroupByClause != null` 하나로 통째 침묵한다(HavingClause와 같은 층,
+        // 같은 자리) - 변형을 열거해서 좁히면 하나라도 새는 순간 같은 거짓 행이
+        // 다시 열리고, 코퍼스 대가는 지금 0이다(CountGuardInputs가 groupByClauses로
+        // 못박는다).
+        //
+        // 일곱째(평범한 GROUP BY, 총계 그룹이 안 생기는 것)까지 침묵시키는 것은
+        // 보수적 선택이다 - `... GROUP BY A.x`는 원본이 비면 그룹이 0개이므로 실제로는
+        // "무결과 시 대입이 일어나지 않는다"가 참이다. 그런데도 함께 침묵하는 이유는
+        // ExpressionGroupingSpecification 하나만으로는 이 SELECT가 총계 그룹화
+        // 집합인지(GrandTotal·빈 GroupingSets 원소) 아닌지를 가리는 조건이 따로
+        // 필요하고, 그 조건이 새면 다시 거짓 행이 열리기 때문이다 - 이 시험이 그
+        // 선택을 코드가 아니라 시험에서 읽히게 못박는다.
+        [Fact]
+        public void Extract_GroupByEmptyGroupingSet_ShouldNotBeCollected()
+        {
+            // `GROUP BY ()`는 GrandTotalGroupingSpecification으로 파싱된다 - 원본이
+            // 비어도 총계 그룹 1개가 생겨 1행이 돌아온다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T WITH(NOLOCK) GROUP BY ()
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_GroupByGroupingSetsWithEmptySet_ShouldNotBeCollected()
+        {
+            // `GROUPING SETS (())`는 GroupingSetsGroupingSpecification 하나로
+            // 파싱되고 그 안의 빈 집합이 총계 그룹과 같은 효과를 낸다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T WITH(NOLOCK) GROUP BY GROUPING SETS (())
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_GroupByGroupingSetsMixedWithEmptySet_ShouldNotBeCollected()
+        {
+            // 빈 집합이 다른 원소와 섞여도 같은 GroupingSetsGroupingSpecification
+            // 노드이므로 같은 가드에 걸린다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T WITH(NOLOCK) GROUP BY GROUPING SETS ((x), ())
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_GroupByRollup_ShouldNotBeCollected()
+        {
+            // `ROLLUP(A.x)`는 RollupGroupingSpecification - 최상위 총계 행을
+            // 포함하므로 원본이 비어도 1행이 돌아온다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = A.x FROM dbo.T A WITH(NOLOCK) GROUP BY ROLLUP(A.x)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_GroupByCube_ShouldNotBeCollected()
+        {
+            // `CUBE(A.x)`도 같은 이유로 CubeGroupingSpecification이 총계 행을 낸다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = A.x FROM dbo.T A WITH(NOLOCK) GROUP BY CUBE(A.x)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_GroupByWithRollupOption_ShouldNotBeCollected()
+        {
+            // `GROUP BY A.x WITH ROLLUP`은 ExpressionGroupingSpecification이지만
+            // GroupByOption이 Rollup이라 우변이 맨 컬럼이어도 합법이고(§9-9와 달리
+            // 이 형은 1 회차부터 열려 있던 자리다 - base에 GroupBy 문자열이 없었다),
+            // 총계 행이 돌아온다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = A.x FROM dbo.T A WITH(NOLOCK) GROUP BY A.x WITH ROLLUP
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_PlainGroupBy_ShouldNotBeCollected_ConservativeChoice()
+        {
+            // 총계 그룹이 안 생기는 평범한 GROUP BY다 - 원본이 비면 실제로 0행이
+            // 돌아와 확정 문장이 참이다. 그런데도 가드가 GroupByClause 유무만 보고
+            // 변형을 가리지 않기로 했으므로(위 블록 주석) 이 모양도 함께 침묵한다.
+            // 이 시험은 그 보수적 선택 자체를 못박는다 - 다음 사람이 "왜 참인
+            // 문장까지 침묵시키지"를 코드가 아니라 여기서 읽도록.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = A.x FROM dbo.T A WITH(NOLOCK) GROUP BY A.x
 END";
 
             Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
@@ -826,6 +1000,7 @@ END";
             var cteNodes = 0;
             var setVariables = 0;
             var compoundSetVariables = 0;
+            var groupByOnSetVariableQueries = 0;
 
             foreach (var (name, ddl) in objects)
             {
@@ -835,10 +1010,11 @@ END";
                     collected.Add($"{name}:{fact.Line} {fact.Variable} = {fact.Expression} [{branch}]");
                 }
 
-                var (cte, setVariable, compound) = CountGuardInputs(ddl);
+                var (cte, setVariable, compound, groupBy) = CountGuardInputs(ddl);
                 cteNodes += cte;
                 setVariables += setVariable;
                 compoundSetVariables += compound;
+                groupByOnSetVariableQueries += groupBy;
             }
 
             Assert.Equal(
@@ -905,6 +1081,10 @@ END";
             Assert.Equal(0, cteNodes);
             Assert.Equal(68, setVariables);
             Assert.Equal(0, compoundSetVariables);
+            // ★ 둘째 재검토의 분모 - SelectSetVariable을 가진 QuerySpecification 중
+            // GroupByClause가 non-null인 것이 코퍼스에 0건이다. 이번 GROUP BY 가드가
+            // 대장 52행을 한 행도 안 줄였다는 근거가 이 값이다.
+            Assert.Equal(0, groupByOnSetVariableQueries);
         }
 
         /// <summary>
@@ -980,16 +1160,16 @@ END";
         /// grep이 아니라 AST 노드를 센다 - 주석의 문자열 모양(`WITH ... AS (`)은 힌트
         /// `WITH(NOLOCK)`과 구분되지 않는다.
         /// </summary>
-        private static (int Cte, int SetVariable, int CompoundSetVariable) CountGuardInputs(string ddl)
+        private static (int Cte, int SetVariable, int CompoundSetVariable, int GroupByOnSetVariableQuery) CountGuardInputs(string ddl)
         {
             var parser = new TSql160Parser(true);
             using var reader = new StringReader(ddl);
             var fragment = parser.Parse(reader, out var errors);
-            if (fragment == null || errors.Count > 0) return (0, 0, 0);
+            if (fragment == null || errors.Count > 0) return (0, 0, 0, 0);
 
             var counter = new GuardInputCounter();
             fragment.Accept(counter);
-            return (counter.Cte, counter.SetVariable, counter.CompoundSetVariable);
+            return (counter.Cte, counter.SetVariable, counter.CompoundSetVariable, counter.GroupByOnSetVariableQuery);
         }
 
         private sealed class GuardInputCounter : TSqlFragmentVisitor
@@ -1000,12 +1180,28 @@ END";
 
             public int CompoundSetVariable { get; private set; }
 
+            /// <summary>
+            /// ★ 둘째 재검토의 분모 - <see cref="SelectSetVariable"/>을 가진
+            /// <see cref="QuerySpecification"/> 중 <see cref="QuerySpecification.GroupByClause"/>가
+            /// non-null인 것의 수. 이번 GROUP BY 가드가 대장 52행을 실제로 안 줄였다는
+            /// 근거가 이 값이다(추출기의 거르기를 거치지 않은 날것을 센다).
+            /// </summary>
+            public int GroupByOnSetVariableQuery { get; private set; }
+
             public override void Visit(CommonTableExpression node) => Cte++;
 
             public override void Visit(SelectSetVariable node)
             {
                 SetVariable++;
                 if (node.AssignmentKind != AssignmentKind.Equals) CompoundSetVariable++;
+            }
+
+            public override void Visit(QuerySpecification node)
+            {
+                if (node.GroupByClause != null && node.SelectElements.Any(e => e is SelectSetVariable))
+                {
+                    GroupByOnSetVariableQuery++;
+                }
             }
         }
     }
