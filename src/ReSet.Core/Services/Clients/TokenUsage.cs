@@ -42,6 +42,21 @@ namespace ReSet.Core.Services.Clients
                 : null;
 
         /// <summary>
+        /// usage 밑의 중첩 객체에서 정수 하나를 읽는다. 바깥 자리가 없거나 객체가
+        /// 아니면 null이다.
+        ///
+        /// OpenAI 계열(prompt_tokens_details.cached_tokens ·
+        /// completion_tokens_details.reasoning_tokens)과 Google이 캐시·추론 수치를
+        /// 이렇게 한 겹 안에 넣는다. 바깥만 훑으면 그 값들이 영원히 "미보고"로 남는데,
+        /// 캐시 미스는 오류를 내지 않으므로 그 침묵은 스스로 드러나지 않는다.
+        /// </summary>
+        public static int? ReadNestedCounter(JsonElement element, string objectName, string propertyName) =>
+            element.TryGetProperty(objectName, out var nested)
+            && nested.ValueKind == JsonValueKind.Object
+                ? ReadCounter(nested, propertyName)
+                : null;
+
+        /// <summary>
         /// API 경로의 "Claude 토큰 사용량" 줄과 같은 모양으로 남긴다. 형식을 맞춰야
         /// CLI provider와 API provider의 캐시 거동을 같은 방식으로 비교할 수 있다.
         /// </summary>

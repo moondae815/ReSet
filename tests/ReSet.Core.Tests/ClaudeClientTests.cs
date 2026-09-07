@@ -126,9 +126,10 @@ namespace ReSet.Core.Tests
         // 캐시 미스는 오류를 내지 않고 조용히 지나간다. usage를 읽지 않으면 중단점이
         // 실제로 동작하는지 확인할 방법이 없다.
         [Fact]
-        public void ReadUsage_ExtractsInputAndCacheCounters()
+        public void ReadUsage_ExtractsInputOutputAndCacheCounters()
         {
             var json = @"{""usage"":{""input_tokens"":357560,
+                                     ""output_tokens"":1204,
                                      ""cache_creation_input_tokens"":1818,
                                      ""cache_read_input_tokens"":0}}";
 
@@ -136,31 +137,39 @@ namespace ReSet.Core.Tests
             var usage = ClaudeClient.ReadUsage(doc.RootElement);
 
             Assert.Equal(357560, usage.Input);
+            Assert.Equal(1204, usage.Output);
             Assert.Equal(1818, usage.CacheWrite);
             Assert.Equal(0, usage.CacheRead);
+            // Anthropic은 추론 토큰을 따로 세지 않고 output_tokens에 포함시킨다.
+            // 0으로 적으면 "재보니 추론이 없었다"는 거짓말이 된다.
+            Assert.Null(usage.Thinking);
         }
 
-        // usage 필드가 없어도 응답 처리는 계속되어야 한다.
+        // usage 필드가 없어도 응답 처리는 계속되어야 한다. 이때 0이 아니라 null이다 —
+        // 0은 "재보니 그만큼이었다"는 측정값이고 null은 "이 응답이 보고하지 않았다"는
+        // 뜻이다. 둘을 뭉개면 봉투가 바뀌어 수치가 사라진 날을 "캐시를 안 썼다"로 읽는다.
         [Fact]
-        public void ReadUsage_WithoutAUsageObject_ReturnsZeros()
+        public void ReadUsage_WithoutAUsageObject_ReportsNothing()
         {
             using var doc = JsonDocument.Parse(@"{""content"":[]}");
             var usage = ClaudeClient.ReadUsage(doc.RootElement);
 
-            Assert.Equal(0, usage.Input);
-            Assert.Equal(0, usage.CacheWrite);
-            Assert.Equal(0, usage.CacheRead);
+            Assert.Null(usage.Input);
+            Assert.Null(usage.Output);
+            Assert.Null(usage.CacheWrite);
+            Assert.Null(usage.CacheRead);
         }
 
         // 필드 일부만 오는 경우에도 던지지 않는다.
         [Fact]
-        public void ReadUsage_WithPartialFields_FillsTheRestWithZero()
+        public void ReadUsage_WithPartialFields_MarksTheRestUnreported()
         {
             using var doc = JsonDocument.Parse(@"{""usage"":{""cache_read_input_tokens"":1818}}");
             var usage = ClaudeClient.ReadUsage(doc.RootElement);
 
-            Assert.Equal(0, usage.Input);
-            Assert.Equal(0, usage.CacheWrite);
+            Assert.Null(usage.Input);
+            Assert.Null(usage.Output);
+            Assert.Null(usage.CacheWrite);
             Assert.Equal(1818, usage.CacheRead);
         }
 
@@ -168,7 +177,7 @@ namespace ReSet.Core.Tests
         // 숫자가 아닌 값에 대해 false가 아니라 InvalidOperationException을 던지므로, ValueKind를
         // 먼저 확인하지 않으면 JSON null 하나가 성공한 응답을 예외로 바꾼다.
         [Fact]
-        public void ReadUsage_WithNullCacheReadCounter_ReturnsZero()
+        public void ReadUsage_WithNullCacheReadCounter_MarksItUnreported()
         {
             using var doc = JsonDocument.Parse(@"{""usage"":{""input_tokens"":100,
                                                               ""cache_creation_input_tokens"":0,
@@ -177,12 +186,12 @@ namespace ReSet.Core.Tests
 
             Assert.Equal(100, usage.Input);
             Assert.Equal(0, usage.CacheWrite);
-            Assert.Equal(0, usage.CacheRead);
+            Assert.Null(usage.CacheRead);
         }
 
-        // 카운터가 숫자가 아닌 문자열로 와도 던지지 않고 0으로 둔다.
+        // 카운터가 숫자가 아닌 문자열로 와도 던지지 않는다.
         [Fact]
-        public void ReadUsage_WithCounterAsString_ReturnsZero()
+        public void ReadUsage_WithCounterAsString_MarksItUnreported()
         {
             using var doc = JsonDocument.Parse(@"{""usage"":{""input_tokens"":100,
                                                               ""cache_creation_input_tokens"":""10"",
@@ -190,7 +199,7 @@ namespace ReSet.Core.Tests
             var usage = ClaudeClient.ReadUsage(doc.RootElement);
 
             Assert.Equal(100, usage.Input);
-            Assert.Equal(0, usage.CacheWrite);
+            Assert.Null(usage.CacheWrite);
             Assert.Equal(0, usage.CacheRead);
         }
     }

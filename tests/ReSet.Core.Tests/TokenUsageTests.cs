@@ -58,6 +58,45 @@ namespace ReSet.Core.Tests
             Assert.Null(TokenUsage.ReadCounter(element, "input_tokens"));
         }
 
+        // OpenAI 계열과 Google은 캐시·추론 수치를 usage 밑의 중첩 객체에 넣는다
+        // (prompt_tokens_details.cached_tokens). 바깥 객체만 훑으면 그 값이 영원히
+        // "미보고"로 남는다 - 캐시가 실제로 걸렸는지 볼 수 있는 유일한 신호인데도.
+        [Fact]
+        public void ReadNestedCounter_ReadsCounterInsideNestedObject()
+        {
+            var element = Parse("{\"prompt_tokens\":4250,\"prompt_tokens_details\":{\"cached_tokens\":4096}}");
+
+            Assert.Equal(4096, TokenUsage.ReadNestedCounter(element, "prompt_tokens_details", "cached_tokens"));
+        }
+
+        [Fact]
+        public void ReadNestedCounter_MissingOuterObject_ReturnsNull()
+        {
+            var element = Parse("{\"prompt_tokens\":4250}");
+
+            Assert.Null(TokenUsage.ReadNestedCounter(element, "prompt_tokens_details", "cached_tokens"));
+        }
+
+        [Fact]
+        public void ReadNestedCounter_MissingInnerCounter_ReturnsNull()
+        {
+            var element = Parse("{\"prompt_tokens_details\":{\"audio_tokens\":0}}");
+
+            Assert.Null(TokenUsage.ReadNestedCounter(element, "prompt_tokens_details", "cached_tokens"));
+        }
+
+        // 바깥 자리가 객체가 아닌 날에도 집계 한 줄 때문에 분석이 죽으면 안 된다.
+        [Theory]
+        [InlineData("{\"prompt_tokens_details\":null}")]
+        [InlineData("{\"prompt_tokens_details\":7}")]
+        [InlineData("{\"prompt_tokens_details\":[{\"cached_tokens\":4096}]}")]
+        public void ReadNestedCounter_OuterNotAnObject_ReturnsNullWithoutThrowing(string json)
+        {
+            var element = Parse(json);
+
+            Assert.Null(TokenUsage.ReadNestedCounter(element, "prompt_tokens_details", "cached_tokens"));
+        }
+
         [Fact]
         public void WriteToLog_RendersEveryCounter()
         {
