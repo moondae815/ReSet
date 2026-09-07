@@ -4,12 +4,13 @@ using Serilog;
 using Serilog.Core;
 using Serilog.Events;
 using Xunit;
+using ReSet.Core.Services.Clients;
 using ReSet.Core.Services.Clients.Cli;
 
 namespace ReSet.Core.Tests
 {
     [Collection(GlobalSerilogLoggerCollection.Name)]
-    public class CliUsageTests
+    public class TokenUsageTests
     {
         private static JsonElement Parse(string json) =>
             JsonDocument.Parse(json).RootElement.Clone();
@@ -19,7 +20,7 @@ namespace ReSet.Core.Tests
         {
             var element = Parse("{\"input_tokens\":19406}");
 
-            Assert.Equal(19406, CliUsage.ReadCounter(element, "input_tokens"));
+            Assert.Equal(19406, TokenUsage.ReadCounter(element, "input_tokens"));
         }
 
         [Fact]
@@ -30,7 +31,7 @@ namespace ReSet.Core.Tests
             // 필드가 없는 provider를 두고 "캐시를 쓰지 않는다"고 결론짓게 된다.
             var element = Parse("{\"input_tokens\":10}");
 
-            Assert.Null(CliUsage.ReadCounter(element, "cache_write_input_tokens"));
+            Assert.Null(TokenUsage.ReadCounter(element, "cache_write_input_tokens"));
         }
 
         // JsonElement.TryGetInt32는 ValueKind가 Number가 아니면 false를 돌려주는 게 아니라
@@ -46,7 +47,7 @@ namespace ReSet.Core.Tests
         {
             var element = Parse(json);
 
-            Assert.Null(CliUsage.ReadCounter(element, "input_tokens"));
+            Assert.Null(TokenUsage.ReadCounter(element, "input_tokens"));
         }
 
         [Fact]
@@ -54,13 +55,13 @@ namespace ReSet.Core.Tests
         {
             var element = Parse("{\"input_tokens\":1.5}");
 
-            Assert.Null(CliUsage.ReadCounter(element, "input_tokens"));
+            Assert.Null(TokenUsage.ReadCounter(element, "input_tokens"));
         }
 
         [Fact]
         public void WriteToLog_RendersEveryCounter()
         {
-            var usage = new CliUsage(
+            var usage = new TokenUsage(
                 Input: 2, Output: 3, CacheWrite: 9417, CacheRead: 15971, Thinking: 288);
 
             var messages = Capture(() => usage.WriteToLog("claude-cli"));
@@ -77,7 +78,7 @@ namespace ReSet.Core.Tests
         {
             // agy는 캐시 쓰기를 보고하지 않는다. 그 자리에 0을 찍으면 "쓰기가 0회였다"는
             // 거짓 측정이 로그에 남는다.
-            var usage = new CliUsage(
+            var usage = new TokenUsage(
                 Input: 19406, Output: 299, CacheWrite: null, CacheRead: 0, Thinking: 288);
 
             var messages = Capture(() => usage.WriteToLog("agy-cli"));

@@ -5,6 +5,7 @@ using Serilog;
 using Serilog.Core;
 using Serilog.Events;
 using Xunit;
+using ReSet.Core.Services.Clients;
 using ReSet.Core.Services.Clients.Cli;
 
 namespace ReSet.Core.Tests
@@ -66,7 +67,7 @@ namespace ReSet.Core.Tests
             Assert.Contains("19406", line);
             Assert.Contains("288", line);
             // 캐시 쓰기는 봉투에 없다. 0이 아니라 미보고로 남아야 한다.
-            Assert.Contains(CliUsage.NotReported, line);
+            Assert.Contains(TokenUsage.NotReported, line);
         }
 
         // codex는 본문을 -o 파일로, 집계를 stdout JSONL로 따로 낸다. 두 경로가 한

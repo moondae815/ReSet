@@ -1,21 +1,22 @@
 using System.Text.Json;
 using Serilog;
 
-namespace ReSet.Core.Services.Clients.Cli
+namespace ReSet.Core.Services.Clients
 {
     /// <summary>
-    /// CLI 한 번 호출의 토큰 집계.
+    /// AI 호출 한 번의 토큰 집계. CLI provider와 API provider가 함께 쓴다.
     ///
-    /// 세 CLI는 모두 캐시 수치를 봉투에 담아 주지만 필드 이름이 제각각이고, 보고하는
-    /// 항목도 다르다(agy는 캐시 쓰기를 내지 않는다). 그래서 이름 매핑은 각 클라이언트가
-    /// 맡고, 이 타입은 "읽은 값을 담아 한 줄로 남기는" 일만 한다.
+    /// provider들은 모두 토큰 수치를 봉투에 담아 주지만 필드 이름이 제각각이고, 보고하는
+    /// 항목도 다르다(agy는 캐시 쓰기를 내지 않고, OpenAI 계열은 캐시 읽기만 낸다).
+    /// 그래서 이름 매핑은 각 클라이언트가 맡고, 이 타입은 "읽은 값을 담아 한 줄로 남기는"
+    /// 일만 한다. 한 줄의 모양이 같아야 provider 간 캐시 거동을 그대로 비교할 수 있다.
     ///
     /// 모든 항목이 null 허용인 것은 의도다. 0은 <b>재보니 그만큼이었다</b>는 측정값이고
     /// null은 <b>이 provider가 보고하지 않는다</b>는 뜻이다. 둘을 0으로 뭉개면 필드가
     /// 없는 provider를 두고 "캐시를 쓰지 않는다"고 결론짓게 된다 - 실제로 그런 오판이
     /// 한 번 있었다.
     /// </summary>
-    public sealed record CliUsage(
+    public sealed record TokenUsage(
         int? Input,
         int? Output,
         int? CacheWrite,

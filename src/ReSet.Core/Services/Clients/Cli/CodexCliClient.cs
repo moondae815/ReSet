@@ -88,14 +88,14 @@ namespace ReSet.Core.Services.Clients.Cli
         /// 깨진 줄은 건너뛴다. 집계는 진단 정보일 뿐이므로, 한 줄이 깨졌다고 분석
         /// 전체를 실패시킬 이유가 없다. 못 읽으면 null을 돌려주고 호출자가 경고한다.
         /// </summary>
-        public static CliUsage? ParseUsage(string standardOutput)
+        public static TokenUsage? ParseUsage(string standardOutput)
         {
             if (string.IsNullOrWhiteSpace(standardOutput))
             {
                 return null;
             }
 
-            CliUsage? latest = null;
+            TokenUsage? latest = null;
 
             foreach (var line in standardOutput.Split('\n'))
             {
@@ -129,12 +129,12 @@ namespace ReSet.Core.Services.Clients.Cli
                     }
 
                     // 한 실행에 여러 개가 오면 마지막이 최종 상태다.
-                    latest = new CliUsage(
-                        Input: CliUsage.ReadCounter(usage, "input_tokens"),
-                        Output: CliUsage.ReadCounter(usage, "output_tokens"),
-                        CacheWrite: CliUsage.ReadCounter(usage, "cache_write_input_tokens"),
-                        CacheRead: CliUsage.ReadCounter(usage, "cached_input_tokens"),
-                        Thinking: CliUsage.ReadCounter(usage, "reasoning_output_tokens"));
+                    latest = new TokenUsage(
+                        Input: TokenUsage.ReadCounter(usage, "input_tokens"),
+                        Output: TokenUsage.ReadCounter(usage, "output_tokens"),
+                        CacheWrite: TokenUsage.ReadCounter(usage, "cache_write_input_tokens"),
+                        CacheRead: TokenUsage.ReadCounter(usage, "cached_input_tokens"),
+                        Thinking: TokenUsage.ReadCounter(usage, "reasoning_output_tokens"));
                 }
             }
 

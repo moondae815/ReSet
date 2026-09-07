@@ -20,7 +20,7 @@ namespace ReSet.Core.Services.Clients.Cli
         public string? Response { get; init; }
 
         /// <summary>토큰 집계. 봉투에 usage 객체가 없으면 null이다.</summary>
-        public CliUsage? Usage { get; init; }
+        public TokenUsage? Usage { get; init; }
 
         public bool IsSuccess =>
             string.Equals(Status, "SUCCESS", StringComparison.OrdinalIgnoreCase);
@@ -161,7 +161,7 @@ namespace ReSet.Core.Services.Clients.Cli
         /// 없는 항목을 0으로 채우지 않는다. 0을 넣으면 "캐시 쓰기가 0회였다"는 측정값이
         /// 되어, 나중에 캐시가 도는지 판정할 때 근거로 쓰인다. 실제로는 알 수 없다.
         /// </summary>
-        private static CliUsage? ReadUsage(JsonElement root)
+        private static TokenUsage? ReadUsage(JsonElement root)
         {
             if (!root.TryGetProperty("usage", out var usage)
                 || usage.ValueKind != JsonValueKind.Object)
@@ -169,12 +169,12 @@ namespace ReSet.Core.Services.Clients.Cli
                 return null;
             }
 
-            return new CliUsage(
-                Input: CliUsage.ReadCounter(usage, "input_tokens"),
-                Output: CliUsage.ReadCounter(usage, "output_tokens"),
+            return new TokenUsage(
+                Input: TokenUsage.ReadCounter(usage, "input_tokens"),
+                Output: TokenUsage.ReadCounter(usage, "output_tokens"),
                 CacheWrite: null,
-                CacheRead: CliUsage.ReadCounter(usage, "cache_read_tokens"),
-                Thinking: CliUsage.ReadCounter(usage, "thinking_tokens"));
+                CacheRead: TokenUsage.ReadCounter(usage, "cache_read_tokens"),
+                Thinking: TokenUsage.ReadCounter(usage, "thinking_tokens"));
         }
 
         private static string? ReadString(JsonElement root, string propertyName) =>

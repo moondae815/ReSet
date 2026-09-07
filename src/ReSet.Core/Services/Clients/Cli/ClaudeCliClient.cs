@@ -19,7 +19,7 @@ namespace ReSet.Core.Services.Clients.Cli
         public string? StopReason { get; init; }
 
         /// <summary>토큰 집계. 봉투에 usage 객체가 없으면 null이다.</summary>
-        public CliUsage? Usage { get; init; }
+        public TokenUsage? Usage { get; init; }
     }
 
     /// <summary>
@@ -182,7 +182,7 @@ namespace ReSet.Core.Services.Clients.Cli
         /// 객체에 담아, 정수 한 칸에 옮길 수 없다. 0을 넣으면 "추론을 안 했다"는 거짓이
         /// 로그에 남는다.
         /// </summary>
-        private static CliUsage? ReadUsage(JsonElement root)
+        private static TokenUsage? ReadUsage(JsonElement root)
         {
             if (!root.TryGetProperty("usage", out var usage)
                 || usage.ValueKind != JsonValueKind.Object)
@@ -190,11 +190,11 @@ namespace ReSet.Core.Services.Clients.Cli
                 return null;
             }
 
-            return new CliUsage(
-                Input: CliUsage.ReadCounter(usage, "input_tokens"),
-                Output: CliUsage.ReadCounter(usage, "output_tokens"),
-                CacheWrite: CliUsage.ReadCounter(usage, "cache_creation_input_tokens"),
-                CacheRead: CliUsage.ReadCounter(usage, "cache_read_input_tokens"),
+            return new TokenUsage(
+                Input: TokenUsage.ReadCounter(usage, "input_tokens"),
+                Output: TokenUsage.ReadCounter(usage, "output_tokens"),
+                CacheWrite: TokenUsage.ReadCounter(usage, "cache_creation_input_tokens"),
+                CacheRead: TokenUsage.ReadCounter(usage, "cache_read_input_tokens"),
                 Thinking: null);
         }
 
