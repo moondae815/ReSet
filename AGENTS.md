@@ -90,7 +90,8 @@
     *   품질 임계치는 감쇄하지 마십시오. 최종 점수 미달 문서도 `[!CAUTION]` 배너와 점수·피드백을 붙여 보존하십시오. 종료 상태는 [VerificationOutcome.cs](./src/ReSet.Core/Models/VerificationOutcome.cs)의 네 값만 사용합니다(`architecture.md §4.4.4`).
     *   L3 [VerificationPipelineOrchestrator.cs](./src/ReSet.Core/Services/VerificationPipelineOrchestrator.cs)만 미리보기·DB 역동기화를 제어하고 배치 모드만 자동 승인하십시오. Core는 UI에 의존하지 않습니다(`architecture.md §4.4`).
     *   신규 공급자는 [IAiClient.cs](./src/ReSet.Core/Services/IAiClient.cs)를 구현해 [AiClientFactory.cs](./src/ReSet.Core/Services/Clients/AiClientFactory.cs)에 등록하십시오.
-    *   `claude-cli`·`codex-cli`·`agy-cli`는 `Command`만 사용하고 실패를 [CliFailureClassifier.cs](./src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs)로 보고하며 자동 폴백하지 마십시오. 응답 봉투의 토큰을 기록하되 미보고 항목을 0으로 채우지 마십시오([CliUsage.cs](./src/ReSet.Core/Services/Clients/Cli/CliUsage.cs)).
+    *   `claude-cli`·`codex-cli`·`agy-cli`는 `Command`만 사용하고 실패를 [CliFailureClassifier.cs](./src/ReSet.Core/Services/Clients/Cli/CliFailureClassifier.cs)로 보고하며 자동 폴백하지 마십시오.
+    *   모든 클라이언트는 응답 봉투의 토큰 집계를 읽어 [TokenUsage.cs](./src/ReSet.Core/Services/Clients/TokenUsage.cs)의 `WriteToLog`로 한 줄 남기십시오(본문 추출보다 **앞**에). 봉투가 보고하지 않는 항목을 0으로 채우지 마십시오 — 0과 미보고를 뭉개면 캐시가 죽은 날과 봉투가 바뀐 날을 구별할 수 없습니다. 로깅 시험 두 벌은 **기존** 클라이언트만 덮으므로 새 클라이언트는 이 규칙이 유일한 방어입니다.
     *   Actor·Critic·Consolidator 중 하나라도 CLI provider면 [CliProviderBatchGuard.cs](./src/ReSet.Core/Services/Clients/Cli/CliProviderBatchGuard.cs)가 DB 연결 전에 차단합니다. `AiSettings:AllowCliProviderInBatch` 옵트인은 claude/codex만 열며 `agy-cli`는 항상 차단합니다(`CliProviderBatchGuardTests`).
     *   파서·검증기가 강제하는 상한·형식과 필수 필드(`ErrorCodes`, `MaxSteps` 상한 40, `LegacyProcedures` 등)는 프롬프트에도 명시하십시오. JSON 예시에만 등장하는 필드는 선택 사항으로 오해됩니다.
     *   Critic 프롬프트에도 분석과 같은 테이블 스키마·UDF DDL·AST 메타데이터와 대상 SP DDL을 포함하십시오([ReviewSpecificationAsync](./src/ReSet.Core/Services/AiService.cs)).
@@ -233,4 +234,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: 47d1c052 -->
+<!-- synced-through: bfab49f4 -->
