@@ -63,7 +63,7 @@ public sealed class DocumentationBudgetTests
         "이 문장을 어긴 코드가 나왔을 때 무엇이 그것을 잡습니까?\n" +
         "  테스트가 잡는다        → 규칙 한 줄 + 테스트 이름만 남기십시오\n" +
         "  그 파일 여는 사람만    → 해당 클래스의 <summary>로 옮기십시오\n" +
-        "  여러 파일을 함께 봐야  → docs/architecture.md §4.x로 옮기십시오\n" +
+        "  여러 파일을 함께 봐야  → docs/architecture/4.x-*.md 로 옮기십시오\n" +
         "  사람의 판단만이 잡는다 → AGENTS.md에 남을 자격이 있습니다\n";
 
     [Fact]

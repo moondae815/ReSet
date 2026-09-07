@@ -9,6 +9,12 @@
 # 테스트가 잡으면 한 줄로 줄이고, 한 클래스 안에서 닫히면 그 클래스 <summary>로,
 # 여러 파일에 걸치면 docs/architecture.md로 보낸다.
 #
-# architecture.md와 README.md는 자동 로드되지 않으므로 예산이 없다.
+# README.md는 자동 로드되지 않으므로 예산이 없다.
+#
+# docs/architecture.md는 자동 로드되지는 않지만 예산이 있다. 이 파일은 2026-09-07에
+# 299,967바이트에서 허브로 줄었고(절 본문은 docs/architecture/ 17개로 갔다), 상한이
+# 없으면 같은 자리로 되돌아간다 — AGENTS.md가 108KB까지 갔던 경로가 그것이다.
+# 절 본문을 허브에 되쓰지 말고 docs/architecture/4.x-*.md로 보내라.
 
 AGENTS.md = 35000
+docs/architecture.md = 8000
