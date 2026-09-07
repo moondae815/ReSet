@@ -215,6 +215,40 @@ namespace ReSet.Core.Services
     /// 넷 전부 원본에서 집계를 품지 않는다(설계서 §14). 실행 재현은 SQL Server로
     /// 직접 확인하지 못했다(로컬은 빈 스키마) - 파싱 통과와 이 침묵은 실측이고,
     /// 무결과 시 1행 반환은 T-SQL 명세에 근거한 판단이다.
+    ///
+    /// [5 회차(마지막 회차) - 다섯째 축, 감싼 집합 연산] 위 진리 조건은 전부 "이
+    /// `QuerySpecification` 자신과 그 FROM"만 본다 - 그런데 이 질의가 **자기를
+    /// 감싼 `QueryExpression`**의 일부일 수 있다는 것은 아무도 묻지 않았다. 파생
+    /// 테이블 안에서는 무해하다 - <see cref="NonAggregateAssignmentVisitor.
+    /// GuaranteesZeroRows(QueryExpression)"/>가 그 감쌈(`BinaryQueryExpression`의
+    /// UNION/UNION ALL)을 이미 갈래마다 재귀로 합성해서 판정하기 때문이다(호출자가
+    /// FROM 원천으로 들어갈 때 이 메서드를 거친다). **최상위에서는 다르다** -
+    /// `SelectSetVariable`을 가진 질의가 최상위 `BinaryQueryExpression`의 한
+    /// 갈래이면, `Visit(QuerySpecification)`은 그 사실을 모른 채(부모 포인터가
+    /// 없다) 그 갈래 자신의 FROM만으로 판정해 버린다. 그런데 이 SELECT 문 전체의
+    /// 무결과 여부는 그 갈래 하나가 아니라 **모든 갈래**에 달려 있다 - 다른
+    /// 갈래가 행을 하나라도 내면(상수 원천·총계 그룹·`HAVING`·집계·다른 갈래의
+    /// `ORDER BY` 등, 이 술어가 이미 아는 함정들과 똑같다) 전체 UNION은 무결과가
+    /// 아니다. 게다가 `ORDER BY`·`OFFSET`·`FOR` 절은 `BinaryQueryExpression`
+    /// 자신에도 달릴 수 있는데(`SELECT ... UNION ALL SELECT ... ORDER BY ...`),
+    /// 그 절을 보는 경로가 이 추출기 어디에도 없다(<see cref="NonAggregateAssignmentVisitor.
+    /// GuaranteesZeroRowsWhenSourcesAreEmpty"/>는 `QuerySpecification`만 받고,
+    /// 재귀 <see cref="NonAggregateAssignmentVisitor.GuaranteesZeroRows(QueryExpression)"/>도
+    /// `BinaryQueryExpression`의 `OrderByClause`·`OffsetClause`·`ForClause`를
+    /// 읽지 않는다). 그래서 개별 조건을 하나씩 더 넓히는 대신, "이 질의가 어떤
+    /// 집합 연산의 갈래인가"만 물어 그렇다면 **통째로 침묵**한다 - CTE 판정과
+    /// 같은 이유다: 갈래마다 옳게 판정하려면 모든 갈래를 순회하며 이 술어를
+    /// 되묻고 `BinaryQueryExpression` 자신의 절까지 따로 판정해야 하는데, 그
+    /// 판정이 한 군데라도 새면 거짓 행이 표에 실리기 때문이다(거짓 행보다 없는
+    /// 행을 고른다). 범위는 <see cref="SetOperationBranchRangeCollector"/>가
+    /// <see cref="CteStatementRangeCollector"/>와 같은 기법(부모 포인터가 없어
+    /// 원문 범위 + 오프셋 포함 여부로 판정)으로 모은다 - 이름만 내용에 맞춘다.
+    /// 코퍼스 노출은 0이다(`SelectSetVariable`을 가진 질의 중 집합 연산의 갈래인
+    /// 것이 0건). 도달성은 미검증이다 - SQL Server가 변수 대입과 집합 연산의
+    /// 결합 자체를 거부할 가능성이 있다(설계서 §15 CANNOT VERIFY). 그래도 같은
+    /// 자(4 회차의 `ORDER BY COUNT(*)`도 도달성 미검증인 채로 코퍼스 대가 0을
+    /// 근거로 넣었다)로 재면 여기도 넣는 것이 맞다 - 침묵은 거짓 행을 만들지
+    /// 않고, 대가가 0이면 안전장치를 마다할 이유가 없다.
     /// </summary>
     public static class NonAggregateAssignmentExtractor
     {
@@ -294,7 +328,10 @@ namespace ReSet.Core.Services
                 var cteStatements = new CteStatementRangeCollector();
                 fragment.Accept(cteStatements);
 
-                var visitor = new NonAggregateAssignmentVisitor(scope, cteStatements);
+                var setOperationBranches = new SetOperationBranchRangeCollector();
+                fragment.Accept(setOperationBranches);
+
+                var visitor = new NonAggregateAssignmentVisitor(scope, cteStatements, setOperationBranches);
                 fragment.Accept(visitor);
                 return visitor.Facts;
             }
@@ -430,16 +467,60 @@ namespace ReSet.Core.Services
                 => _ranges.Any(range => offset >= range.Start && offset < range.End);
         }
 
+        /// <summary>
+        /// 5 회차(설계서 §15) - 어떤 `BinaryQueryExpression`(UNION/UNION ALL/EXCEPT/
+        /// INTERSECT, 모든 종류를 가리지 않는다)이 원문에서 차지하는 범위를 모은다
+        /// (클래스 주석의 "감싼 집합 연산").
+        ///
+        /// <see cref="CteStatementRangeCollector"/>와 똑같은 기법이다 - 방문자는
+        /// `QuerySpecification` 단위로 훑는데 ScriptDom 노드에는 부모 포인터가 없어
+        /// "내가 어떤 집합 연산의 갈래인가"를 노드에서 되물을 수 없다. 그래서
+        /// `BinaryQueryExpression` 자신의 원문 범위(양쪽 갈래를 포함한 전체, 괄호로
+        /// 감쌌으면 그 괄호까지)를 미리 모아 두고, 판정 대상 `QuerySpecification`의
+        /// 시작 오프셋이 그 범위 안에 있는지로 "이 질의가 어떤 집합 연산의 갈래다"를
+        /// 판정한다.
+        ///
+        /// [파생 테이블 안의 UNION과 섞이지 않는 이유] `SelectSetVariable`(변수 대입)은
+        /// 문법상 파생 테이블·하위 질의 안에 올 수 없다 - `(SELECT @v = 1 FROM T) x`
+        /// 같은 모양은 SQL Server가 애초에 거부한다. 그래서 이 범위 안에 실제로 드는
+        /// `SelectSetVariable`을 가진 `QuerySpecification`은 오직 **최상위 문장**이
+        /// 집합 연산인 경우뿐이다 - 파생 테이블 안쪽 UNION의 갈래(예:
+        /// `FROM (SELECT x FROM T1 UNION ALL SELECT x FROM T2) D`의 두 갈래)는
+        /// `SelectSetVariable`을 가질 수 없으므로 아래 가드는 그 갈래들에서는 아무
+        /// 일도 하지 않는다 - `Extract_UnionAllWithBothNamedTableBranchesInDerivedTable_
+        /// IsCaptured`가 그 무해함을 그대로 잠근다(그 시험의 바깥쪽 `QuerySpecification`
+        /// 은 이 범위 밖에 있고, 안쪽 두 갈래는 이 범위 안에 있지만 `SelectSetVariable`이
+        /// 없다).
+        /// </summary>
+        private sealed class SetOperationBranchRangeCollector : TSqlFragmentVisitor
+        {
+            private readonly List<(int Start, int End)> _ranges = new();
+
+            public override void Visit(BinaryQueryExpression node)
+            {
+                if (node.StartOffset < 0 || node.FragmentLength <= 0) return;
+
+                _ranges.Add((node.StartOffset, node.StartOffset + node.FragmentLength));
+            }
+
+            public bool Contains(int offset)
+                => _ranges.Any(range => offset >= range.Start && offset < range.End);
+        }
+
         private sealed class NonAggregateAssignmentVisitor : TSqlFragmentVisitor
         {
             private readonly VariableScopeVisitor _scope;
             private readonly CteStatementRangeCollector _cteStatements;
+            private readonly SetOperationBranchRangeCollector _setOperationBranches;
 
             public NonAggregateAssignmentVisitor(
-                VariableScopeVisitor scope, CteStatementRangeCollector cteStatements)
+                VariableScopeVisitor scope,
+                CteStatementRangeCollector cteStatements,
+                SetOperationBranchRangeCollector setOperationBranches)
             {
                 _scope = scope;
                 _cteStatements = cteStatements;
+                _setOperationBranches = setOperationBranches;
             }
 
             public List<NonAggregateAssignmentFact> Facts { get; } = new();
@@ -454,6 +535,16 @@ namespace ReSet.Core.Services
                 // 문장 범위로 재는 판정이라 층에 이미 무관하다 - 재귀 술어 밖에
                 // 그대로 둔다(설계서 §12 "CTE 판정은 지금 방식 그대로 둬도 된다").
                 if (_cteStatements.Contains(node.StartOffset)) return;
+
+                // ★ 5 회차(마지막 회차, 클래스 주석의 "감싼 집합 연산") - 이 질의가
+                // 어떤 집합 연산(`BinaryQueryExpression`)의 갈래이면 침묵한다. 이
+                // 질의 자신의 FROM만으로는 다른 갈래가 행을 내는지 알 수 없고,
+                // `BinaryQueryExpression` 자신에 달린 `ORDER BY`·`OFFSET`·`FOR`도
+                // 이 추출기 어디에서도 읽지 않기 때문이다. CTE 판정과 같은 범위
+                // 기법을 쓴다 - `SetOperationBranchRangeCollector` 참고. 파생
+                // 테이블 안의 UNION은 `SelectSetVariable`을 애초에 가질 수 없어
+                // 이 가드가 손대지 않는다(그 주석 참고).
+                if (_setOperationBranches.Contains(node.StartOffset)) return;
 
                 // SelectSetVariable이 아닌 형제가 있으면 대상 칸이 이 SELECT의
                 // 부분만을 가리키는 것이 맞는지가 판정 범위 밖이라 좁게 침묵한다(클래스

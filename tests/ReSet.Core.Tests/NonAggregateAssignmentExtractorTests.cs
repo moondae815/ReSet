@@ -1600,6 +1600,127 @@ END"
             Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
         }
 
+        // ============================================================================
+        // 5 회차(마지막 회차) - 다섯째 축, 감싼 집합 연산.
+        //
+        // `Visit(QuerySpecification)`은 자기를 감싼 `QueryExpression`을 묻지 않는다.
+        // 파생 테이블 안에서는 무해하다 - `GuaranteesZeroRows(QueryExpression)`가
+        // UNION/UNION ALL 갈래를 이미 합성해서 재귀로 태우기 때문이다(위
+        // `Extract_UnionAllWithBothNamedTableBranchesInDerivedTable_IsCaptured`가
+        // 그 대비를 잠근다). **최상위에서는 다르다** - `SelectSetVariable`을 가진
+        // 질의가 최상위 집합 연산(`BinaryQueryExpression`)의 한 갈래이면, 이
+        // 방문자는 그 사실을 모른 채 그 갈래 자신의 FROM만으로 판정한다. 그런데
+        // 무결과 여부는 그 갈래 하나가 아니라 **전체 UNION의 모든 갈래**에 달려
+        // 있다 - 다른 갈래가 행을 하나라도 내면 이 SELECT 문 전체는 무결과가
+        // 아니다. 여섯 재현 전부 `TSql160Parser` 0 오류를 프로브로 확인했다
+        // (도달성은 SQL Server 로 실행 확인하지 못했다 - CANNOT VERIFY, 설계서
+        // §15).
+        // ============================================================================
+
+        [Fact]
+        public void Extract_TopLevelUnionAllWithInlineDerivedTableBranch_StaysSilent()
+        {
+            // 재현 첫째 - 둘째 갈래가 `(VALUES(1))`이라 기저 테이블과 무관하게
+            // 행을 낸다. 첫째 갈래(`@v = 1`)만 보면 `dbo.T`가 비었을 때 침묵해야
+            // 맞다고 오판하지만, 둘째 갈래가 항상 1행을 내므로 전체 UNION은
+            // 무결과가 아니다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T A UNION ALL SELECT 2 FROM (VALUES(1)) v(c)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_TopLevelUnionAllWithGrandTotalGroupByBranch_StaysSilent()
+        {
+            // 재현 둘째 - 둘째 갈래의 `GROUP BY ()`가 총계 그룹화 집합이라
+            // `dbo.S`가 비어도 1행을 낸다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T A UNION ALL SELECT 2 FROM dbo.S B GROUP BY ()
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_TopLevelUnionAllWithHavingBranch_StaysSilent()
+        {
+            // 재현 셋째 - 둘째 갈래의 `HAVING`이 GROUP BY 없이도 암묵 그룹화를
+            // 켜 `dbo.S`가 비어도 1행을 낸다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T A UNION ALL SELECT 2 FROM dbo.S B HAVING 1=1
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_TopLevelUnionAllWithAggregateBranch_StaysSilent()
+        {
+            // 재현 넷째 - 둘째 갈래가 `COUNT(*)`라 GROUP BY 없이도 `dbo.S`가
+            // 비어도 1행을 낸다. 넷째까지는 기저 테이블이 다 비어도 1행 이상이
+            // 돌아와 진리 조건이 뚫린다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T A UNION ALL SELECT COUNT(*) FROM dbo.S B
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_TopLevelUnionAllWithOrderByAggregateOnTheBinaryExpression_StaysSilent()
+        {
+            // 재현 다섯째 - 최상위에서 `ORDER BY`가 `BinaryQueryExpression`
+            // 자신에 달려 있다(파생 테이블 안에서는 둘째 `QuerySpecification`에
+            // 달려 4 회차 가드가 잡는다). `BinaryQueryExpression.OrderByClause`를
+            // 보는 경로가 이 추출기에 없으므로, 갈래 자신의 층만 보면 이 `ORDER
+            // BY`를 놓친다 - 그래서 갈래인지 여부만으로 통째 침묵하는 이 가드가
+            // 필요하다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T A UNION ALL SELECT 2 FROM dbo.S B ORDER BY COUNT(*)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_ParenthesizedTopLevelUnionAllBranches_StaysSilent()
+        {
+            // 재현 여섯째 - 갈래를 괄호로 감싸도(`QueryParenthesisExpression`)
+            // 같은 함정이다. 범위 판정이 감쌈을 벗기지 않고도 안쪽
+            // `QuerySpecification`의 오프셋을 포함해야 한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    (SELECT @v = 1 FROM dbo.T A) UNION ALL (SELECT 2 FROM (VALUES(1)) v(c))
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
         [SkippableFact]
         public void Extract_OverTheCorpus_ShouldCollectExactlyTheseRows()
         {
