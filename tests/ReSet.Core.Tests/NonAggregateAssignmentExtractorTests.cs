@@ -638,6 +638,123 @@ END";
             Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
         }
 
+        [Fact]
+        public void Extract_HavingWithoutGroupByOverLiteral_ShouldNotBeCollected()
+        {
+            // 2 회차가 연 거짓 행 경로 - GROUP BY 없는 HAVING은 T-SQL이 전체를 한
+            // 그룹으로 묶어 행이 0건이어도 1행을 돌려준다. `SELECT @v = 1`은 최상위가
+            // 리터럴이라 IsCapturableExpression을 통과하는데, HAVING이 있으면 "무결과
+            // 시 대입이 일어나지 않는다"는 확정 문장 자체가 거짓이 된다
+            // (`HAVING COUNT(*) = 0`은 T가 비면 참이 되어 1행이 돌아오고 대입이 일어난다).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T WITH(NOLOCK) HAVING COUNT(*) = 0
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_HavingWithoutGroupByOverColumn_ShouldNotBeCollected()
+        {
+            // GROUP BY 없는 HAVING은 우변 모양(컬럼 참조여도)과 무관하게 거짓이 된다 -
+            // HAVING이 참이면 행이 반드시 1건 돌아온다는 사실은 SELECT 목록이 아니라
+            // 절 자체에서 나온다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = A.x FROM dbo.T A WITH(NOLOCK) HAVING COUNT(*) > 0
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_SiblingAggregateInSameSelect_ShouldSilenceOnlyTheNonAggregateSide()
+        {
+            // 상반된 확정 문장 둘이 한 표에 나란히 실리던 자리 - `@a = 1`은 비집계
+            // 추출기가, `@b = COUNT(*)`는 집계 추출기가 각각 담아 정반대 문장을 냈다.
+            // 같은 SelectElements 안에 집계를 품은 형제가 있으면 이 QuerySpecification
+            // 전체를 비집계 쪽에서 침묵한다 - 집계 쪽은 그대로 담아야 한다(격리).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @a INT, @b INT
+    SELECT @a = 1, @b = COUNT(*) FROM dbo.T WITH(NOLOCK)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+            // 격리 - 집계 쪽은 이 가드와 무관하게 그대로 담겨야 한다. 이 단언이 없으면
+            // 위의 빈 목록이 "이 문장 전체가 사라졌다"인지 "형제만 정확히 걸렀다"인지
+            // 구분되지 않는다.
+            Assert.Single(AggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_SiblingCaseWithAggregateInSameSelect_ShouldSilenceTheNonAggregateSide()
+        {
+            // 리뷰가 지목한 파생형 - 형제가 맨 집계가 아니라 분기식으로 감싼 집계여도
+            // 같은 함정이다(집계는 잎이 아니라 IsCapturableExpression에 안 걸리므로
+            // 이 형제 자체는 어차피 비집계 추출기에 안 담기지만, 그 형제가 있다는
+            // 사실만으로 같은 SELECT의 @a도 침묵해야 한다).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @a INT, @b INT
+    SELECT @a = CASE WHEN 1 = 1 THEN 1 ELSE 2 END, @b = MAX(A.X)
+    FROM   dbo.T A WITH(NOLOCK)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_NonSetVariableSiblingInSameSelect_ShouldSilenceTheAssignment()
+        {
+            // `SELECT @v = ID, Name FROM T`처럼 대입과 일반 컬럼 조회가 한 SELECT에
+            // 섞이면 같은 SelectElements 안에 SelectSetVariable이 아닌 요소가 있다.
+            // 이 모양은 코퍼스에 0건이지만(클래스 주석), 침묵이 안전한 선택이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = ID, Name FROM dbo.T WITH(NOLOCK)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_GroupByWithHaving_StaysSilentByTheSameBlanketGuard()
+        {
+            // 판단이 필요한 자리 - GROUP BY가 있으면 원본이 비어도 그룹이 0개이므로
+            // 이 SELECT는 실제로 0행이 될 수 있고, "무결과 시 대입이 일어나지 않는다"는
+            // 확정 문장은 참이다. 그런데도 침묵을 택한다: 가드를
+            // `HavingClause != null`(GROUP BY 유무를 안 가림) 하나로 단순하게 유지하는
+            // 것이 ROLLUP/CUBE/GROUPING SETS 등 GROUP BY의 여러 변형까지 옳게 가리는
+            // 조건을 새로 만드는 것보다 안전하다 - 조건이 한 군데라도 새면 정반대
+            // 문장이 표에 실리고, 이 표는 「수정 금지」라 뒤에서 거를 장치가 없다
+            // (클래스 주석 "집계는 CTE에도 산다"와 같은 논리). 코퍼스에 이 모양이
+            // 0건이라 이 선택의 비용은 지금 0이다(대장 52행 불변, 아래 코퍼스 시험).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = A.x FROM dbo.T A WITH(NOLOCK) GROUP BY A.x HAVING COUNT(*) > 0
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
         [SkippableFact]
         public void Extract_OverTheCorpus_ShouldCollectExactlyTheseRows()
         {

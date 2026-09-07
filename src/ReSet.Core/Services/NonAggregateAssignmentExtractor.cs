@@ -54,10 +54,31 @@ namespace ReSet.Core.Services
     /// 함수 호출·하위 질의가 오면 담지 않는다 - 통째 완화를 실측해 보니 그 모양이
     /// 원본 줄 주석을 대상 칸 안으로 끌고 들어왔다(2026-09-07 2 회차 사전선언 §10-1).
     /// `ELSE` 없는 `CASE`도 담지 않으며, 감쌈의 기본값이 리터럴이 아니면 벗기지 않는다.
-    /// 대입식이 집계를 품으면 결론이 정반대로 뒤집히므로(무결과여도 한 행이 돌아온다)
-    /// 그쪽은 집계 추출기의 몫이다 - 집계는 잎이 아니라 이 판정에 걸리지 않고, 그것이
-    /// 두 갈래를 배타적으로 만드는 기전이다. 실물: 101행 `MAX(ID)+1`, 116행
-    /// `ISNULL(SUM(...),0)`.
+    /// 대입식이 집계를 품으면 결론이 정반대로 뒤집힌다(무결과여도 한 행이 돌아온다) -
+    /// 집계는 잎이 아니라 <see cref="AssignmentExpressionUnwrapper.IsCapturableExpression"/>의
+    /// 판정에 걸리지 않으므로 이 추출기는 그 자리를 담지 않는다.
+    ///
+    /// [그런데 그 반대쪽이 항상 담기는 것은 아니다 - 원본과 두 대장에서 직접 확인했다]
+    /// `UP_UTIL_SETTLE_PROC_ETC.Procedure:116`의 `ISNULL(SUM(...),0)`은 최상위가
+    /// `ISNULL`이고 한 겹 벗기면 안쪽이 `FunctionCall`(`SUM`)이라
+    /// <see cref="AggregateAssignmentExtractor"/>가 담는다(그 클래스의
+    /// `unwrapped.Inner is not FunctionCall call` 가드를 통과한다) - **이제는** 집계
+    /// 추출기의 몫이 맞다.
+    ///
+    /// 그러나 같은 객체 `:101`의 `SELECT @v_intID = MAX(ID)+1 FROM TSettleMiss`는
+    /// 최상위가 이항식(`MAX(ID) + 1`)이라 한 겹 벗겨도 안쪽이 `FunctionCall`이 아니고
+    /// (`BinaryExpression`), 집계 추출기의 같은 가드에 걸려 **담기지 않는다**
+    /// (`AggregateAssignmentExtractorTests`에도 이 행을 담는 시험이 없다). 이 클래스도
+    /// `MAX(ID)+1`은 `IsCapturableExpression`이 `FunctionCall`을 잎으로 인정하지 않아
+    /// 담지 않는다(`Extract_AggregateInsideArithmetic_ShouldNotBeCollected`가 이 침묵을
+    /// 잠근다). 결과적으로 `:101`은 **어느 대장에도 없다** - 두 그물 사이로 새는 자리다.
+    ///
+    /// 이 사실은 base(`0b6df499`)의 클래스 주석이 정확히 적고 있었다: "최상위가
+    /// 이항식/스칼라 함수라 집계 추출기는 담지 않지만, 질의 자체는 집계라 무결과여도
+    /// 한 행이 돌아온다." 이 문단이 한때 그 문장을 "그쪽은 집계 추출기의 몫이다"로
+    /// 갈아치워 열린 구멍을 닫힌 것처럼 적었다 - `:116`은 그 회차가 참으로 만들었지만
+    /// `:101`은 그 뒤로도 계속 비어 있었다. 이 문단은 그 서술을 사실로 되돌린 것이고,
+    /// `:101`을 담게 만드는 것은 이 브랜치의 범위 밖이다(별건).
     ///
     /// [넓히기 전에 무엇이 빠졌었나] `UF_GET_COMM4CLIENT4PARTIALCANCEL:43`의
     /// `IIF(@pi_intFreeInterestFlag IN (0,2), A.CommissionRate, A.FreeInterestInstCommRate)`가
@@ -105,6 +126,47 @@ namespace ReSet.Core.Services
     /// [왜 FROM 절을 요구하는가] `SELECT @v = ID`처럼 FROM이 없으면 무결과라는 개념이
     /// 없다 - 한 행이 반드시 돌아와 대입이 일어난다. FROM이 없는 문장에 이 사실 문장을
     /// 붙이면 거짓이 된다.
+    ///
+    /// [암묵적 그룹화도 진리조건을 뚫는다 - 2 회차가 연 거짓 행 경로를 닫는다] 위의
+    /// FROM 집계 · CTE 집계 가드는 모두 "집계가 어디 사는가"를 식 · FROM · WITH에서
+    /// 찾는다. 그런데 `GROUP BY` 없는 `HAVING`은 SELECT 목록 어디에도 집계가 없어도
+    /// 같은 함정을 연다 - T-SQL은 `GROUP BY` 없는 질의 전체를 암묵적으로 한 그룹으로
+    /// 묶으므로, `HAVING` 조건이 참이면(예: `HAVING COUNT(*) = 0`은 원본이 비었을 때
+    /// 참이다) 행이 0건이어도 **1행을 돌려준다.** 그러면 무결과를 전제로 "대입 자체가
+    /// 일어나지 않는다"고 말하는 이 확정 문장이 거짓이 된다.
+    ///
+    /// 1 회차는 이 자리가 안전했다 - 최상위가 <see cref="ColumnReferenceExpression"/>뿐이었고,
+    /// 암묵 그룹 질의의 SELECT 목록에 맨 컬럼이 오는 것은 애초에 SQL로 불법이라(그
+    /// 컬럼이 `GROUP BY`에도 집계 함수 안에도 있지 않은 채로 `HAVING`과 함께 쓰이면
+    /// 구문 오류다) 이 모양이 못 들어왔다. **2 회차가 `case Literal: return true;`
+    /// (<see cref="AssignmentExpressionUnwrapper.IsCapturableExpression"/>)로 최상위
+    /// 리터럴을 열면서 길이 났다** - 리터럴은 암묵 그룹 목록에 합법이라
+    /// `SELECT @v = 1 FROM T HAVING COUNT(*) = 0`이 파싱을 통과하고 우변 가드도
+    /// 통과해 표에 실렸다.
+    ///
+    /// 그래서 <see cref="QuerySpecification.HavingClause"/>가 있으면 우변 모양과
+    /// 무관하게 문장 전체를 통째로 침묵한다 - `GROUP BY` 유무를 가리지 않는다.
+    /// `GROUP BY`가 있으면 원본이 비었을 때 그룹이 0개이므로 이 SELECT는 실제로
+    /// 0행이 될 수 있어 확정 문장이 참인 경우도 있지만(예:
+    /// `... GROUP BY A.x HAVING COUNT(*) > 0`), 그 경우만 가려내려면
+    /// `ROLLUP`/`CUBE`/`GROUPING SETS` 등 `GROUP BY`의 변형까지 옳게 판정하는 조건이
+    /// 새로 필요하고, 그 판정이 한 군데라도 새면 정반대 문장이 「수정 금지」 표에
+    /// 실린다(클래스 주석 "집계는 CTE에도 산다"와 같은 논리 - 거짓 행보다 없는 행을
+    /// 고른다). 코퍼스에 `HAVING`을 단 문장이 0건이라 이 선택의 비용은 지금 0이다.
+    ///
+    /// [형제도 같은 함정을 연다] `SELECT @a = 1, @b = COUNT(*) FROM T`처럼 한
+    /// <see cref="QuerySpecification.SelectElements"/> 안에 비집계 대입과 집계 대입이
+    /// 섞이면, 집계 쪽이 있다는 사실만으로 이 SELECT는 무결과여도 1행을 돌려준다 -
+    /// `HAVING`과 같은 결과다. 그러면 `@a = 1`에 "무결과 시 대입이 일어나지 않는다"를
+    /// 붙이는 것과 `@b = COUNT(*)`에 <see cref="AggregateAssignmentExtractor"/>가 붙이는
+    /// "무결과여도 대입이 항상 일어난다"가 같은 표에 나란히 실려 정반대를 말한다.
+    /// 그래서 형제 <see cref="SelectSetVariable"/>의 식에 집계가 있으면 이
+    /// QuerySpecification 전체를 비집계 쪽에서 침묵한다(집계 쪽은 이 가드와 무관하게
+    /// 그대로 담긴다 - 두 갈래가 배타적으로 유지된다). `SelectSetVariable`이 아닌
+    /// 형제(예: `SELECT @v = ID, Name FROM T`)도 같은 이유로 침묵한다 - 이쪽은 집계
+    /// 여부와 무관하게 대상 칸이 이 SELECT의 부분(`@v = ID`)만을 가리키는 것이 맞는지부터
+    /// 이 판정 범위 밖이라, 좁게 잡는다. 코퍼스에 두 모양 다 0건이다(전수 스캔 - 아래
+    /// 코퍼스 시험의 <c>setVariables</c> · <c>compoundSetVariables</c>와 나란히 잰다).
     /// </summary>
     public static class NonAggregateAssignmentExtractor
     {
@@ -319,6 +381,16 @@ namespace ReSet.Core.Services
                 node.FromClause.Accept(aggregateInFrom);
                 if (aggregateInFrom.Found) return;
 
+                // GROUP BY 없는 HAVING은 암묵적으로 전체를 한 그룹으로 묶어 무결과여도
+                // 1행을 돌려준다(클래스 주석 "암묵적 그룹화도 진리조건을 뚫는다"). 우변
+                // 모양과 무관하게 이 문장 전체를 침묵한다 - GROUP BY 유무는 가리지 않는다.
+                if (node.HavingClause != null) return;
+
+                // 형제 SelectSetVariable이 집계를 품었거나, SelectSetVariable이 아닌
+                // 형제가 있으면 이 SELECT는 HAVING과 같은 함정을 연다(위 주석 "형제도
+                // 같은 함정을 연다"). 문장 전체를 비집계 쪽에서 침묵한다.
+                if (HasNonSetVariableSibling(node) || HasAggregateSibling(node)) return;
+
                 foreach (var element in node.SelectElements)
                 {
                     if (element is not SelectSetVariable setVariable) continue;
@@ -354,6 +426,35 @@ namespace ReSet.Core.Services
                     Facts.Add(new NonAggregateAssignmentFact(
                         setVariable.StartLine, variable, expressionText, sentence));
                 }
+            }
+
+            /// <summary>
+            /// 같은 <see cref="QuerySpecification.SelectElements"/> 안에
+            /// <see cref="SelectSetVariable"/>이 아닌 요소가 있는가(클래스 주석 "형제도
+            /// 같은 함정을 연다"). 있으면 대상 칸이 이 SELECT의 부분만을 가리키는 것이
+            /// 맞는지가 이 판정 범위 밖이라 좁게 침묵한다. 코퍼스에 0건이다.
+            /// </summary>
+            private static bool HasNonSetVariableSibling(QuerySpecification node)
+                => node.SelectElements.Any(element => element is not SelectSetVariable);
+
+            /// <summary>
+            /// 형제 <see cref="SelectSetVariable"/>의 식 어딘가에 집계 함수가 있는가
+            /// (클래스 주석 "형제도 같은 함정을 연다"). <see cref="AggregateInFromDetector"/>를
+            /// 재사용한다 - FROM 절 전용이 아니라 어떤 조각을 훑어도 그 안의
+            /// <see cref="FunctionCall"/> 이름만 본다.
+            /// </summary>
+            private static bool HasAggregateSibling(QuerySpecification node)
+            {
+                foreach (var element in node.SelectElements)
+                {
+                    if (element is not SelectSetVariable sibling || sibling.Expression == null) continue;
+
+                    var detector = new AggregateInFromDetector();
+                    sibling.Expression.Accept(detector);
+                    if (detector.Found) return true;
+                }
+
+                return false;
             }
         }
     }
