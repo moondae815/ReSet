@@ -466,7 +466,8 @@ namespace ReSet.Core.Services.Clients
         /// cref="ChatCompletionsUsage"/>). 한쪽 매핑을 다른 쪽에 쓰면 예외 없이
         /// 전부 미보고가 되어, 캐시가 죽은 것처럼 보인다.
         ///
-        /// 캐시 쓰기는 이 규격에도 칸이 없으므로 언제나 미보고다.
+        /// 캐시 쓰기는 없다고 단정하지 않고 읽어 본다 - 채팅 규격에서 "칸이 없다"는
+        /// 단정이 실물 봉투에 깨졌기 때문이다. 있으면 그 값이고 없으면 미보고다.
         /// </summary>
         public static TokenUsage ReadResponsesUsage(JsonElement root)
         {
@@ -478,7 +479,7 @@ namespace ReSet.Core.Services.Clients
             return new TokenUsage(
                 Input: TokenUsage.ReadCounter(usage, "input_tokens"),
                 Output: TokenUsage.ReadCounter(usage, "output_tokens"),
-                CacheWrite: null,
+                CacheWrite: TokenUsage.ReadNestedCounter(usage, "input_tokens_details", "cache_write_tokens"),
                 CacheRead: TokenUsage.ReadNestedCounter(usage, "input_tokens_details", "cached_tokens"),
                 Thinking: TokenUsage.ReadNestedCounter(usage, "output_tokens_details", "reasoning_tokens"));
         }

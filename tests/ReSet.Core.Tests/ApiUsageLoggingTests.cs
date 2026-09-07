@@ -63,10 +63,10 @@ namespace ReSet.Core.Tests
             Assert.Contains("204800", line);
         }
 
-        // 이 규격에는 캐시 쓰기 칸이 없다. 0 이 아니라 "미보고"로 찍혀야, 캐시를 안 쓴
-        // 것과 봉투가 말하지 않은 것을 로그만 보고 구별할 수 있다.
+        // 봉투가 캐시 쓰기를 말하지 않을 때다. 0 이 아니라 "미보고"로 찍혀야, 캐시를
+        // 안 쓴 것과 봉투가 말하지 않은 것을 로그만 보고 구별할 수 있다.
         [Fact]
-        public async Task OpenRouter_MarksCacheWriteUnreported()
+        public async Task OpenRouter_MarksCacheWriteUnreported_WhenTheEnvelopeOmitsIt()
         {
             const string json = @"{""choices"":[{""message"":{""content"":""PONG""}}],
                 ""usage"":{""prompt_tokens"":100,""completion_tokens"":10}}";

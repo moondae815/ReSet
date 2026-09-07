@@ -29,8 +29,10 @@ namespace ReSet.Core.Tests
             Assert.Equal(612, usage.Thinking);
         }
 
-        // 명시적 캐시는 별개 API(cachedContents)로 만들고, generateContent 응답은
-        // 그 생성량을 보고하지 않는다. 0 이 아니라 미보고다.
+        // usageMetadata 에서 캐시 쓰기에 해당하는 항목은 아직 관측되지 않았다
+        // (명시적 캐시는 별개 API인 cachedContents 로 만든다). 이름을 모르는 칸을
+        // 추측해 읽지는 않으므로 미보고로 둔다 - 0 은 "재보니 안 썼다"는 다른 말이다.
+        // 실물 봉투에서 이름이 확인되면 chat/completions 처럼 읽어 채운다.
         [Fact]
         public void ReadUsage_MarksCacheWriteUnreported()
         {

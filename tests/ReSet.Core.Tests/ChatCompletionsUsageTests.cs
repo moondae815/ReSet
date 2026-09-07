@@ -42,13 +42,34 @@ namespace ReSet.Core.Tests
             Assert.Equal(612, usage.Thinking);
         }
 
-        // 이 규격에는 캐시 쓰기를 담을 칸이 아예 없다. 0으로 적으면 "재보니 캐시를
-        // 쓰지 않았다"는 측정값으로 읽히는데, 사실은 이 봉투가 그 값을 말하지 않는
-        // 것이다. hy4 의 캐시를 오독한 자리가 정확히 이 구분이었다.
+        // OpenRouter 실물 봉투(2026-09-07 hy4 실행 로그에서 그대로 옮김). 이 규격에
+        // 캐시 쓰기 칸이 없다고 단언했다가 틀렸다 - prompt_tokens_details 안에
+        // cache_write_tokens 가 실려 온다. 명세 지식으로 세운 전제를 실물로 대조하지
+        // 않은 자리였고, 이 픽스처가 그 대조를 대신한다.
         [Fact]
-        public void Read_MarksCacheWriteUnreported_BecauseTheEnvelopeHasNoFieldForIt()
+        public void Read_ExtractsCacheWriteTokens_FromARealOpenRouterEnvelope()
         {
-            var root = Parse(@"{""usage"":{""prompt_tokens"":4250,""completion_tokens"":310}}");
+            var root = Parse(@"{""usage"":{""prompt_tokens"":8837,""completion_tokens"":28665,
+                ""total_tokens"":37502,""cost"":0.078655719,""is_byok"":false,
+                ""prompt_tokens_details"":{""cached_tokens"":512,""cache_write_tokens"":0,
+                                           ""audio_tokens"":0,""video_tokens"":0}}}");
+
+            var usage = ChatCompletionsUsage.Read(root);
+
+            Assert.Equal(8837, usage.Input);
+            Assert.Equal(28665, usage.Output);
+            Assert.Equal(512, usage.CacheRead);
+            // 0 은 측정값이다. 미보고로 뭉개면 "이 봉투는 캐시 쓰기를 말하지 않는다"가
+            // 되어, hy4 가 캐시를 쓰지 않는다는 실측 자체를 지운다.
+            Assert.Equal(0, usage.CacheWrite);
+        }
+
+        // 칸이 실제로 없는 봉투에서만 미보고다.
+        [Fact]
+        public void Read_WithoutCacheWriteField_MarksItUnreported()
+        {
+            var root = Parse(@"{""usage"":{""prompt_tokens"":4250,""completion_tokens"":310,
+                ""prompt_tokens_details"":{""cached_tokens"":0}}}");
 
             var usage = ChatCompletionsUsage.Read(root);
 

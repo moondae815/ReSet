@@ -30,9 +30,23 @@ namespace ReSet.Core.Tests
             Assert.Equal(1024, usage.Thinking);
         }
 
-        // Responses 규격에도 캐시 쓰기 칸은 없다.
+        // 캐시 쓰기 칸이 없다고 단정하지 않는다. chat/completions 에서 그 단정이
+        // 실물 봉투에 깨졌으므로(cache_write_tokens 가 실려 왔다), 여기서도 읽어
+        // 보고 없을 때만 미보고로 둔다.
         [Fact]
-        public void ReadResponsesUsage_MarksCacheWriteUnreported()
+        public void ReadResponsesUsage_ReadsCacheWriteWhenTheEnvelopeCarriesIt()
+        {
+            using var doc = JsonDocument.Parse(
+                @"{""usage"":{""input_tokens"":10,
+                              ""input_tokens_details"":{""cache_write_tokens"":2048}}}");
+
+            var usage = OpenAiClient.ReadResponsesUsage(doc.RootElement);
+
+            Assert.Equal(2048, usage.CacheWrite);
+        }
+
+        [Fact]
+        public void ReadResponsesUsage_WithoutCacheWriteField_MarksItUnreported()
         {
             using var doc = JsonDocument.Parse(@"{""usage"":{""input_tokens"":10}}");
 
