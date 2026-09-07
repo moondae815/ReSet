@@ -68,9 +68,9 @@ UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_v_valIncVat AS INT);
             Assert.Contains(facts, f => f.CallName == "queryAll" && f.Key == "p_ymd");
         }
 
-        // 실측(2026-09-07, 단계 본문 386 편): 여러 줄에 걸친 바인딩 객체가 20 자리 있고
-        // 그 안에 사실 157 개가 산다 - 전체 872 의 18%. 줄 단위로 앵커한 구현은 이
-        // 157 에 눈이 먼다. Batch5/S14:52 실물의 모양이다.
+        // 실측(2026-09-07, 단계 본문 386 편, 배송 `Calls` 일곱 이름 기준): 여러 줄에 걸친
+        // 바인딩 객체가 21 자리 있고 그 안에 사실 161 개가 산다 - 전체 894 의 18%.
+        // 줄 단위로 앵커한 구현은 이 161 에 눈이 먼다. Batch5/S14:52 실물의 모양이다.
         [Fact]
         public void Extract_ReadsBindingsSpanningSeveralLines()
         {
@@ -88,7 +88,7 @@ UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_v_valIncVat AS INT);
             Assert.Contains(facts, f => f.Key == "p_comment" && f.Value == "N'수수료 후취'");
         }
 
-        // 실측: 바인딩 객체가 빈 호출(`queryScalar(SQL_X, {})`)이 코퍼스에 6 자리 있다.
+        // 실측: 바인딩 객체가 빈 호출(`queryScalar(SQL_X, {})`)이 코퍼스에 7 자리 있다.
         // 사실을 0 개 내는 것이 옳다 - 바인딩된 값이 없기 때문이다. 그리고 그것이
         // **뒤따르는 호출의 파싱을 삼키면 안 된다**(중괄호를 탐욕적으로 물면 삼킨다).
         [Fact]
