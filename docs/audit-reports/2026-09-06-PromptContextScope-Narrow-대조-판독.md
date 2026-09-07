@@ -1,5 +1,12 @@
 # `PromptContextScope` Full ↔ Narrow 대조 판독 — POQSettleBatch4 / POQSettleBatch5
 
+
+> **[2026-09-07 추기] 이 판독이 근거로 인용한 로그 트리는 이제 없다.**
+> `output/logs-batch4-full-20260906`·`output/logs-batch5-narrow-20260906`·
+> `output/logs-regen-POQSettleBatch1-20260904` 를 사람이 과거 판 코퍼스와 함께
+> 지우기로 결정했다. 아래 수치는 **다시 확인할 수 없다** — 재현이 필요하면 새로
+> 실행해 새 로그를 남겨야 한다. 경위: `2026-09-07-과거판-코퍼스-폐기.md`
+
 물음 하나였다. **단계 본문 호출이 명세서 전량(421,121자)을 실을 값어치가 있는가.**
 
 `PromptContextScope`가 `Full`을 두는 근거는 「접두사가 단계 간 바이트까지 같아야 캐시가

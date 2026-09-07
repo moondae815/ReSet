@@ -76,7 +76,13 @@ if [[ -n "$REGEN_SNAPSHOT" ]]; then
   SNAP=$REGEN_SNAPSHOT
 else
   SNAP=""
-  for d in $REPO/output.bak-*preregen*(N/); do
+  # 최신 우선으로 훑는다(`Om` = 수정 시각 내림차순). 사전순이면 같은 Job 의 스냅샷이
+  # 둘일 때 **더 오래된 쪽**을 고른다 - 실측(2026-09-07): POQSettleBatch1 이
+  # `…preregen-20260904` 를 골라 현행 사본 `…preregen-20260906` 은 영영 안 잡혔다.
+  # 근본 원인은 `20260904` 가 `preregen` 이름을 달았지만 역할은 검사 오라클
+  # (당시 `CorpusPaths.DefectiveEdition`)이라 이름과 역할이 어긋난 것이었다.
+  # 다음에 스냅샷을 다시 뜰 때 이름 규약을 지키더라도 이 정렬은 남겨 두어라.
+  for d in $REPO/output.bak-*preregen*(N/Om); do
     [[ -d "$d/Jobs/$JOB" ]] && SNAP=${d%/} && break
   done
 fi
@@ -86,6 +92,12 @@ LOGDIR=$REPO/output/logs-regen-$JOB
 RUNROOT=${REGEN_RUNROOT:-$REPO/.worktrees/regen-run}
 
 # ── 가드 1: 스냅샷이 있는가
+#
+# [2026-09-07 - 지금은 이 가드가 **모든 Job 에서** 걸린다]
+# 사람이 과거 판 코퍼스(`output.bak-*` 여섯)를 지우기로 결정해 preregen 스냅샷이 하나도
+# 없다. 아래 안내대로 뜨면 곧바로 풀리므로 **회복 가능한 유일한 축**이다 - 재생성을 돌리기
+# 직전에 현행 `output/Jobs/$JOB` 를 떠라. 지워진 것들과 달리 이 재료는 「지금 판」이면
+# 되기 때문이다. 경위: docs/audit-reports/2026-09-07-과거판-코퍼스-폐기.md
 if [[ -z "$SNAP" || ! -d "$SNAP/Jobs/$JOB" ]]; then
   echo "중단: $JOB 의 재생성 전 스냅샷을 찾지 못했다." >&2
   echo "  output.bak-*preregen*/Jobs/$JOB 를 찾았으나 없다. 뜨고 다시 돌려라:" >&2

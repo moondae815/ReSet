@@ -53,12 +53,38 @@ namespace ReSet.Core.Tests
                               string.Join(", ", corpus.PlanParseFailures));
 
             // [도달 가능성 - 값 0을 게이트 통과시키지 않기 위한 바닥]
-            // 이 하한이 없으면 로더가 조용히 망가져 단계를 하나도 안 돌 때도
-            // 아래 발화 단언만 빨개지고 원인이 「검사가 죽었다」로 오독된다.
-            // 이 자가 세는 것은 **검사를 실제로 돌린 (Job, 단계) 쌍**이다.
-            Assert.True(corpus.MeasuredPairs >= 300,
-                $"검사를 돌린 단계 쌍이 {corpus.MeasuredPairs}뿐이다. 코퍼스나 로더가 바뀌었다. " +
-                $"목차 미파싱 Job: {string.Join(", ", corpus.PlanParseFailures)}");
+            // 이 자리가 막는 것은 「로더가 조용히 망가져 단계를 하나도 안 돌았는데 아래
+            // 발화 단언만 빨개져 원인이 『검사가 죽었다』로 오독되는 것」이다.
+            //
+            // [2026-09-07 - 자를 크기에서 모양으로 바꿨다]
+            // 원래 이 자리는 `MeasuredPairs >= 300`이었다. 그 300은 Job 21편 코퍼스에서
+            // 나온 수인데, 사람이 반복 생성 표본 21편을 지우기로 결정해 코퍼스가 4편이
+            // 됐다(실측 76쌍). **그 하한은 이제 코퍼스의 크기를 재지 로더의 건강을 재지
+            // 않는다.** 낮춰 잡으면 다음에 코퍼스가 또 바뀔 때 같은 일이 반복되고, 그때마다
+            // 「초록을 만들려고 하한을 내렸다」와 구별되지 않는다.
+            //
+            // 그래서 크기 대신 **모양**을 못박는다. 아래 셋은 코퍼스가 4편이든 40편이든
+            // 같은 것을 주장하고, 로더가 죽으면 크기 하한보다 먼저·정확하게 빨개진다.
+            //   ① 목차를 못 읽은 Job이 없다      ② 모든 Job이 최소 한 쌍을 냈다
+            //   ③ Job 하나도 없는 상태를 통과시키지 않는다
+            // 경위: docs/audit-reports/2026-09-07-과거판-코퍼스-폐기.md
+            var jobsOnDisk = Directory.GetDirectories(corpus.JobsDir)
+                .Select(d => Path.GetFileName(d) ?? string.Empty)
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToList();
+            var jobsMeasured = corpus.VisitedSteps
+                .Select(rel => rel.Split('/')[2])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.True(corpus.PlanParseFailures.Count == 0,
+                "목차를 못 읽은 Job이 있다 - 그 Job의 단계는 검사가 아예 안 돌아 자동으로 조용하다: " +
+                string.Join(", ", corpus.PlanParseFailures));
+            Assert.True(jobsOnDisk.Count > 0, "output/Jobs 가 비어 있다 - 코퍼스나 로더가 바뀌었다.");
+            Assert.Equal(jobsOnDisk, jobsMeasured);
+            Assert.True(corpus.MeasuredPairs >= jobsMeasured.Count,
+                $"Job {jobsMeasured.Count}편인데 잰 단계 쌍이 {corpus.MeasuredPairs}뿐이다.");
 
             // [뒤 층 4: 발화한다] 알려진 네 자리. 넷째(`Batch1/S05`)는 **한 겹 간접**이라
             // 바인딩 값 자리에 리터럴이 없다 - 「리터럴이 있는가」로 재면 이 자리는 안 잡힌다.
@@ -92,9 +118,22 @@ namespace ReSet.Core.Tests
             var preserved = CorpusRun.PreservedSites(corpus!);
             foreach (var p in preserved) _output.WriteLine($"[보존] {p}");
 
-            // 하한. 코퍼스가 자라도 안 깨지고, 추출기나 오라클이 조용히 비는 회귀는 잡는다.
-            Assert.True(preserved.Count >= 20,
-                $"이름 눈먼 자로 센 보존 자리가 {preserved.Count}뿐이다. " +
+            // 하한. 잡으려는 것은 **추출기나 오라클이 조용히 비는 회귀**다.
+            //
+            // [2026-09-07 - 자를 크기에서 모양으로 바꿨다]
+            // 원래는 `preserved.Count >= 20`이었다. 그 20도 Job 21편에서 나온 수이고,
+            // 코퍼스가 4편이 되면서 실측이 2가 됐다(위 `TypedConstantBoundToDriver…`의
+            // 같은 주석 참고). 크기를 낮춰 다시 못박는 대신, 이 하한이 실제로 노리던
+            // 두 가지를 각각 직접 단언한다 - 둘 다 코퍼스 크기와 무관하다.
+            //   ① 오라클이 비지 않았다(원본 DDL에서 관할 상수를 하나도 못 뽑으면
+            //      보존 자리는 정의상 0이 되고 아래 침묵 단언이 공허해진다)
+            //   ② 이름 눈먼 추출기가 비지 않았다
+            // 「침묵이 공허하지 않은가」의 진짜 바닥은 별개 시험
+            // (`PreservedSilence_IsNotVacuous…`의 `reach.Reached >= 2`)이 맡는다.
+            Assert.True(corpus.OracleLiterals.Count > 0,
+                "원본 DDL에서 관할 상수를 하나도 못 뽑았다 - 오라클이 비었다.");
+            Assert.True(preserved.Count > 0,
+                $"이름 눈먼 자로 센 보존 자리가 하나도 없다. " +
                 $"오라클 리터럴 = [{string.Join(", ", corpus.OracleLiterals)}]");
 
             // [「침묵했다」를 공허하게 만들지 않는 자]

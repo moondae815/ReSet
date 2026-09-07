@@ -154,30 +154,21 @@
     *   기능 추가, 버그 수정, 구조 변경 등 코드 베이스를 수정해야 할 경우, 가급적 독립적인 `git worktree`를 생성하여 별도의 작업 공간에서 코드를 작성하고 검증(빌드 및 테스트)을 수행하십시오.
     *   작업 및 테스트가 성공적으로 완료된 후 변경 사항을 병합(Merge)하고, 작업이 끝난 워크트리는 안전하게 정리(Remove)하는 사이클을 유지하십시오.
     *   `.claude/worktrees/` 격리 세션(`EnterWorktree`)에서는 `git -C <main>`도 사용자 `!` 입력도 가드가 main 병합을 막습니다. `ExitWorktree(keep)`로 main 루트에 돌아간 뒤 `git merge --ff-only <branch>` → 테스트 → `git worktree remove` → `git branch -d` 순으로 마무리하십시오.
-    *   워크트리에는 gitignore 대상인 코퍼스 재료 **넷**이 없습니다 — `output/`, `output.bak-2026-08-22/`, `output.bak-stage4-control-20260828/`, `output.bak-batch1-preregen-20260904/`. **넷 다** 심링크한 뒤 테스트하십시오(`.git/info/exclude`에 `output`·`output.bak-*`가 등록되어 있습니다).
+    *   워크트리에는 gitignore 대상인 코퍼스 재료 `output/` 이 없습니다. 심링크한 뒤 테스트하십시오(`.git/info/exclude`에 `output`이 등록되어 있습니다).
 
         ```bash
         ln -s <메인 저장소>/output output
-        ln -s <메인 저장소>/output.bak-2026-08-22 output.bak-2026-08-22
-        ln -s <메인 저장소>/output.bak-stage4-control-20260828 output.bak-stage4-control-20260828
-        ln -s <메인 저장소>/output.bak-batch1-preregen-20260904 output.bak-batch1-preregen-20260904
         ```
 
-        일부만 걸면 안 됩니다. 두 계열이 코퍼스 루트를 다르게 해석해, **총 건너뜀 수가 줄어드는데도 다른 테스트가 꺼집니다.** 셋째(`stage4-control`)는 `ProcedureClosureCorpusTests`의 재료이고, `LegacyErrorCodeInventionCorpusTests`가 `RESET_SWEEP_ROOT`로 같은 트리에 자를 대 볼 수 있습니다.
+        **건너뜀 0만이 코퍼스 단언이 전부 실제로 돈 것입니다.**
 
-        | 메인 저장소 **안**에 만든 워크트리 | 추출기·골든 계열 | `CoverageMapGoldenTests` 요구 2·3 |
-        | --- | --- | --- |
-        | 링크 없음 | 건너뜀 | 통과 (조상 탐색이 메인 저장소까지 올라가 재료 둘을 다 찾음) |
-        | `output`만 | 통과 | **건너뜀** (탐색이 워크트리에서 멈추는데 거기엔 스냅샷이 없음) |
-        | 둘 다 | 통과 | 통과 |
+        **2026-09-07 — 재료가 넷에서 하나가 됐습니다.** 사람이 과거 판 코퍼스(`output.bak-*` 여섯)와 반복 생성 표본(`output/Jobs/POQSettleProc*` 21편)을 지우기로 결정했습니다.
 
-        `output/`만 거는 것은 한쪽을 살리면서 다른 쪽을 끕니다 — 건너뜀 수가 줄어 진전처럼 보이는 함정입니다. **건너뜀 0만이 전부 돈 것입니다.**
+        `CorpusPaths`의 세 상수와 `CorpusSetupGuardTests`(반쯤 설정을 막던 가드), 그 재료에 기대던 시험 아홉을 함께 폐기했습니다. **무엇을 잃었는지는 `docs/audit-reports/2026-09-07-과거판-코퍼스-폐기.md`에 있습니다. 지워진 재료를 되살리려 하지 마십시오.**
 
-        **`output.bak-2026-08-22/`은 백업이 아니라 재생성할 수 없는 테스트 재료입니다.** `CorpusPaths.PriorEdition`이 상수로 들고 `CoverageMapGoldenTests`가 기준 세대로 씁니다 — 덮어쓰면 실패가 아니라 **건너뜀**이 되어 조용히 무력해집니다. 진짜 백업은 `output.bak-<작업>-<날짜>` 꼴로 뜨십시오.
+        **`output.bak-<작업>-<날짜>` 는 백업 관례로 그대로 씁니다.** `scripts/regen-job.sh`의 가드 1이 재생성 직전 스냅샷을 요구하는데, 지금은 하나도 없어 모든 Job에서 걸립니다 — 안내대로 뜨면 풀립니다.
 
         **링크를 건 워크트리에서 CLI 재생성을 돌리지 마십시오.** `appsettings.json`의 출력 경로가 cwd 상대(`./output`)라 공용 코퍼스를 직접 고칩니다. 테스트는 읽기만 하므로 안전하고 **재생성만** 문제입니다. 되돌릴 수도 없습니다 — `InstructionBundleWriter`가 이번 회차 산출이 모자라면 `verification/`·`steps/`를 디렉터리째 지웁니다(의도된 동작). 재생성 전에 스냅샷을 뜨고, 다른 세션에 알리십시오(코퍼스 스윕 전후 대조가 분모를 공유합니다).
-
-        「반쯤」 상태는 `CorpusSetupGuardTests`가 **넷 다**에 대해 빨간불로 막습니다(2026-09-04까지는 앞의 둘만 지켰습니다). 계열이 왜 갈리는지, 그리고 이 규칙이 없어서 두 세션이 각각 어떻게 당했는지는 그 클래스 주석에 있습니다. (저장소 **밖**에 만든 워크트리는 조상 탐색도 실패하므로 건너뜀이 더 늘어납니다 — 위 표는 안쪽 워크트리 기준입니다.)
 
         **공유 체크아웃의 메인 디렉터리에서는 커밋 창구뿐 아니라 빌드 산출물(`bin/`·`obj/`)도 겹칩니다.** 둘 다 `.gitignore` 대상이라 `git status`가 깨끗해도 안전을 보장하지 않습니다 — 어느 커밋이 지금 `bin/`의 DLL을 만들었는지 알 수 없습니다. 다른 세션이 메인에서 장시간 실험 중이면 그 자리의 빌드·테스트가 산출물을 덮어써 귀속을 끊습니다. **게이트를 포함해 빌드·테스트는 격리 워크트리 안에서만 실행하십시오.**
 

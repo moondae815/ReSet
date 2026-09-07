@@ -24,48 +24,28 @@ namespace ReSet.Core.Tests
 
         public ProcedureClosureCorpusTests(ITestOutputHelper output) => _output = output;
 
-        [SkippableFact]
-        public void Batch4Roster_ClosesFromTwelveToFourteen()
-        {
-            var repoRoot = TryFindRepoRoot();
-            Skip.If(string.IsNullOrEmpty(repoRoot), CorpusSkip.Reason);
-
-            var outputRoot = Path.Combine(repoRoot!, "output");
-            Skip.IfNot(Directory.Exists(Path.Combine(outputRoot, "Procedures")), CorpusSkip.Reason);
-
-            var promptContext = Path.Combine(
-                repoRoot!, "output.bak-stage4-control-20260828",
-                "Jobs", "POQSettleBatch4", "raw", "prompt-context.md");
-            Skip.IfNot(File.Exists(promptContext), CorpusSkip.Reason);
-
-            var roster = File.ReadLines(promptContext)
-                .Where(line => line.StartsWith("Filename: ", StringComparison.Ordinal))
-                .Select(line => line["Filename: ".Length..].Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Select(name => Path.Combine("Procedures", name, "docs", "Spec.md"))
-                .Where(relative => File.Exists(Path.Combine(outputRoot, relative)))
-                .ToList();
-
-            Skip.IfNot(roster.Count == 12, $"로스터가 12편이 아니라 {roster.Count}편이다 - 코퍼스가 바뀌었다.");
-
-            var closure = BatchStepCatalog.CloseOverProcedureReferences(outputRoot, roster);
-
-            _output.WriteLine($"진입점 {roster.Count} → 폐포 {closure.SpecPaths.Count} · 더해짐 {closure.Added.Count}");
-            foreach (var added in closure.Added) _output.WriteLine("  + " + added);
-
-            Assert.False(closure.CapExceeded);
-            Assert.Equal(14, closure.SpecPaths.Count);
-            Assert.Equal(
-                new[]
-                {
-                    "Procedures/dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA/docs/Spec.md",
-                    "Procedures/dbo.UP_Util_Settle_Summary_AcqManual/docs/Spec.md"
-                },
-                closure.Added
-                    .Select(p => p.Replace(Path.DirectorySeparatorChar, '/'))
-                    .OrderBy(p => p, StringComparer.Ordinal)
-                    .ToList());
-        }
+        // ------------------------------------------------------------------
+        // Batch4Roster_ClosesFromTwelveToFourteen — 2026-09-07 폐기
+        // ------------------------------------------------------------------
+        //
+        // 진입점 12편이 폐포로 14편이 되는지, 그리고 **더해진 둘이 정확히 어느
+        // 프로시저인지**(SUMMARY_EXTRA · Summary_AcqManual)를 못박던 자다. 개수만 보면
+        // 「둘이 빠지고 다른 둘이 들어와도」 통과하므로 이름까지 잠갔었다.
+        //
+        // 12편 로스터는 `output.bak-stage4-control-20260828`(얼어붙은 통제군 입력)의
+        // `Jobs/POQSettleBatch4/raw/prompt-context.md`에서 뽑았다. 사람이 그 판을 지우기로
+        // 결정했다(2026-09-07).
+        //
+        // **대체 표본을 찾아봤고 없다.** 현행 `output/Jobs/POQSettleBatch4/raw/
+        // prompt-context.md`는 `Filename:` 14행이고 그 안에 이미
+        // `dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA`·`dbo.UP_Util_Settle_Summary_AcqManual`이
+        // 들어 있다(실측) - 즉 현행 로스터는 **폐포를 이미 적용한 결과**라 12→14 전이를
+        // 다시 잴 수 없다. 진입점 12편을 손으로 적어 넣는 것은 오라클을 우리가 만드는
+        // 것이라 하지 않는다.
+        //
+        // 아래 `Closure_NeverAddsAFunctionSpec`은 현행 코퍼스만으로 서므로 남는다 -
+        // 다만 그것은 **더하지 않는 것**을 잠글 뿐 **무엇을 더하는가**는 안 잠근다.
+        // 경위: docs/audit-reports/2026-09-07-과거판-코퍼스-폐기.md
 
         /// <summary>
         /// 함수는 30건 참조되지만 하나도 더해지면 안 된다(설계서 §2).
