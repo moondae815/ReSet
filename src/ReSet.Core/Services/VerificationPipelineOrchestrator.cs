@@ -1770,14 +1770,26 @@ namespace ReSet.Core.Services
             // 판독기가 스냅샷을 다시 파싱하지 않고도 「이 판이 어느 모드로 돌았고 이웃이
             // 실렸는가」를 알 수 있어야 한다 - 설계 §7-9가 통제군 판독에서 정확히 이 두
             // 사실을 로그에서 못 찾아 한 줄을 요청했다. 경고와 달리 조건 없이 남긴다.
-            Log.Information(
-                "단계 본문 명세서 범위: {Scope} - 원본 호출 그래프 {CallerCount}편이 1-hop 이웃을 낸다 (JobName: {JobName})",
-                _consolidatorService.ContextScope, callGraph.Count, jobName);
+            //
+            // 판정값은 callGraph.Count가 아니라 「명세서를 가진 이웃 수」다. 그래프에는
+            // UDF도 담기는데 명세서는 프로시저에만 있어, 그래프가 비지 않았는데도 실릴
+            // 이웃이 0편인 판이 있다(POQSettleBatch4 2026-09-06: 그래프 7편 · 실릴 이웃
+            // 0편). 근거는 PromptContextScope.CountSpecBackedNeighbours에 있다.
+            var specBackedNeighbourCount = PromptContextScope.CountSpecBackedNeighbours(
+                FeedbackSpec.OnlyProcedureSpecs(specs), callGraph);
 
-            if (callGraph.Count == 0 && _consolidatorService.ContextScope == ContextScopeMode.Narrow)
+            Log.Information(
+                "단계 본문 명세서 범위: {Scope} - 원본 호출 그래프 {CallerCount}편 중 명세서를 가진 1-hop 이웃 {NeighbourCount}편 (JobName: {JobName})",
+                _consolidatorService.ContextScope, callGraph.Count, specBackedNeighbourCount, jobName);
+
+            if (specBackedNeighbourCount == 0 && _consolidatorService.ContextScope == ContextScopeMode.Narrow)
             {
+                var graphState = callGraph.Count == 0
+                    ? "원본 호출 그래프가 비어 있습니다"
+                    : $"원본 호출 그래프는 {callGraph.Count}편이지만 그 이웃 중 명세서를 가진 것이 하나도 없습니다(호출 대상이 UDF뿐일 때 이렇게 됩니다)";
+
                 _userInteraction.NotifyStatus(
-                    $"[yellow]{jobName}[/] - 명세서 범위가 Narrow인데 원본 호출 그래프가 비어 있습니다. " +
+                    $"[yellow]{jobName}[/] - 명세서 범위가 Narrow인데 {graphState}. " +
                     "각 단계가 자기 프로시저의 명세서만 받고 1-hop 이웃은 하나도 싣지 않습니다 - " +
                     "원본들이 정말 서로를 부르지 않는지, 아니면 의존성 수집이 되지 않은 것인지 확인하십시오. " +
                     "이웃이 빠지면 이웃 명세가 규정한 오류 코드·인터페이스를 지키지 못하는 결함이 늘어납니다.");

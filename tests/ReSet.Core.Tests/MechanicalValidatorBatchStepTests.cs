@@ -1875,7 +1875,7 @@ END CATCH");
         }
 
         // 최종 리뷰가 못박은 지배 계약: "재료 하나가 사실을 내고 프롬프트와 L1이
-        // 같은 사실을 소비한다." 프롬프트의 Few-Shot 모범 예시 네 개가 L1을 통과
+        // 같은 사실을 소비한다." 프롬프트의 Few-Shot 모범 예시가 하나라도 L1을 통과
         // 못하면 정상 산출물이 재시도 예산을 태우고 QualityFloor 배너를 단다 -
         // 재생성으로 고칠 수 없는 결함이다. `ConsolidatedPlanRules`에서 ```sql
         // 블록을 직접 뽑아 각각 실제 ValidateBatchStep에 넣어 확인한다 - 지금까지
@@ -1897,16 +1897,37 @@ END CATCH");
 
             // 블록 개수 자체를 못박는다 - Few-Shot이 늘거나 줄면 아래 인덱스별
             // TargetTables 매핑도 같이 검토해야 한다는 신호다.
-            Assert.Equal(6, blocks.Count);
+            // [2026-09-07 병합] main과 이 브랜치가 각자 Few-Shot을 늘렸다(main 6 ·
+            // 여기 5). 이 단언이 울린 것은 결함이 아니라 설계대로 작동한 신호다.
+            // 병합본을 리플렉션으로 읽어 실측한 결과는 **7**이다 - 어느 한쪽 수도
+            // 아니다(main의 6에 이 브랜치의 rule 5-1 예시 하나가 더 붙는다).
+            Assert.Equal(7, blocks.Count);
 
+            // 매핑은 각 블록의 DML이 **실제로 쓴 철자를 그대로** 따른다. `dbo.` 가
+            // 붙은 것과 안 붙은 것이 섞여 있는 것은 프롬프트 원문이 그렇기 때문이다
+            // (0·3·4·6은 `dbo.` 있음, 1·2·5는 없음).
+            //
+            // 실측: L1의 대상 테이블 검사는 섹션 본문 부분 문자열 대조라 `dbo.` 를
+            // 떼고 적어도 통과한다. 그래도 무해한 값이 아니다 - 엉뚱한 이름을 넣으면
+            // 실패하므로, 이 자리는 각 블록이 정말 그 테이블을 건드리는지를 잠근다.
             var targetTablesByBlock = new[]
             {
-                new[] { "dbo.TargetTable" }, // 0: Shadow Table Swap Pattern
-                new[] { "TargetTable" },     // 1: Chunking Pattern (NUMERIC key)
-                new[] { "TargetTable" },     // 2: Chunking Pattern (STRING/COMPOSITE key)
-                new[] { "dbo.TargetTable" }, // 3: INSERT carrying a computed expression
-                new[] { "dbo.TargetTable" }, // 4: Shadow Table Restore in CATCH block
-                new[] { "TargetTable" },     // 5: INSERT-only Compensation
+                // 0: Shadow Table Pattern - DELETE/INSERT INTO dbo.TargetTable
+                new[] { "dbo.TargetTable" },
+                // 1: Chunking Pattern (NUMERIC key) - INSERT INTO TargetTable
+                new[] { "TargetTable" },
+                // 2: Chunking Pattern (STRING/COMPOSITE key) - INSERT INTO TargetTable
+                new[] { "TargetTable" },
+                // 3: INSERT carrying a computed expression from the spec's mapping table
+                //    - INSERT INTO dbo.TargetTable
+                new[] { "dbo.TargetTable" },
+                // 4: Shadow Table Restore in CATCH block - DELETE FROM dbo.TargetTable
+                new[] { "dbo.TargetTable" },
+                // 5: INSERT-only Compensation - DELETE FROM TargetTable
+                new[] { "TargetTable" },
+                // 6: Legacy Local Variable Pattern (rule 5-1). 이 블록의 유일한 DML이
+                //    `UPDATE dbo.TargetTable`이라 스키마까지 붙여 적는다.
+                new[] { "dbo.TargetTable" },
             };
 
             for (var i = 0; i < blocks.Count; i++)

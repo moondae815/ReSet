@@ -109,8 +109,9 @@ namespace ReSet.Core.Tests
             // 비교해 순서를 정한 것이 아니라, **한 곳만 확인됐다**. 2026-09-06 실측
             // (POQSettleBatch4 재생성, OpenRouter 요청 35건 전량): 요청이
             // order:["tencent"]·allow_fallbacks:false로 나갔고 응답 공급자가 Tencent
-            // 33건, 라우팅 실패 0. **다른 백엔드가 서빙하는지는 안 쟀으므로** 2순위가
-            // 비어 있다 - 빠뜨린 것이 아니라 재지 않은 것이다.
+            // 33건, 라우팅 실패 0. 2순위가 비어 있는 것은 빠뜨린 것이 아니라 적을
+            // 대상이 없어서다 - 같은 날 /endpoints 조회 응답이 1건이다
+            // (Tencent · fp8 · ctx 1,048,576 · 캐시읽기 0.042 · 30분 가동률 100%).
             ("tencent/hy4-preview", new[] { "tencent" })
         };
 

@@ -513,6 +513,10 @@ namespace ReSet.Core.Services
             SafeCheck(() => CheckChunkUpperBoundProgress(stepMarkdown, result));
             SafeCheck(() => CheckControlStepErrorCodeBand(stepMarkdown, step, result, allSteps));
             SafeCheck(() => CheckLegacyStepErrorCodeInvention(stepMarkdown, step, result, codesByProcedure));
+            // 최상위에 두는 이유: 이 검사의 오라클은 원본 DDL 하나뿐이라 명세서 사실
+            // (statementFactsByProcedure)이 없어도 돌아야 한다. 아래 statementFacts 블록
+            // 안에 넣으면 재료가 없는 Job에서 조용히 통째로 꺼진다.
+            SafeCheck(() => CheckLocalVariableTypeContract(stepMarkdown, step, ddlByProcedure, result));
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
@@ -7044,6 +7048,34 @@ namespace ReSet.Core.Services
             // 걸린 단계 수를 코퍼스 스윕으로 따로 재서 기준선을 문서에 남긴다.
             if (!hasMaterial) return;
 
+            // 목차가 그 단계에 배정한 코드도 허용한다.
+            //
+            // [왜 - 2026-09-06 POQSettleBatch5 실측] 이것이 없으면 이 검사와 :495 가
+            // 서로 반대를 요구해 **어느 쪽으로 고쳐도 통과가 불가능한 닫힌 고리**가 된다.
+            // :495 는 step.ErrorCodes 의 코드가 섹션에 등장하기를 요구하는데, 목차는
+            // 스텝 인터페이스 사전 검증용 코드(-1·-2)를 배정하고 그것은 원본 프로시저
+            // 명세에 없다. 실으면 여기가 「발명」으로 걸고 빼면 저쪽이 「미등장」으로
+            // 건다. S11·S12·S13 이 실제로 한 바퀴를 돌았다(21:17 → 21:35 출발점 복귀).
+            //
+            // [왜 정본을 하나로 줄이지 않는가] 두 정본이 **둘 다 정당하고 공존한다.**
+            // 스텝 자체 검증 코드와 원본 오류 코드는 같은 자리에 놓이는 것이 정상이고,
+            // 하나로 줄이면 정당한 것을 지운다. 모델도 그 구별을 알고 본문에 적었다 —
+            // 「이는 원본 프로시저 명세에 존재하는 코드가 아닌 스텝 자체 검증 코드이다」.
+            // 그러니 결함은 산출물이 아니라 **두 검사가 서로 다른 오라클을 보는 것**에
+            // 있었다. 여기서 목차분을 더해 둘이 같은 오라클(명세 ∪ 목차)을 보게 한다.
+            //
+            // [무력화되지 않는다] 목차에도 명세에도 없는 코드는 여전히 발명으로 걸린다
+            // (CodeInNeitherTheOutlineNorTheSpecIsStillReported 가 그 자리를 잠근다).
+            //
+            // [hasMaterial 판정에는 넣지 않는다] 그 판정은 「명세에서 재료를 얻었는가」를
+            // 묻는다. 목차만으로 켜면 명세 재료가 없는 단계에서 검사가 도는데, 그것은
+            // 바로 위 주석이 의도적으로 피한 동작이다 - 귀속할 수 없으면 침묵한다.
+            foreach (var declared in step.ErrorCodes)
+            {
+                var trimmed = declared?.Trim();
+                if (!string.IsNullOrEmpty(trimmed)) allowed.Add(trimmed);
+            }
+
             // 키가 값 하나다 - CheckControlStepErrorCodeBand가 (이름, 값)으로 키잉하는
             // 것과 다르다. 저쪽은 메시지가 변수를 지목하므로 변수마다 따로 발화하는 것이
             // 정보를 더하지만, 이 검사가 내는 사실은 "이 단계가 코드 X를 발명했다"이고
@@ -9033,6 +9065,271 @@ namespace ReSet.Core.Services
                         "타입을 이름으로 추측하면 금액 변수가 정수로 선언되어 절삭됩니다.");
                 }
             }
+        }
+
+        /// <summary>
+        /// 타입이 걸린 상수가 방출 SQL의 `DECLARE`가 아니라 **드라이버 바인딩**으로
+        /// 새는 자리를 든다.
+        ///
+        /// [왜 「DECLARE가 없다」로 판정하지 않는가] T-SQL에서 리터럴 `1.1`은 그 자체로
+        /// `numeric(2,1)`이다. 즉 `CAST(CLComm / 1.1 AS INT)`처럼 SQL 안에 인라인하는
+        /// 것은 **타입이 안전하다.** 해가 나는 자리는 오직 드라이버 경계다 - 바인딩된
+        /// 값은 선언 타입이 없어 드라이버가 고른다. `DECIMAL(2,1)`이 `FLOAT`으로
+        /// 도착하면 `CAST(… AS INT)`의 절사가 달라져 금액이 어긋난다.
+        /// 규칙 5-1은 `DECLARE` 보존을 요구하지만 이 검사는 **해로운 부분집합**만
+        /// 발화한다. 그 간격은 의도된 것이다(설계 §5-2).
+        ///
+        /// [왜 이름을 안 보는가] 실측: 재생성이 `@v_valIncVat`를 `p_incVat`으로
+        /// 개명한 자리가 있다. 이름 기반인 <see cref="CheckSpecLocalVariablesDeclared"/>는
+        /// 그런 자리에 침묵한다 - 이 검사는 그 **이름 눈먼 보완재**이고, 이름 대신
+        /// 초기값 리터럴로 맞댄다. 자리별 실측은
+        /// `docs/superpowers/specs/2026-09-07-지역변수-타입계약-강등금지-design.md` §2-4에 있다.
+        ///
+        /// [한 겹 간접까지 본다 - 수정 라운드 1] 리터럴이 바인딩 값 자리에 **직접**
+        /// 오지 않고 의사코드 변수에 한 번 담겼다 넘어가도 타입 계약은 똑같이 드라이버가
+        /// 고른다. 초판은 직접 자리만 봐서 그 모양 하나를 **위음성**으로 놓쳤다(방출 SQL에
+        /// `DECLARE`가 없는데도 「보존한 자리」로 분류돼 있었다). 해석은
+        /// <see cref="ResolveSingleAssignmentAliases"/>가 하고 **딱 한 겹까지**다 -
+        /// 모호하면 침묵한다는 정책과 그 근거는 그쪽 주석에 있다.
+        ///
+        /// [오라클] 원본 DDL(<paramref name="ddlByProcedure"/>). 명세서도 단계 본문도
+        /// 아니라 **비순환**이다. 없으면 침묵한다 - 종전 동작 그대로다.
+        ///
+        /// [키잉] `ddlByProcedure` 조회는 <see cref="BareObjectName"/>로 한다.
+        /// `step.LegacyProcedures`는 원문이라 스키마 접두사가 붙기도 빠지기도 하는데,
+        /// `StepInterfaceFacts.CollectDdl`이 맨이름 키를 함께 깔고 스윕 경로는
+        /// `ToBareNameKeyed`로 맨이름만 남긴다. N5 조인 짝 대조
+        /// (<see cref="BuildOriginalJoinPairs"/>)와 같은 규약이다.
+        /// </summary>
+        private static void CheckLocalVariableTypeContract(
+            string stepMarkdown,
+            BatchStepPlan step,
+            IReadOnlyDictionary<string, string>? ddlByProcedure,
+            StepValidationResult result)
+        {
+            if (ddlByProcedure == null || ddlByProcedure.Count == 0) return;
+            if (step.LegacyProcedures == null || step.LegacyProcedures.Count == 0) return;
+
+            var bindings = StepBindingExtractor.Extract(stepMarkdown);
+            if (bindings.Count == 0) return;
+
+            var aliases = ResolveSingleAssignmentAliases(stepMarkdown);
+            var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var source in step.LegacyProcedures)
+            {
+                var bare = BareObjectName(source);
+                if (bare.Length == 0) continue;
+                if (!ddlByProcedure.TryGetValue(bare, out var ddl)) continue;
+
+                foreach (var fact in LocalVariableDeclarationExtractor.ExtractConstants(ddl))
+                {
+                    if (!IsPrecisionBearingNumeric(fact.DataType)) continue;
+                    if (IsZeroLiteral(fact.InitialValue)) continue;
+
+                    // 직접 자리가 있으면 그쪽을 쓴다 - 간접보다 읽기 쉽고, 한 변수에
+                    // 대해 오류는 어차피 하나만 낸다.
+                    StepBindingFact? leaked = null;
+                    var aliasNote = string.Empty;
+                    foreach (var candidate in bindings)
+                    {
+                        if (string.Equals(candidate.Value, fact.InitialValue, StringComparison.OrdinalIgnoreCase))
+                        {
+                            leaked = candidate;
+                            aliasNote = string.Empty;
+                            break;
+                        }
+
+                        if (aliasNote.Length == 0
+                            && aliases.TryGetValue(candidate.Value, out var assigned)
+                            && string.Equals(assigned, fact.InitialValue, StringComparison.OrdinalIgnoreCase))
+                        {
+                            leaked = candidate;
+                            aliasNote =
+                                $" 값 자리의 `{candidate.Value}`는 같은 단계의 의사코드에서 " +
+                                $"`{candidate.Value} = {assigned}`로 담긴 것이라 리터럴을 그대로 넘기는 것과 같습니다.";
+                        }
+                    }
+
+                    if (leaked == null) continue;
+
+                    if (!reported.Add(fact.Name)) continue;
+
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 `{fact.Name}`의 타입 계약 `{fact.DataType}`을(를) " +
+                        $"드라이버 바인딩(`{leaked.CallName}({leaked.StatementName}, {{ {leaked.Key}: {leaked.Value} }})`)에 " +
+                        "맡깁니다 — 바인딩된 값에는 선언 타입이 없어 드라이버가 고릅니다." +
+                        aliasNote +
+                        $" `{leaked.StatementName}` 블록 안에 `DECLARE {fact.Name} {fact.DataType} = {fact.InitialValue};`을(를) " +
+                        "두고 바인딩 목록에서 그 값을 빼십시오(규칙 5-1). 타입을 주석에 적는 것은 못박는 것이 아닙니다.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 정밀도·자릿수가 산술 결과를 바꾸는 수치 타입인가. 정수 타입은 뺀다 -
+        /// 드라이버가 어떤 정수 타입을 골라도 산술이 같고, 뺌으로써 청크 크기
+        /// (`10000` 같은 `INT` 리터럴) 오탐도 함께 사라진다.
+        /// </summary>
+        private static bool IsPrecisionBearingNumeric(string? dataType)
+        {
+            if (string.IsNullOrWhiteSpace(dataType)) return false;
+            var t = dataType!.TrimStart();
+            return t.StartsWith("DECIMAL", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("NUMERIC", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("FLOAT", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("REAL", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("SMALLMONEY", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("MONEY", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 값이 `0`인가. `0`은 어느 수치 타입으로 묶여도 `0`이라 드라이버가 타입을
+        /// 골라도 손해가 없다.
+        ///
+        /// **[오늘 코퍼스에서는 도달 불가다 - 방어로 둔다]** 초판 주석은 원본의
+        /// `MONEY = 0` 갈래가 「여기서 걸러진다」고 적었는데 **틀렸다.** 그 변수들은
+        /// `FETCH … INTO`로 재대입돼 <see cref="LocalVariableDeclarationExtractor.ExtractConstants"/>가
+        /// **앞에서** 빼므로 이 가드에 닿지 않는다. 실측으로 확인했다 - 이 가드를
+        /// 무력화해도 코퍼스 발화 수와 자리가 그대로다. 그래도 남기는 것은 재생성이
+        /// 재대입을 없애는 순간 곧바로 도달하기 때문이고, 단위 시험이 그 동작을 잠근다.
+        ///
+        /// [왜 InvariantCulture인가] 대상은 **T-SQL 리터럴**이고 T-SQL 리터럴의 소수점은
+        /// 언제나 `.`이다. 기본 <c>decimal.TryParse</c>는 `CultureInfo.CurrentCulture`를
+        /// 쓰는데, 소수점이 `,`인 문화권(de-DE 등)에서는 `.`이 **자릿수 구분자**로 읽혀
+        /// `"1.1"`이 `11m`이 된다. 값 자체가 뒤바뀌므로 파싱 문화권을 못박는다.
+        /// <c>NumberStyles</c>도 부호와 소수점만 허용해 좁힌다 - `AllowThousands`를
+        /// 남겨 두면 InvariantCulture에서도 `,`가 구분자로 삼켜져 같은 종류의 오독이
+        /// 남는다. SQL 리터럴에 자릿수 구분자는 없다.
+        ///
+        /// 파싱에 실패하면 `false`다 - 「0이라고 확인되지 않았다」는 쪽으로 기운다.
+        /// 침묵을 근거 없이 사지 않는다는 뜻이고, 발화 자체는 바깥의 타입 조건과
+        /// 바인딩 값 일치가 따로 잠근다.
+        ///
+        /// **[「통과했으니 잠겼다」로 읽지 마라]** 문화권 고정과 좁힌
+        /// <see cref="NumberStyles"/>는 **어떤 테스트도 잠그지 않는다** - 둘을 되돌려도
+        /// 오늘 값이 안 바뀌어 뮤턴트가 살아남는다(실제로 돌려 확인했다). 판단의 근거는
+        /// 위 문단이지 초록불이 아니다. 소수점이 `,`인 문화권에서 도는 CI가 생기거나
+        /// 자릿수 구분자를 낀 리터럴이 코퍼스에 들어오는 날 이 자리가 먼저 깨지므로,
+        /// 그때는 **시험부터 세우고** 손대라.
+        /// </summary>
+        private static bool IsZeroLiteral(string? value)
+            => decimal.TryParse(
+                   value,
+                   NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+                   CultureInfo.InvariantCulture,
+                   out var d)
+               && d == 0m;
+
+        /// <summary>
+        /// 의사코드 펜스의 `이름 = 값` 한 줄. `==`·`>=`·`<=`·`!=`는 걸리지 않는다 -
+        /// 이름이 **줄머리**에 오고 그 뒤가 곧바로 `=`(뒤에 `=`이 안 붙는)여야 한다.
+        /// 바인딩 객체의 `키: 값`은 `=`이 없어 애초에 안 걸린다.
+        /// </summary>
+        private static readonly Regex PseudocodeAssignmentPattern = new(
+            @"^[ \t]*(?<name>[A-Za-z_][A-Za-z_0-9]*)[ \t]*=(?!=)[ \t]*(?<rhs>[^\r\n]+)$",
+            RegexOptions.Multiline);
+
+        /// <summary>
+        /// 펜스 하나. <see cref="StepBindingExtractor"/>의 같은 이름 패턴과 **같은 규약**이다
+        /// (빈 태그도 받는다). 거기 달린 한계 - 알파벳 아닌 태그나 태그 뒤 공백이 짝을
+        /// 어긋내면 뒤따르는 펜스가 통째로 **사라진다** - 가 이 사전에도 그대로 걸린다.
+        ///
+        /// **[「물려받았다」가 아니라 「고를 수 있었는데 취약한 쪽을 베꼈다」가 사실이다]**
+        /// 이 파일 안에 그 한계가 **없는** 형제가 이미 있다 -
+        /// <see cref="CleanedCodeFencesExcludingDiagrams"/>의 `[A-Za-z0-9_+-]*` + `[^\n]*`는
+        /// 알파벳 아닌 태그도 태그 뒤 공백·꼬리말도 견딘다. 그쪽을 썼으면 이 한계가
+        /// 애초에 안 생겼다. 초판 주석은 이것을 「물려받은 제약」처럼 적었는데 그건
+        /// 선택을 안 한 척한 서술이다.
+        ///
+        /// 그런데도 지금 안 바꾼 것은 세 자(여기 · `StepBindingExtractor` ·
+        /// <see cref="CleanedCodeFencesExcludingDiagrams"/>)를 **하나로 접는 일이 따로
+        /// 잡혀 있어서**다. 여기만 형제 패턴으로 바꾸면 이 사전과 바인딩 추출기가 서로
+        /// 다른 펜스 집합을 보게 되어 오히려 갈린다 - **셋을 함께 접을 때 같이 옮겨라.**
+        /// </summary>
+        private static readonly Regex PseudocodeFencePattern = new(
+            @"```(?<lang>[a-zA-Z]*)\r?\n(?<body>.*?)```", RegexOptions.Singleline);
+
+        /// <summary>
+        /// 의사코드에서 **딱 한 번** 대입받은 이름 → 그 대입의 우변.
+        /// <see cref="CheckLocalVariableTypeContract"/>가 「값 자리의 식별자가 사실은
+        /// 리터럴이다」를 **한 겹만** 풀 때 쓴다.
+        ///
+        /// [왜 한 겹인가] `v = 1.1; bind v`는 리터럴을 그대로 넘기는 것과 같아 타입
+        /// 계약이 똑같이 드라이버로 간다. 반면 겹을 늘릴수록 「바인딩 시점의 값」을
+        /// 정적으로 단정하기 어려워져 오탐 표면만 넓어진다. 우변이 또 식별자면
+        /// 이 사전은 그 식별자를 그대로 담을 뿐 다시 풀지 않으므로, 호출부가
+        /// 리터럴과 맞대는 순간 두 겹은 저절로 떨어진다.
+        ///
+        /// [왜 「딱 한 번」인가 - 모호하면 침묵한다] 같은 이름이 두 번 이상 대입되면
+        /// 바인딩 시점의 값이 무엇인지 이 자로는 판정할 수 없다. 재대입이든 다른 값을
+        /// 함께 받든 사전에서 통째로 뺀다 - 「판정 못 하는 모양은 행을 내지 않는다」.
+        ///
+        /// [관할이 「같은 펜스」가 아니라 「단계의 비-sql 펜스 전체」인 이유]
+        /// 설계 문언은 같은 펜스를 말하지만, 바인딩 사실
+        /// (<see cref="StepBindingExtractor"/>)은 자기가 어느 펜스에서 나왔는지를 싣지
+        /// 않는다. 펜스 귀속을 얻으려면 호출·인자 정규식을 여기 복제해야 하는데, 그러면
+        /// 바인딩을 읽는 규칙이 두 곳에 생겨 미묘하게 갈린다(이 파일이 여러 곳에서
+        /// 경계하는 바로 그 함정이다). 대신 **단계 전체에서 한 번**이라는 유일성을 쓴다.
+        ///
+        /// **[어긋남은 두 방향이다 - 「침묵 쪽으로만 어긋난다」는 거짓이다]**
+        /// 초판 주석이 그렇게 단언했는데 축을 하나만 재고 쓴 문장이었다. 둘 다 적는다.
+        ///   - **침묵 방향(유일성 축).** 같은 이름이 펜스 둘에서 갈라지면 펜스별 규칙은
+        ///     각자 풀지만 이 규칙은 통째로 침묵한다. 이쪽은 더 보수적이다.
+        ///   - **발화 방향(교차 펜스 축).** 대입이 펜스 A, 바인딩이 펜스 B인 모양에서
+        ///     **이 규칙은 풀어서 발화하는데 설계 문언은 침묵을 규정한다.** 실측
+        ///     (2026-09-07 코퍼스): 그 경로에 놓인 자리가 **2**(둘 다 `runId`),
+        ///     그중 실제로 발화하는 것은 **0**이다 - 우변이 리터럴이 아니라 호출이라
+        ///     타입 계약 대조까지 가지 않는다.
+        ///
+        /// **발화 방향은 의도된 넓힘이고 좁히지 않는다.** 근거 넷:
+        ///   1. <see cref="StepBindingExtractor"/>가 이미 「`sql` 아닌 펜스 전부」를 본다.
+        ///      여기만 `pseudocode`로 좁히면 **두 자가 갈린다** - 이 파일이 반복해
+        ///      경계하는 함정이다. 넓힌 채 두어도 바인딩이 안 보이는 펜스의 alias는
+        ///      아무 일도 못 하므로 넓힘이 손해를 안 낸다.
+        ///   2. 전역 유일성은 펜스별 유일성보다 **엄격히 더 보수적**이다(위 침묵 방향).
+        ///   3. 발화 방향이 잡는 모양(같은 단계 · 유일 대입 · 다른 펜스)은 **의미상 같은
+        ///      결함**이다 - 리터럴이 드라이버를 건너가는 것은 펜스 경계와 무관하다.
+        ///      좁히면 진짜를 놓친다.
+        ///   4. 오늘 측정 차이 0(바로 위 실측).
+        ///
+        /// 펜스 열거는 <see cref="StepBindingExtractor"/>와 같은 규약이다 - `sql` 펜스는
+        /// 빼고 나머지는 다 본다. 방출 SQL 안의 `SET A = 1.1` 같은 줄을 의사코드 대입으로
+        /// 오독하지 않기 위해서다.
+        /// </summary>
+        private static IReadOnlyDictionary<string, string> ResolveSingleAssignmentAliases(string stepMarkdown)
+        {
+            var assignments = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+            foreach (Match fence in PseudocodeFencePattern.Matches(stepMarkdown))
+            {
+                if (string.Equals(fence.Groups["lang"].Value, "sql", StringComparison.OrdinalIgnoreCase)) continue;
+
+                foreach (Match assignment in PseudocodeAssignmentPattern.Matches(fence.Groups["body"].Value))
+                {
+                    var name = assignment.Groups["name"].Value;
+                    var rhs = assignment.Groups["rhs"].Value;
+
+                    // 줄 끝 주석을 뗀다 - 실물이 `v_valIncVat = 1.1   // 원본 지역 변수 …`
+                    // 모양이라 떼지 않으면 리터럴과 영영 안 맞는다.
+                    var comment = rhs.IndexOf("//", StringComparison.Ordinal);
+                    if (comment >= 0) rhs = rhs[..comment];
+
+                    if (!assignments.TryGetValue(name, out var values))
+                    {
+                        assignments[name] = values = new List<string>();
+                    }
+                    values.Add(rhs.Trim());
+                }
+            }
+
+            var resolved = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (name, values) in assignments)
+            {
+                if (values.Count == 1 && values[0].Length > 0) resolved[name] = values[0];
+            }
+
+            return resolved;
         }
 
         /// <summary>

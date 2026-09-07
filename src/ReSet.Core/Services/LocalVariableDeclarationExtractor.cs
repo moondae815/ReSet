@@ -67,29 +67,120 @@ namespace ReSet.Core.Services
 
         public static IReadOnlyList<LocalVariableDeclarationFact> Extract(string? ddlText)
         {
-            if (string.IsNullOrWhiteSpace(ddlText)) return Array.Empty<LocalVariableDeclarationFact>();
+            if (!TryParse(ddlText, out var fragment)) return Array.Empty<LocalVariableDeclarationFact>();
 
-            TSqlFragment? fragment;
+            var visitor = new DeclarationVisitor();
+            fragment!.Accept(visitor);
+            return visitor.Facts;
+        }
+
+        /// <summary>
+        /// DDL을 한 번 파스한다. 오류가 하나라도 있으면 실패로 친다 -
+        /// SetAssignmentExtractor.Extract와 같은 정책이며, 부분 파스 결과가 기계 확정
+        /// 표에 섞이면 표 전체의 신뢰가 무너지기 때문이다(ScriptDom은 오류가 있어도
+        /// 부분 AST를 실제로 돌려준다: `DECLARE @v_a INT = 7; SELECT (((`는 오류 1과
+        /// 함께 `@v_a`를 담은 트리를 낸다 - 두 테스트가 그 입력으로 이 정책을 잠근다).
+        ///
+        /// [왜 접었나] 이 블록이 <see cref="Extract"/>와 <see cref="ExtractConstants"/>에
+        /// 축자로 두 벌 있었다. 파서 버전이나 오류 정책이 바뀌는 날 한쪽만 바뀌면
+        /// 같은 DDL에 대해 두 메서드가 다른 사실을 내는데, 그것이 이 파일이 문서
+        /// 블록마다 경고하는 오라클 드리프트의 모양 그대로다.
+        ///
+        /// [파스는 호출당 한 번이다] fragment 하나를 돌려주므로 호출자는 방문자를
+        /// 여럿 `Accept`시켜도 같은 트리를 본다 - <see cref="ExtractConstants"/>가
+        /// 선언과 재대입을 같은 파스에서 보는 성질이 여기에 걸려 있다.
+        /// </summary>
+        private static bool TryParse(string? ddlText, out TSqlFragment? fragment)
+        {
+            fragment = null;
+            if (string.IsNullOrWhiteSpace(ddlText)) return false;
+
             try
             {
                 var parser = new TSql160Parser(true);
                 using var reader = new StringReader(ddlText);
-                fragment = parser.Parse(reader, out var errors);
-                if (fragment == null || (errors != null && errors.Count > 0))
-                {
-                    // SetAssignmentExtractor.Extract와 같은 정책 - 부분 파스 결과가
-                    // 기계 확정 표에 섞이면 표 전체의 신뢰가 무너진다.
-                    return Array.Empty<LocalVariableDeclarationFact>();
-                }
+                var parsed = parser.Parse(reader, out var errors);
+                if (parsed == null || (errors != null && errors.Count > 0)) return false;
+
+                fragment = parsed;
+                return true;
             }
             catch (Exception)
             {
-                return Array.Empty<LocalVariableDeclarationFact>();
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 「상수 초기화이면서 `DECLARE` 이후 한 번도 재대입되지 않는」 지역 변수만 낸다.
+        ///
+        /// [왜 별도 메서드인가] <see cref="Extract"/>의 결과는 「선언된 것 전부」다.
+        /// 타입 계약이 드라이버로 새는지를 판정하려면 「값이 컴파일 시점에 확정된 것」만
+        /// 봐야 한다 - 런타임에 값이 정해지는 변수는 애초에 바인딩이 옳을 수 있다.
+        ///
+        /// [왜 SetAssignmentExtractor를 안 쓰는가] 그 추출기는
+        /// `Visit(SetVariableStatement)`만 갖고 있어 `SELECT @x = …`를 보지 못한다
+        /// (실측). 재대입을 놓치면 누산기가 상수로 분류돼 오탐이 된다.
+        ///
+        /// [같은 파스를 쓴다] 선언과 재대입을 서로 다른 파스로 재면 한쪽이 조용히
+        /// 낡는다 - 이 저장소가 오라클 드리프트로 반복해 물린 자리다.
+        /// </summary>
+        public static IReadOnlyList<LocalVariableDeclarationFact> ExtractConstants(string? ddlText)
+        {
+            if (!TryParse(ddlText, out var fragment)) return Array.Empty<LocalVariableDeclarationFact>();
+
+            // 방문자 둘이 같은 fragment를 본다 - 두 번 파스하면 한쪽이 조용히 낡는다.
+            var declarations = new DeclarationVisitor();
+            fragment!.Accept(declarations);
+
+            var reassigned = new ReassignmentVisitor();
+            fragment.Accept(reassigned);
+
+            return declarations.Facts
+                .Where(f => !string.IsNullOrWhiteSpace(f.InitialValue))
+                .Where(f => !reassigned.Names.Contains(f.Name))
+                .ToList();
+        }
+
+        /// <summary>
+        /// `SET @x = …`·`SELECT @x = …`·`FETCH … INTO @x` 셋 다 본다.
+        ///
+        /// [셋인 이유는 전부 실측이다] `SET`만 보면 `UP_UTIL_SETTLE_SUMMARY_EXTRA`의
+        /// `@v_strReqYMD`(`SELECT @v_strReqYMD = MIN(ReqYMD)` 하나뿐, `SET`은 0건)가
+        /// 상수로 샌다. 거기에 `SELECT`까지 봐도 `UP_UTIL_SETTLE_PROC_ETC`의
+        /// `@v_intCLTotal`·`@v_intCLComm`·`@v_intCLVT`(`MONEY = 0`로 선언, 대입은
+        /// 66·143행 `FETCH NEXT FROM Cur_SettlePost INTO …`뿐 - `SET`/`SELECT` 0건)가
+        /// 샌다. 코퍼스 14편에서 FETCH 갈래 하나가 29건 중 20건을 가른다.
+        ///
+        /// [이 셋이 지금 코퍼스를 덮는다는 뜻이지 전부라는 뜻이 아니다]
+        /// `EXEC @x = …`·대입형 `UPDATE … SET @x = …`는 아직 안 본다 - 현 코퍼스에
+        /// 없어서다(실측). 원본이 넓어지면 같은 방식으로 갈래를 늘려야 한다.
+        /// </summary>
+        private sealed class ReassignmentVisitor : TSqlFragmentVisitor
+        {
+            public HashSet<string> Names { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+            public override void Visit(SetVariableStatement node)
+            {
+                var name = node.Variable?.Name;
+                if (!string.IsNullOrWhiteSpace(name)) Names.Add(name!);
             }
 
-            var visitor = new DeclarationVisitor();
-            fragment.Accept(visitor);
-            return visitor.Facts;
+            public override void Visit(SelectSetVariable node)
+            {
+                var name = node.Variable?.Name;
+                if (!string.IsNullOrWhiteSpace(name)) Names.Add(name!);
+            }
+
+            public override void Visit(FetchCursorStatement node)
+            {
+                if (node.IntoVariables == null) return;
+                foreach (var variable in node.IntoVariables)
+                {
+                    var name = variable?.Name;
+                    if (!string.IsNullOrWhiteSpace(name)) Names.Add(name!);
+                }
+            }
         }
 
         private sealed class DeclarationVisitor : TSqlFragmentVisitor
