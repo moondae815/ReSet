@@ -10967,11 +10967,22 @@ SELECT 1;
         }
 
         [Fact]
-        public void ValidateBatchStep_TypeContractDefect_DoesNotAlsoFireNameBasedCheck()
+        public void ValidateBatchStep_TypeContractDefect_IsReportedOncePerVariableAcrossProcedures()
         {
-            // 새 검사는 CheckSpecLocalVariablesDeclared(이름 기반)의 보완재다.
-            // 같은 자리에서 둘이 동시에 발화하면 재생성 프롬프트에 같은 지적이 두 번
-            // 실린다.
+            // 한 단계가 원본 프로시저 여럿을 물려받고 그 둘이 **같은 이름의 상수**를
+            // 선언하는 것은 실물 모양이다 - 코퍼스에서 @v_valIncVat DECIMAL(2,1) = 1.1 을
+            // 선언하는 프로시저가 COMM_UPD 와 INS_EXTRA 둘이다. 변수당 한 번만 실어야
+            // 재생성 프롬프트에 같은 지적이 겹쳐 실리지 않는다.
+            //
+            // [이 시험이 이름 축을 잠그지 못한다는 사실 - 실측해서 적는다]
+            // 이 시험의 옛 이름은 DoesNotAlsoFireNameBasedCheck 였고 「이름 기반 검사와
+            // 동시에 발화하지 않는다」를 약속했다. **그 약속은 지킬 수 없다.** 아래처럼
+            // 재료(statementFactsByProcedure)를 넘기고 방출 SQL 이 원본 이름을 그대로
+            // 쓰면 CheckSpecLocalVariablesDeclared 도 같은 변수를 고발한다 - 합성 사례로
+            // 실제로 돌려 둘이 함께 나오는 것을 봤다. 두 검사는 오라클이 달라 서로를
+            // 모르고, 억제는 구현돼 있지 않다. 코퍼스에서 동시 발화가 0 인 것은 설계가
+            // 막아서가 아니라 **네 자리 모두 방출 SQL 이 변수를 개명했기 때문**이다.
+            // 그래서 단언은 「드라이버 바인딩」을 담은 것, 즉 이 검사가 낸 것만 센다.
             var section = @"### S05 수수료 갱신
 
 TSettleMst 를 갱신한다. 오류코드 -1.
@@ -10981,14 +10992,38 @@ execute(SQL_UPDATE_13, { p_v_valIncVat: 1.1 })
 ```
 ```sql
 -- SQL_UPDATE_13
-UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_v_valIncVat AS INT);
+UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @v_valIncVat AS INT);
 ```";
 
-            var result = _validator.ValidateBatchStep(
-                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions,
-                ddlByProcedure: CommUpdDdlMap());
+            var plan = new BatchStepPlan(
+                "S05", "수수료 갱신",
+                new[] { "UP_UTIL_SETTLE_COMM_UPD", "UP_UTIL_SETTLE_INS_EXTRA" },
+                new[] { "dbo.TSettleMst" }, new[] { "-1" }, false,
+                System.Array.Empty<string>());
 
-            Assert.Single(result.Errors, e => e.Contains("@v_valIncVat"));
+            var ddl = new System.Collections.Generic.Dictionary<string, string>(
+                System.StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_COMM_UPD"] = CommUpdDdl,
+                ["UP_UTIL_SETTLE_INS_EXTRA"] = CommUpdDdl.Replace(
+                    "UP_UTIL_SETTLE_COMM_UPD", "UP_UTIL_SETTLE_INS_EXTRA",
+                    System.StringComparison.Ordinal)
+            };
+
+            var facts = new System.Collections.Generic.Dictionary<string, SpecStatementFacts>(
+                System.StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_COMM_UPD"] = new SpecStatementFacts(
+                    System.Array.Empty<SpecDmlRow>(), System.Array.Empty<SpecSetTarget>(),
+                    new[] { new SpecLocalVariable("@v_valIncVat", "DECIMAL(2,1)", false) })
+            };
+
+            var result = _validator.ValidateBatchStep(
+                section, plan, System.Array.Empty<string>(), NoConditions,
+                stepInterfaces: null, runRowOwnedTables: null,
+                statementFactsByProcedure: facts, allSteps: null, ddlByProcedure: ddl);
+
+            Assert.Single(result.Errors, e => e.Contains("@v_valIncVat") && e.Contains("드라이버 바인딩"));
         }
 
         // ── 한 겹 간접 (수정 라운드 1) ────────────────────────────────────────
