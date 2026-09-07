@@ -59,7 +59,7 @@
 
 **Interfaces:**
 
-- Produces: `scripts/doc-link-check.sh` — 인자 없음. 마지막 줄에 `링크 검사 완료: N개 확인, M개 깨짐`을 낸다. 깨진 링크가 있으면 종료 코드 1.
+- Produces: `scripts/doc-link-check.sh` — 인자 없음. 마지막 줄에 `링크 검사 완료: N개 확인, M개 깨짐`을 낸다. 종료 코드는 0=전부 성함, 1=깨진 링크 있음, 2=검사 대상 링크가 0개(검사가 죽은 것).
 - Produces: `$SP/before/link-count.txt`, `$SP/before/symbols.txt`, `$SP/before/reverse-search.txt`, `$SP/before/mermaid-count.txt`
 
 - [ ] **Step 1: 검증기를 쓴다**
@@ -795,6 +795,10 @@ grep -nE 'README\.md AGENTS\.md docs/architecture\.md( |$)' .claude/skills/reset
 
 - [ ] **Step 12: 커밋**
 
+> **⚠ 정정: 아래 커밋 메시지 템플릿의 「링크 190개」는 실측과 다르다 — 실제로는 213개
+> (190 + `../tests` 23개)다. 이 템플릿을 그대로 실행하면 거짓 수치가 커밋 메시지로
+> 박제된다. 근거: 커밋 `066bfe11`.**
+
 ```bash
 git add .claude/skills/reset-doc-sync/SKILL.md
 git commit -F - <<'MSG'
@@ -1017,7 +1021,7 @@ dotnet test 2>&1 | tail -3
 | ③ 링크 검사 / 파괴 시험 | 0개 깨짐 / 정확히 1줄 | |
 | ④ 목차 ↔ 파일 | 17 = 17, diff 없음 | |
 | ⑤ 허브 크기 | ≤ 8,000 · baseline 등록 | |
-| ⑥ 이사 바이트 보존 | 297,421 (+570 링크) | |
+| ⑥ 이사 바이트 보존 | 297,421 (+570 링크) — **⚠ 실측 정정: +639(213 링크). 근거: 커밋 `066bfe11`.** | |
 | ⑦ mermaid | 9블록 | |
 | R2 역검색 | 분할 후 ≥ 분할 전 | |
 
