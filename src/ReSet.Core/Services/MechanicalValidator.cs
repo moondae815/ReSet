@@ -510,6 +510,10 @@ namespace ReSet.Core.Services
             SafeCheck(() => CheckDuplicateProjectionNames(stepMarkdown, result));
             SafeCheck(() => CheckControlStepErrorCodeBand(stepMarkdown, step, result, allSteps));
             SafeCheck(() => CheckLegacyStepErrorCodeInvention(stepMarkdown, step, result, codesByProcedure));
+            // 최상위에 두는 이유: 이 검사의 오라클은 원본 DDL 하나뿐이라 명세서 사실
+            // (statementFactsByProcedure)이 없어도 돌아야 한다. 아래 statementFacts 블록
+            // 안에 넣으면 재료가 없는 Job에서 조용히 통째로 꺼진다.
+            SafeCheck(() => CheckLocalVariableTypeContract(stepMarkdown, step, ddlByProcedure, result));
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
@@ -8832,6 +8836,115 @@ namespace ReSet.Core.Services
                 }
             }
         }
+
+        /// <summary>
+        /// 타입이 걸린 상수가 방출 SQL의 `DECLARE`가 아니라 **드라이버 바인딩**으로
+        /// 새는 자리를 든다.
+        ///
+        /// [왜 「DECLARE가 없다」로 판정하지 않는가] T-SQL에서 리터럴 `1.1`은 그 자체로
+        /// `numeric(2,1)`이다. 즉 `CAST(CLComm / 1.1 AS INT)`처럼 SQL 안에 인라인하는
+        /// 것은 **타입이 안전하다.** 해가 나는 자리는 오직 드라이버 경계다 - 바인딩된
+        /// 값은 선언 타입이 없어 드라이버가 고른다. `DECIMAL(2,1)`이 `FLOAT`으로
+        /// 도착하면 `CAST(… AS INT)`의 절사가 달라져 금액이 어긋난다.
+        /// 규칙 5-1은 `DECLARE` 보존을 요구하지만 이 검사는 **해로운 부분집합**만
+        /// 발화한다. 그 간격은 의도된 것이다(설계 §5-2).
+        ///
+        /// [왜 이름을 안 보는가] 실측: 재생성이 `@v_valIncVat`를 `p_incVat`으로
+        /// 개명한 자리가 있다. 이름 기반인 <see cref="CheckSpecLocalVariablesDeclared"/>는
+        /// 그런 자리에 침묵한다 - 이 검사는 그 **이름 눈먼 보완재**이고, 이름 대신
+        /// 초기값 리터럴로 맞댄다. 자리별 실측은
+        /// `docs/superpowers/specs/2026-09-07-지역변수-타입계약-강등금지-design.md` §2-4에 있다.
+        ///
+        /// [오라클] 원본 DDL(<paramref name="ddlByProcedure"/>). 명세서도 단계 본문도
+        /// 아니라 **비순환**이다. 없으면 침묵한다 - 종전 동작 그대로다.
+        ///
+        /// [키잉] `ddlByProcedure` 조회는 <see cref="BareObjectName"/>로 한다.
+        /// `step.LegacyProcedures`는 원문이라 스키마 접두사가 붙기도 빠지기도 하는데,
+        /// `StepInterfaceFacts.CollectDdl`이 맨이름 키를 함께 깔고 스윕 경로는
+        /// `ToBareNameKeyed`로 맨이름만 남긴다. N5 조인 짝 대조
+        /// (<see cref="BuildOriginalJoinPairs"/>)와 같은 규약이다.
+        /// </summary>
+        private static void CheckLocalVariableTypeContract(
+            string stepMarkdown,
+            BatchStepPlan step,
+            IReadOnlyDictionary<string, string>? ddlByProcedure,
+            StepValidationResult result)
+        {
+            if (ddlByProcedure == null || ddlByProcedure.Count == 0) return;
+            if (step.LegacyProcedures == null || step.LegacyProcedures.Count == 0) return;
+
+            var bindings = StepBindingExtractor.Extract(stepMarkdown);
+            if (bindings.Count == 0) return;
+
+            var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var source in step.LegacyProcedures)
+            {
+                var bare = BareObjectName(source);
+                if (bare.Length == 0) continue;
+                if (!ddlByProcedure.TryGetValue(bare, out var ddl)) continue;
+
+                foreach (var fact in LocalVariableDeclarationExtractor.ExtractConstants(ddl))
+                {
+                    if (!IsPrecisionBearingNumeric(fact.DataType)) continue;
+                    if (IsZeroLiteral(fact.InitialValue)) continue;
+
+                    var leaked = bindings.FirstOrDefault(b =>
+                        string.Equals(b.Value, fact.InitialValue, StringComparison.OrdinalIgnoreCase));
+                    if (leaked == null) continue;
+
+                    if (!reported.Add(fact.Name)) continue;
+
+                    result.Errors.Add(
+                        $"{step.Code} 섹션이 `{fact.Name}`의 타입 계약 `{fact.DataType}`을(를) " +
+                        $"드라이버 바인딩(`{leaked.CallName}({leaked.StatementName}, {{ {leaked.Key}: {leaked.Value} }})`)에 " +
+                        "맡깁니다 — 바인딩된 값에는 선언 타입이 없어 드라이버가 고릅니다. " +
+                        $"`{leaked.StatementName}` 블록 안에 `DECLARE {fact.Name} {fact.DataType} = {fact.InitialValue};`을(를) " +
+                        "두고 바인딩 목록에서 그 값을 빼십시오(규칙 5-1). 타입을 주석에 적는 것은 못박는 것이 아닙니다.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 정밀도·자릿수가 산술 결과를 바꾸는 수치 타입인가. 정수 타입은 뺀다 -
+        /// 드라이버가 어떤 정수 타입을 골라도 산술이 같고, 뺌으로써 청크 크기
+        /// (`10000` 같은 `INT` 리터럴) 오탐도 함께 사라진다.
+        /// </summary>
+        private static bool IsPrecisionBearingNumeric(string? dataType)
+        {
+            if (string.IsNullOrWhiteSpace(dataType)) return false;
+            var t = dataType!.TrimStart();
+            return t.StartsWith("DECIMAL", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("NUMERIC", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("FLOAT", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("REAL", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("SMALLMONEY", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("MONEY", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 값이 `0`인가. `0`은 어느 수치 타입으로 묶여도 `0`이라 드라이버가 타입을
+        /// 골라도 손해가 없다 - 원본의 `MONEY = 0` 갈래가 여기서 걸러진다.
+        ///
+        /// [왜 InvariantCulture인가] 대상은 **T-SQL 리터럴**이고 T-SQL 리터럴의 소수점은
+        /// 언제나 `.`이다. 기본 <c>decimal.TryParse</c>는 `CultureInfo.CurrentCulture`를
+        /// 쓰는데, 소수점이 `,`인 문화권(de-DE 등)에서는 `.`이 **자릿수 구분자**로 읽혀
+        /// `"1.1"`이 `11m`이 된다. 값 자체가 뒤바뀌므로 파싱 문화권을 못박는다.
+        /// <c>NumberStyles</c>도 부호와 소수점만 허용해 좁힌다 - `AllowThousands`를
+        /// 남겨 두면 InvariantCulture에서도 `,`가 구분자로 삼켜져 같은 종류의 오독이
+        /// 남는다. SQL 리터럴에 자릿수 구분자는 없다.
+        ///
+        /// 파싱에 실패하면 `false`다 - 「0이라고 확인되지 않았다」는 쪽으로 기운다.
+        /// 침묵을 근거 없이 사지 않는다는 뜻이고, 발화 자체는 바깥의 타입 조건과
+        /// 바인딩 값 일치가 따로 잠근다.
+        /// </summary>
+        private static bool IsZeroLiteral(string? value)
+            => decimal.TryParse(
+                   value,
+                   NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+                   CultureInfo.InvariantCulture,
+                   out var d)
+               && d == 0m;
 
         /// <summary>
         /// 빠진 것으로 보이는 갱신 번호를 문장으로 만든다. 근거가 없으면 빈 문자열을

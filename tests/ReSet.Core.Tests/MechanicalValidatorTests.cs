@@ -10744,5 +10744,243 @@ END"
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("SET 산식"));
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 지역 변수 타입 계약 강등 금지 — 2026-09-07
+        //
+        // Batch5/S05·S07 · Batch4/S06 실물: 타입이 걸린 상수가 방출 SQL 의 DECLARE 가
+        // 아니라 드라이버 바인딩으로 샌다. Batch5/S07 은 변수를 @p_incVat 으로 개명해
+        // 이름 기반 검사(CheckSpecLocalVariablesDeclared)가 침묵했다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        private const string CommUpdDdl = @"
+CREATE PROCEDURE dbo.UP_UTIL_SETTLE_COMM_UPD
+    @pi_strYMD CHAR(8)
+AS
+BEGIN
+    DECLARE @v_valIncVat DECIMAL(2,1) = 1.1;
+    UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @v_valIncVat AS INT);
+END";
+
+        private static System.Collections.Generic.IReadOnlyDictionary<string, string> CommUpdDdlMap()
+            => new System.Collections.Generic.Dictionary<string, string>(
+                System.StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_COMM_UPD"] = CommUpdDdl
+            };
+
+        private static BatchStepPlan CommUpdPlan() => new(
+            "S05", "수수료 갱신",
+            new[] { "UP_UTIL_SETTLE_COMM_UPD" }, new[] { "dbo.TSettleMst" },
+            new[] { "-1" }, false, System.Array.Empty<string>());
+
+        [Fact]
+        public void ValidateBatchStep_BindsTypedConstantToDriver_IsReported()
+        {
+            // Batch5/S05:71 실물. 이름이 p_v_valIncVat 으로 바뀌어 있어도 잡아야 한다.
+            var section = @"### S05 수수료 갱신
+
+TSettleMst 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+execute(SQL_UPDATE_13, { p_YMD: p_YMD, p_v_valIncVat: 1.1 })
+```
+```sql
+-- SQL_UPDATE_13
+UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_v_valIncVat AS INT);
+```";
+
+            var result = _validator.ValidateBatchStep(
+                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: CommUpdDdlMap());
+
+            Assert.Contains(result.Errors, e => e.Contains("@v_valIncVat") && e.Contains("DECIMAL(2,1)"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_BindsRenamedTypedConstant_IsStillReported()
+        {
+            // Batch5/S07:57 실물. 키 이름에 valIncVat 이 아예 없다 - 이름으로 판정하면
+            // 놓친다.
+            var section = @"### S05 수수료 갱신
+
+TSettleMst 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+execute(SQL_UPDATE5, { p_ymd: @pi_strYMD, p_incVat: 1.1 })
+```
+```sql
+-- SQL_UPDATE5
+UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_incVat AS INT);
+```";
+
+            var result = _validator.ValidateBatchStep(
+                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: CommUpdDdlMap());
+
+            Assert.Contains(result.Errors, e => e.Contains("@v_valIncVat"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_DeclaresTypedConstantInSql_IsSilent()
+        {
+            // Batch4/S08:333 실물 - 보존한 쪽. 23 자리가 이 모양이다.
+            var section = @"### S05 수수료 갱신
+
+TSettleMst 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+execute(SQL_UPDATE_13, { p_YMD: p_YMD })
+```
+```sql
+-- SQL_UPDATE_13
+DECLARE @v_valIncVat DECIMAL(2,1) = 1.1;
+UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @v_valIncVat AS INT);
+```";
+
+            var result = _validator.ValidateBatchStep(
+                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: CommUpdDdlMap());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_valIncVat"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_InlinesTypedConstantIntoSql_IsSilent()
+        {
+            // T-SQL 리터럴 1.1 은 그 자체로 numeric(2,1) 이다 - 인라인은 타입이 안전하다.
+            // 규칙 5-1 은 DECLARE 를 요구하지만 검사는 해로운 부분집합만 발화한다
+            // (명세서 §5-2 의 「규칙 ⊃ 검사」).
+            var section = @"### S05 수수료 갱신
+
+TSettleMst 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+execute(SQL_UPDATE_13, { p_YMD: p_YMD })
+```
+```sql
+-- SQL_UPDATE_13
+UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / 1.1 AS INT);
+```";
+
+            var result = _validator.ValidateBatchStep(
+                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: CommUpdDdlMap());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_valIncVat"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_BindsZeroValuedMoneyConstant_IsSilent()
+        {
+            // @v_intCLComm MONEY = 0. 값이 0 이면 어느 수치 타입이어도 0 이라 손해가 없다.
+            var ddl = @"
+CREATE PROCEDURE dbo.UP_ZERO AS
+BEGIN
+    DECLARE @v_intCLComm MONEY = 0;
+    UPDATE dbo.T SET A = @v_intCLComm;
+END";
+            var section = @"### S05 영집계
+
+T 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+execute(SQL_U, { p_acc: 0 })
+```
+```sql
+-- SQL_U
+UPDATE dbo.T SET A = @p_acc;
+```";
+            var plan = new BatchStepPlan("S05", "영집계",
+                new[] { "UP_ZERO" }, new[] { "dbo.T" }, new[] { "-1" }, false,
+                System.Array.Empty<string>());
+
+            var result = _validator.ValidateBatchStep(
+                section, plan, System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: new System.Collections.Generic.Dictionary<string, string>(
+                    System.StringComparer.OrdinalIgnoreCase) { ["UP_ZERO"] = ddl });
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_intCLComm"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_BindsIntegerConstant_IsSilent()
+        {
+            // 청크 크기 10000 같은 INT 리터럴에 반응하면 안 된다.
+            var ddl = @"
+CREATE PROCEDURE dbo.UP_INT AS
+BEGIN
+    DECLARE @v_size INT = 10000;
+    UPDATE dbo.T SET A = @v_size;
+END";
+            var section = @"### S05 청크
+
+T 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+execute(SQL_U, { p_size: 10000 })
+```
+```sql
+-- SQL_U
+UPDATE dbo.T SET A = @p_size;
+```";
+            var plan = new BatchStepPlan("S05", "청크",
+                new[] { "UP_INT" }, new[] { "dbo.T" }, new[] { "-1" }, false,
+                System.Array.Empty<string>());
+
+            var result = _validator.ValidateBatchStep(
+                section, plan, System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: new System.Collections.Generic.Dictionary<string, string>(
+                    System.StringComparer.OrdinalIgnoreCase) { ["UP_INT"] = ddl });
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_size"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WithoutDdl_IsSilent()
+        {
+            // 오라클이 없으면 침묵한다 - 종전 동작 그대로다.
+            var section = @"### S05 수수료 갱신
+
+TSettleMst 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+execute(SQL_UPDATE_13, { p_v_valIncVat: 1.1 })
+```
+```sql
+-- SQL_UPDATE_13
+SELECT 1;
+```";
+
+            var result = _validator.ValidateBatchStep(
+                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("타입 계약"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_TypeContractDefect_DoesNotAlsoFireNameBasedCheck()
+        {
+            // 새 검사는 CheckSpecLocalVariablesDeclared(이름 기반)의 보완재다.
+            // 같은 자리에서 둘이 동시에 발화하면 재생성 프롬프트에 같은 지적이 두 번
+            // 실린다.
+            var section = @"### S05 수수료 갱신
+
+TSettleMst 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+execute(SQL_UPDATE_13, { p_v_valIncVat: 1.1 })
+```
+```sql
+-- SQL_UPDATE_13
+UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_v_valIncVat AS INT);
+```";
+
+            var result = _validator.ValidateBatchStep(
+                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: CommUpdDdlMap());
+
+            Assert.Single(result.Errors, e => e.Contains("@v_valIncVat"));
+        }
     }
 }
