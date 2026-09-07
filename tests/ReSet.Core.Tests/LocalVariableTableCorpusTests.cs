@@ -57,7 +57,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void LocalVariableTable_RenderedFromDdl_IsAcceptedByTheCheck()
         {
-            var root = CorpusPaths.RepoRoot();
+            var root = CorpusPaths.RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
 
             var outputRoot = Path.Combine(root, "output");

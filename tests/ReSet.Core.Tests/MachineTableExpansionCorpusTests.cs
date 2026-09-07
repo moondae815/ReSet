@@ -27,15 +27,15 @@ namespace ReSet.Core.Tests
 
         /// <summary>
         /// 코퍼스 루트. 판정 근거(왜 "output/이 있다"로 판정하지 않는가)는
-        /// <see cref="CorpusPaths.RepoRoot"/>에 있다 - 이 판정이 세 곳에 복제돼 있던 것을
+        /// <see cref="CorpusPaths.RepoRootIfCorpusPresent()"/>에 있다 - 이 판정이 세 곳에 복제돼 있던 것을
         /// 2026-08-26에 그리로 모았다.
         /// </summary>
-        private static string RepoRoot() => CorpusPaths.RepoRoot();
+        private static string RepoRootIfCorpusPresent() => CorpusPaths.RepoRootIfCorpusPresent();
 
         [SkippableFact]
         public void Extractors_OverTheCorpus_ShouldReportCountsWithoutExploding()
         {
-            var root = RepoRoot();
+            var root = RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
 
             var procedures = Path.Combine(root, "output", "Procedures");

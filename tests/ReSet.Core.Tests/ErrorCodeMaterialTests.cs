@@ -162,7 +162,7 @@ END";
         [SkippableFact]
         public void Orchestrator_ShouldBuildTheErrorCodeMaterialInExactlyOnePlace()
         {
-            var root = CorpusPaths.RepoRoot();
+            var root = CorpusPaths.RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
 
             var source = Path.Combine(
@@ -205,7 +205,7 @@ END";
         [SkippableFact]
         public void Merge_OverTheRealCorpus_ShouldNeverLoseSpecMaterialAndShouldNotBeSilentlyEmpty()
         {
-            var root = CorpusPaths.RepoRoot();
+            var root = CorpusPaths.RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
 
             var proceduresRoot = Path.Combine(root, "output", "Procedures");

@@ -28,10 +28,10 @@ namespace ReSet.Core.Tests
 
         /// <summary>
         /// 코퍼스 루트. 판정 근거(왜 "output/이 있다"로 판정하지 않는가)는
-        /// <see cref="CorpusPaths.RepoRoot"/>에 있다 - 이 판정이 세 곳에 복제돼 있던 것을
+        /// <see cref="CorpusPaths.RepoRootIfCorpusPresent()"/>에 있다 - 이 판정이 세 곳에 복제돼 있던 것을
         /// 2026-08-26에 그리로 모았다.
         /// </summary>
-        private static string RepoRoot() => CorpusPaths.RepoRoot();
+        private static string RepoRootIfCorpusPresent() => CorpusPaths.RepoRootIfCorpusPresent();
 
         private static SpDefinition? LoadSpDef(string metaPath)
         {
@@ -65,7 +65,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void Probe_AllProcedures_ShouldReportFullStateDistribution()
         {
-            var root = RepoRoot();
+            var root = RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), "output/ 디렉터리를 찾지 못했다 - 실측 건너뜀 (게이트 무효)");
 
             var procDir = Path.Combine(root, "output", "Procedures");
@@ -269,7 +269,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void Probe_TableKindsRead_ShouldReportGapAgainstActualMachineConfirmedTables()
         {
-            var root = RepoRoot();
+            var root = RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), "output/ 디렉터리를 찾지 못했다 - 실측 건너뜀");
 
             var procDir = Path.Combine(root, "output", "Procedures");
@@ -321,7 +321,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void Probe_SetVariableStatement_ShouldReportExtractorBoundary()
         {
-            var root = RepoRoot();
+            var root = RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), "output/ 디렉터리를 찾지 못했다 - 실측 건너뜀");
 
             var procDir = Path.Combine(root, "output", "Procedures");
@@ -418,7 +418,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void Probe_DerivedTableOnlySupport_ShouldCountUnsupportedStatements()
         {
-            var root = RepoRoot();
+            var root = RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), "output/ 디렉터리를 찾지 못했다 - 실측 건너뜀");
 
             var procDir = Path.Combine(root, "output", "Procedures");
@@ -474,7 +474,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void Probe_FunctionsAndExternal_ShouldReportLeafCounts()
         {
-            var root = RepoRoot();
+            var root = RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), "output/ 디렉터리를 찾지 못했다 - 실측 건너뜀");
 
             var targets = new List<(string Bucket, string Name, string MetaPath, string SpecPath)>();

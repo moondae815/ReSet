@@ -10357,7 +10357,7 @@ END";
         [SkippableFact]
         public void SpecsThatMustDeclareLocalVariables_MatchesOriginalDdlDeclareCount()
         {
-            var root = CorpusPaths.RepoRoot();
+            var root = CorpusPaths.RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
 
             var objectsDir = Path.Combine(root, "output", "Objects");

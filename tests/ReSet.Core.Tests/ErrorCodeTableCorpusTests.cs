@@ -61,7 +61,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void ErrorCodeTable_RenderedFromDdl_IsAcceptedByCheckErrorCodes()
         {
-            var root = CorpusPaths.RepoRoot();
+            var root = CorpusPaths.RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
 
             var outputRoot = Path.Combine(root, "output");

@@ -63,7 +63,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void ExecutionSemanticsTable_RenderedFromDdl_IsAcceptedByTheCheck()
         {
-            var root = CorpusPaths.RepoRoot();
+            var root = CorpusPaths.RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
 
             var outputRoot = Path.Combine(root, "output");
@@ -227,7 +227,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void ExecutionSemanticsTable_MutatedCell_IsRejectedByTheCheck()
         {
-            var root = CorpusPaths.RepoRoot();
+            var root = CorpusPaths.RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
 
             var meta = Path.Combine(

@@ -257,7 +257,7 @@ namespace ReSet.Core.Tests
             /// <summary>코퍼스가 없으면 null.</summary>
             public static CorpusRun? Measure()
             {
-                var root = CorpusPaths.RepoRoot();
+                var root = CorpusPaths.RepoRootIfCorpusPresent();
                 if (string.IsNullOrEmpty(root)) return null;
 
                 var outputDir = Path.Combine(root, "output");

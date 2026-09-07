@@ -239,9 +239,16 @@ public static class CancellationPolicyScanner
 /// <summary>테스트가 bin 아래에서 실행되므로 저장소 루트를 거슬러 올라가 찾는다.</summary>
 public static class RepoPaths
 {
-    public static string FindRepoRoot()
+    public static string FindRepoRoot() => FindRepoRoot(AppContext.BaseDirectory);
+
+    /// <summary>
+    /// 시작 디렉터리를 받는 갈래. <see cref="CorpusPaths"/>의 두 단계를 임시 트리로
+    /// 고정하려면 탐색이 <c>AppContext.BaseDirectory</c>에 박혀 있으면 안 된다 -
+    /// 그 자리에서는 「정박 파일이 없는 저장소」를 지어 볼 수가 없다.
+    /// </summary>
+    public static string FindRepoRoot(string startDirectory)
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        var directory = new DirectoryInfo(startDirectory);
         while (directory is not null)
         {
             if (File.Exists(Path.Combine(directory.FullName, "ReSet.slnx")))
@@ -253,6 +260,6 @@ public static class RepoPaths
         }
 
         throw new InvalidOperationException(
-            $"ReSet.slnx를 찾지 못해 저장소 루트를 결정할 수 없습니다. 시작 위치: {AppContext.BaseDirectory}");
+            $"ReSet.slnx를 찾지 못해 저장소 루트를 결정할 수 없습니다. 시작 위치: {startDirectory}");
     }
 }

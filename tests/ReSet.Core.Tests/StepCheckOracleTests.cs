@@ -41,7 +41,7 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void OmissionScanner_IsSilentOnCurrentPlan()
         {
-            var root = CorpusPaths.RepoRoot();
+            var root = CorpusPaths.RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
 
             var planPath = Path.Combine(

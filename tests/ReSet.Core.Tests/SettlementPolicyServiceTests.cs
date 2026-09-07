@@ -531,16 +531,20 @@ namespace ReSet.Core.Tests
     /// 세 가지가 한꺼번에 생긴다 - 이미 있는 헬퍼의 네 번째 사본이 되고, 다른 기계·CI에서
     /// Find가 빈 목록을 돌려 「건너뜀이 아니라 실패」가 되며, 어느 워크트리에서 돌든
     /// 공유 체크아웃을 읽는다. 옳은 규칙은 「절대 경로를 써라」가 아니라 「경로가 자기
-    /// 워크트리 밖으로 풀리지 않게 하라」이고, <see cref="CorpusPaths.RepoRoot"/>가
-    /// 그것을 한다 - 아는 실물 SP 파일 하나가 실제로 있는 조상까지만 올라가 얕은
-    /// 스크래치(bin/…/output의 dbo.USP_Root 1건)에서 멈추는 조용한 오측도 함께 막는다.
+    /// 워크트리 밖으로 풀리지 않게 하라」이고,
+    /// <see cref="CorpusPaths.RepoRootIfCorpusPresent()"/>가 그것을 한다.
     ///
-    /// 다만 정확히 말해 둔다(2026-09-06 실측): 워크트리가 메인 체크아웃 <b>안에</b>
-    /// 있으면(`.claude/worktrees/…`) 자기 `output` 심링크가 없을 때 탐색이 메인
-    /// 체크아웃까지 올라간다. 즉 이 함수가 보증하는 것은 「심링크를 건 워크트리는
-    /// 자기 것을 읽는다」이지 「절대 밖을 못 읽는다」가 아니다 - 심링크 넷을 걸고
-    /// 시작하라는 규약이 그래서 필요하다. 코퍼스가 아예 없는 기계에서는 빈 문자열이
-    /// 돌아와 <b>실패가 아니라 건너뜀</b>이 된다.
+    /// [2026-09-07 정정] 위 문단이 적어 두었던 단서 - 「워크트리가 메인 체크아웃 안에
+    /// 있으면 자기 `output`이 없을 때 탐색이 메인까지 올라간다」 - 는 <b>닫혔다.</b>
+    /// 루트를 이제 <c>ReSet.slnx</c>로 잡기 때문이다. 그 파일은 모든 워크트리에 있으므로
+    /// 탐색이 자기 워크트리에서 멈춘다. 실측으로도 갈렸다: 정박 파일을 없앤 워크트리에서
+    /// 옛 자는 `/Users/…/ReSet`(메인)을, 새 자는 워크트리 자신을 돌려줬다. 얕은
+    /// 스크래치(bin/…/output의 dbo.USP_Root 1건)에서 멈추는 조용한 오측도 구조적으로
+    /// 불가능해졌다 - bin 아래에는 <c>ReSet.slnx</c>가 없다.
+    ///
+    /// 코퍼스가 아예 없는 기계에서는 여전히 빈 문자열이 돌아와 <b>실패가 아니라
+    /// 건너뜀</b>이 된다. 다만 이제 그 건너뜀은 <b>`output/`이 통째로 없을 때만</b>
+    /// 나온다 - 재료 하나가 없는 것은 실패로 남는다.
     /// </summary>
     public sealed class SettlementRosterDraftCrossTaskInvariantTests
     {
@@ -579,7 +583,7 @@ namespace ReSet.Core.Tests
         /// </summary>
         private static string RealOutputRoot()
         {
-            var root = CorpusPaths.RepoRoot();
+            var root = CorpusPaths.RepoRootIfCorpusPresent();
             Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
 
             var outputRoot = Path.Combine(root, "output");
