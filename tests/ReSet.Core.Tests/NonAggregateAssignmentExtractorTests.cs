@@ -929,6 +929,507 @@ END";
             Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
         }
 
+        // ============================================================================
+        // 3 회차(설계서 §12) - 진리 조건을 단일 재귀 술어로 접은 뒤의 시험군.
+        //
+        // 위의 아홉(HAVING 둘 · GROUP BY 일곱)은 전부 **최상위** 변형만 잠근다 - 3 회차
+        // 검토가 정확히 그 지점을 지적했다("단위 시험 일곱 개는 최상위 변형만 잠근다").
+        // 아래 두 Theory(층을 바꾼 같은 변형)가 그 구멍을 메운다 - 같은 모양(총계
+        // 그룹화 집합)을 최상위 → 파생 → APPLY → 2 겹 중첩 넷으로 반복해, 재귀가
+        // "어느 층인가"와 무관하게 같은 판정을 내리는지 잠근다. 이 술어를 재귀가
+        // 아닌 자기 층만 보는 뮤턴트로 되돌리면 파생·APPLY·2 겹 중첩 세 층이 깨진다
+        // (아래 MUTANTS 절 - 3 회차 보고서에 수치가 있다).
+        // ============================================================================
+
+        public static IEnumerable<object[]> PlainColumnPassthroughAcrossLayers()
+        {
+            yield return new object[]
+            {
+                "top-level",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = A.x FROM dbo.T A WITH(NOLOCK)
+END"
+            };
+            yield return new object[]
+            {
+                "derived",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.c FROM (SELECT A.x AS c FROM dbo.T A WITH(NOLOCK)) D
+END"
+            };
+            yield return new object[]
+            {
+                "apply",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.c FROM dbo.T0 WITH(NOLOCK) CROSS APPLY (SELECT A.x AS c FROM dbo.T A WITH(NOLOCK)) D
+END"
+            };
+            yield return new object[]
+            {
+                "nested-derived",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D2.c FROM (SELECT D1.c FROM (SELECT A.x AS c FROM dbo.T A WITH(NOLOCK)) D1) D2
+END"
+            };
+        }
+
+        [Theory]
+        [MemberData(nameof(PlainColumnPassthroughAcrossLayers))]
+        public void Extract_PlainColumnPassthrough_IsCapturedRegardlessOfLayer(string layer, string ddl)
+        {
+            // §12-6 "담긴다" 표의 파생 테이블 행 - 그런데 파생 테이블 하나만이 아니라
+            // APPLY 왼쪽·2 겹 중첩까지 같은 판정이 나와야 재귀가 실제로 층을
+            // 없앴다고 말할 수 있다. layer 인자는 실패 메시지에 어느 층이 깨졌는지
+            // 드러내려는 것뿐이고 단언 자체에는 쓰지 않는다.
+            _ = layer;
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.Equal("@v", fact.Variable);
+        }
+
+        public static IEnumerable<object[]> GrandTotalGroupPoisonAcrossLayers()
+        {
+            yield return new object[]
+            {
+                "top-level",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T WITH(NOLOCK) GROUP BY ()
+END"
+            };
+            yield return new object[]
+            {
+                "derived",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.c FROM (SELECT 1 AS c FROM dbo.T GROUP BY ()) D
+END"
+            };
+            yield return new object[]
+            {
+                // ★ §12-6 어긋난 칸(R5) - 설계서는 이 자리를
+                // `FROM T0 OUTER APPLY (SELECT 1 c FROM T GROUP BY ()) D`(오염을
+                // APPLY의 **오른쪽**에 둔 모양)로 침묵을 예측했지만, §12-3 자신의
+                // 표가 "CROSS/OUTER APPLY | 왼쪽이 보장할 때만"이라고 못박고 있다 -
+                // 왼쪽 `T0`가 이름 있는 테이블이면 왼쪽만으로 이미 보장이 성립하므로
+                // 오른쪽에 무엇이 오든(총계 그룹이든 아니든) 전체 판정이 바뀌지
+                // 않는다(OUTER/CROSS APPLY는 왼쪽이 0행이면 오른쪽을 평가조차
+                // 하지 않는다 - 왼쪽에 행이 없으면 적용할 행 자체가 없다). 그래서
+                // 그 정확한 문구로는 **담긴다**가 실측값이고, 이 시험은 대신 오염을
+                // APPLY의 **왼쪽**에 두어(§12-3 규칙이 실제로 검사하는 자리) 같은
+                // "APPLY 층"에서 재귀가 작동하는지를 잠근다 - 3 회차 보고서
+                // PREDICTION SCORECARD에 이 어긋남을 그대로 적는다.
+                "apply-left-poisoned",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.c FROM (SELECT 1 AS x FROM dbo.T GROUP BY ()) L CROSS APPLY (SELECT 1 AS c) D
+END"
+            };
+            yield return new object[]
+            {
+                "nested-derived",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D2.c FROM (SELECT D1.c FROM (SELECT 1 AS c FROM dbo.T GROUP BY ()) D1) D2
+END"
+            };
+        }
+
+        [Theory]
+        [MemberData(nameof(GrandTotalGroupPoisonAcrossLayers))]
+        public void Extract_GrandTotalGroupPoison_StaysSilentRegardlessOfLayer(string layer, string ddl)
+        {
+            // 3 회차의 표제 결함 그대로 - 총계 그룹화 집합은 원본이 비어도 1행을
+            // 돌려준다. 예전 코드는 이 진리조건을 최상위 QuerySpecification에서만
+            // 봤으므로(GroupByClause 검사가 자기 층만 확인) 같은 모양이 파생·APPLY·
+            // 2 겹 중첩 안으로 들어가면 판정에서 벗어나 다시 열렸다. 이 Theory
+            // 네 층 전부가 침묵해야 재귀가 실제로 막았다는 증거다.
+            _ = layer;
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_OuterApplyWithNamedTableOnTheLeft_IsCapturedEvenIfRightSideIsPoisoned()
+        {
+            // ★ §12-6 어긋난 칸(R5)의 실측값을 그대로 잠근다. 설계서 §12-6이
+            // "FROM T0 OUTER APPLY (SELECT 1 c FROM T GROUP BY ()) D"에 침묵을
+            // 예측한 바로 그 모양이다 - §12-3의 APPLY 규칙("왼쪽이 보장할 때만")을
+            // 그대로 따르면 왼쪽 `T0`가 이름 있는 테이블이라 오른쪽의 총계 그룹과
+            // 무관하게 **담긴다**. 코드를 비틀어 오른쪽까지 보게 만들지 않는다 -
+            // 그러면 §12-3 자신의 규칙(그리고 OUTER/CROSS APPLY의 실제 SQL 의미론 -
+            // 왼쪽이 비면 오른쪽은 평가조차 안 된다)을 어기게 된다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.c FROM dbo.T0 WITH(NOLOCK) OUTER APPLY (SELECT 1 AS c FROM dbo.T GROUP BY ()) D
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.Equal("D.c", fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_HavingInsideDerivedTable_ShouldNotBeCollected()
+        {
+            // §12-6 침묵 표 - `FROM (SELECT 1 c FROM T HAVING 1=1) D`. GROUP BY 없는
+            // HAVING과 같은 함정이 파생 테이블 층에서도 열린다 - 예전 코드는
+            // HavingClause 검사를 최상위에서만 했다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.c FROM (SELECT 1 c FROM dbo.T HAVING 1 = 1) D
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_PlainGroupByInsideDerivedTable_ShouldNotBeCollected()
+        {
+            // §12-6 "담긴다" 표 마지막 행의 정정 - 파생 테이블 안쪽의 평범한(총계
+            // 그룹이 생기지 않는) GROUP BY는 사전 예측이 "담긴다"에서 "침묵"으로
+            // 바뀐 자리다. 안쪽 질의 층 규칙(GroupByClause 유무만 보는 보수적 선택,
+            // §11-10 그대로)이 재귀에도 그대로 적용되므로 이 모양도 침묵한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.c FROM (SELECT A.x AS c FROM dbo.T A WITH(NOLOCK) GROUP BY A.x) D
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_InnerJoinOfTwoNamedTables_IsCaptured()
+        {
+            // §12-6 담긴다 표 - INNER JOIN, 양쪽 다 이름 있는 테이블이면 한쪽만
+            // 보장해도 전체가 보장된다(공집합 × 무엇 = 공집합).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = B.x FROM dbo.A A WITH(NOLOCK) INNER JOIN dbo.B B WITH(NOLOCK) ON A.id = B.id
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.Equal("B.x", fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_LeftJoinTargetOnTheRightSide_IsCaptured()
+        {
+            // §12-6 담긴다 표 - 설계서 §12-4가 검토와 갈리기로 못박은 자리다.
+            // `SELECT @v = B.x FROM A LEFT JOIN B ON ...`은 A·B가 둘 다 비면 0행이므로
+            // 확정 문장("무결과**면**")이 참이다 - A에 행이 있는데 B에 짝이 없어
+            // NULL이 대입되는 경우는 애초에 "무결과"가 아니라 조건문의 전건이
+            // 거짓이다. 그래서 LEFT는 왼쪽 기준으로 판정한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = B.x FROM dbo.A A WITH(NOLOCK) LEFT JOIN dbo.B B WITH(NOLOCK) ON A.id = B.id
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.Equal("B.x", fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_RightJoinWithConstantLeftSide_ShouldNotBeCollected()
+        {
+            // RIGHT는 오른쪽 기준 - 왼쪽이 상수 원천(VALUES)이면 왼쪽은 보장하지
+            // 않지만 판정은 오른쪽만 보므로, 오른쪽이 이름 있는 테이블이면 그래도
+            // 담긴다(대비를 위해 왼쪽도 상수로 만들어 반대 방향 - 오른쪽이 상수면
+            // RIGHT는 담기지 않는다 - 을 함께 잠근다).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = B.x FROM (VALUES(1)) v(c) RIGHT JOIN dbo.B B WITH(NOLOCK) ON v.c = B.id
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.Equal("B.x", fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_FullJoinWithOneSideConstant_ShouldNotBeCollected()
+        {
+            // FULL은 양쪽 다 보장해야 한다 - 한쪽이 상수 원천(VALUES)이면 전체가
+            // 보장되지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = B.x FROM (VALUES(1)) v(c) FULL JOIN dbo.B B WITH(NOLOCK) ON v.c = B.id
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_PivotedSource_ShouldNotBeCollected()
+        {
+            // §12-6 침묵 표 - PIVOT은 보수적으로 막는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = p.x FROM (SELECT a, b FROM dbo.T) s PIVOT (SUM(b) FOR a IN ([1],[2])) p
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_UnpivotedSource_ShouldNotBeCollected()
+        {
+            // PIVOT과 같은 노드 계열(UnpivotedTableReference) - 같은 이유로 보수적.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = p.val FROM (SELECT a, b, c FROM dbo.T) s UNPIVOT (val FOR col IN (b, c)) p
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_ValuesConstructorSource_ShouldNotBeCollected()
+        {
+            // §12-6 침묵 표 - `FROM (VALUES(1)) v(c)`. VALUES는 기저 테이블과 무관하게
+            // 행을 만든다 - InlineDerivedTable은 항상 "아니오".
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = v.c FROM (VALUES(1)) v(c)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_ConstantDerivedTableWithoutFrom_ShouldNotBeCollected()
+        {
+            // §12-6 침묵 표 - `FROM (SELECT 1) v`. 안쪽 질의에 FROM이 없으므로
+            // 재귀가 "무결과 개념 자체가 없다"로 거짓을 낸다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = v.c FROM (SELECT 1 AS c) v
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_LeftJoinWithConstantLeftSide_ShouldNotBeCollected()
+        {
+            // §12-6 침묵 표 - `FROM (VALUES(1)) v LEFT JOIN T ON ...`. LEFT는 왼쪽
+            // 기준인데 왼쪽이 상수 원천이라 보장하지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = B.x FROM (VALUES(1)) v(c) LEFT JOIN dbo.B B WITH(NOLOCK) ON v.c = B.id
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_TableValuedFunctionSource_ShouldNotBeCollected()
+        {
+            // §12-6 침묵 표 - `FROM dbo.MyTvf(1)`. TVF는 비었는지 알 수 없다
+            // (SchemaObjectFunctionTableReference - "그 밖의 알지 못하는 노드"와
+            // 같은 취급이 아니라 명시적으로 "아니오"인 알려진 노드다).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = t.x FROM dbo.MyTvf(1) t
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_ParenthesizedJoinOfTwoNamedTables_IsCaptured()
+        {
+            // 재귀가 흐르는 자리 중 하나 - 괄호로 감싼 조인(JoinParenthesisTableReference).
+            // ScriptDom은 `(A JOIN B ON ...)`를 이 노드로 감싸 안쪽 QualifiedJoin을
+            // 별도로 보관한다(3 회차 보고서 PARSE SHAPES가 프로브로 확인). 감쌈을
+            // 벗기고 안쪽 조인에 그대로 재귀해야 한다 - 양쪽 다 이름 있는 테이블이면
+            // 담긴다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = B.x FROM (dbo.A A WITH(NOLOCK) INNER JOIN dbo.B B WITH(NOLOCK) ON A.id = B.id)
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.Equal("B.x", fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_ParenthesizedJoinWithConstantLeftSide_ShouldNotBeCollected()
+        {
+            // 위 시험의 대비 - 괄호 감쌈을 벗긴 뒤에도 안쪽 LEFT JOIN의 왼쪽 기준
+            // 판정이 그대로 적용돼야 한다. 왼쪽이 VALUES(상수 원천)이면 괄호가
+            // 있든 없든 보장하지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = B.x FROM ((VALUES(1)) v(c) LEFT JOIN dbo.B B WITH(NOLOCK) ON v.c = B.id)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_CatalogViewSource_IsCapturedDespitePredictingSilence()
+        {
+            // ★ §12-6 어긋난 칸(R5 - 되돌림 아님, 코드를 비틀지 않는다). 설계서
+            // §12-6은 `FROM sys.objects`를 "TVF·카탈로그 뷰"로 묶어 침묵을
+            // 예측했지만, ScriptDom은 카탈로그 뷰를 일반 명명 테이블과 똑같이
+            // NamedTableReference로 파싱한다(3 회차 보고서 PARSE SHAPES가 실측한
+            // 값 - 프로브로 확인, 짐작하지 않았다). §12-3의 "이름 있는 테이블 → 예"는
+            // 노드 종류만으로 판정하므로 스키마가 `sys`인지 가리지 않는다 - 그래서
+            // 실제 동작은 예측과 달리 **담긴다**. 코드를 비틀어 스키마 이름으로
+            // 특례를 만들지 않고, 이 시험이 실측값을 그대로 잠근다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = o.name FROM sys.objects o
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.Equal("o.name", fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_UnionAllWithOneConstantBranchInDerivedTable_ShouldNotBeCollected()
+        {
+            // §12-6 침묵 표 - `FROM (SELECT x FROM T UNION ALL SELECT 1) D`. 파생
+            // 테이블 안의 UNION/UNION ALL은 모든 갈래가 보장할 때만 참인데, 둘째
+            // 갈래(`SELECT 1`)는 FROM이 없어 보장하지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.x FROM (SELECT x FROM dbo.T UNION ALL SELECT 1) D
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_UnionAllWithBothNamedTableBranchesInDerivedTable_IsCaptured()
+        {
+            // 위 시험의 대비 - 두 갈래 다 이름 있는 테이블에서 오면 둘 다 보장하므로
+            // AND가 참이 되어 담긴다. UNION 재귀가 "모든 갈래"를 실제로 요구하는지
+            // (한쪽만 보장해도 통과시키는 뮤턴트라면 이 대비 없이는 못 잡는다)
+            // 이 둘의 쌍으로 확인한다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.x FROM (SELECT x FROM dbo.T1 UNION ALL SELECT x FROM dbo.T2) D
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.Equal("D.x", fact.Expression);
+        }
+
+        [Fact]
+        public void Extract_SiblingJsonArrayAggInSameSelect_ShouldSilenceTheNonAggregateSide()
+        {
+            // §12-5 - AggregateNames에 JSON_ARRAYAGG를 더한 근거. 목록에 없으면
+            // 형제 판정(ProjectionHasAggregate)이 이 형제를 못 보고 `@a = 1`을
+            // 그대로 담아 버린다 - HAVING·GROUP BY와 같은 함정(원본이 비어도
+            // JSON_ARRAYAGG는 GROUP BY 없이 1행, 빈 배열을 돌려준다).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @a INT, @b NVARCHAR(MAX)
+    SELECT @a = 1, @b = JSON_ARRAYAGG(x) FROM dbo.T WITH(NOLOCK)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_AggregateInsideDerivedTable_JsonObjectAgg_ShouldNotBeCollected()
+        {
+            // §12-5 - 같은 목록 누락이 FROM(파생 테이블) 경로에서도 샌다. 목록에
+            // 없으면 파생 테이블 안쪽 질의의 투영 집계 판정이 이 호출을 못 보고
+            // 원본이 비어도 1행(빈 객체)이 돌아온다는 사실을 놓친다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v NVARCHAR(MAX)
+    SELECT @v = A.m FROM (SELECT JSON_OBJECTAGG(k, val) AS m FROM dbo.U) A
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
         [SkippableFact]
         public void Extract_OverTheCorpus_ShouldCollectExactlyTheseRows()
         {

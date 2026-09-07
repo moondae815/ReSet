@@ -173,6 +173,24 @@ namespace ReSet.Core.Services
     /// 여부와 무관하게 대상 칸이 이 SELECT의 부분(`@v = ID`)만을 가리키는 것이 맞는지부터
     /// 이 판정 범위 밖이라, 좁게 잡는다. 코퍼스에 두 모양 다 0건이다(전수 스캔 - 아래
     /// 코퍼스 시험의 <c>setVariables</c> · <c>compoundSetVariables</c>와 나란히 잰다).
+    ///
+    /// [3 회차 - 진리 조건을 한 문장으로 못박고 층을 판정에서 없앴다] 위 세 함정
+    /// (FROM 집계·`HAVING`·`GROUP BY`·형제)은 전부 같은 진리 조건 - "이 질의의 기저
+    /// 테이블이 모두 비면, 이 질의는 0행을 돌려준다" - 이 뚫리는 자리였는데, 예전
+    /// 코드는 이 조건을 여섯 자리에 흩어 각자 다른 층만 봤다. FROM 집계 검사만
+    /// `node.FromClause.Accept(...)`로 하위까지 훑었고, `HAVING`·`GROUP BY`·형제
+    /// 검사는 **이 QuerySpecification 자신의 층**만 봤다. 그래서 같은 위험한 모양이
+    /// 파생 테이블·APPLY 안으로 한 층만 들어가면(예: `FROM (SELECT 1 c FROM T
+    /// GROUP BY ()) D`) 판정에서 벗어나 다시 열렸다 - 이 브랜치에서 전 범위 검토가
+    /// 세 번 났고 세 번 다 이 부류의 Critical이었다. 이 회차는 그 여섯 자리를
+    /// <see cref="NonAggregateAssignmentVisitor.GuaranteesZeroRowsWhenSourcesAreEmpty"/>
+    /// 라는 단일 재귀 술어로 접는다 - 그 술어가 FROM의 각 원천(이름 있는 테이블·파생
+    /// 테이블·조인·APPLY·VALUES·TVF·PIVOT/UNPIVOT·테이블 변수)에 "너는 기저 테이블이
+    /// 비면 0행을 보장하는가"를 재귀로 되묻는다. 다음 사람이 이 진리 조건을 넓힐
+    /// 때는 "어느 층에 검사를 추가할까"가 아니라 "이 새 노드 종류가 그 질문에 뭐라고
+    /// 답하는가"만 물으면 된다 - 층 자체가 판정에서 사라졌기 때문이다. 조건의
+    /// 집합은 이 회차에서 넓히거나 좁히지 않았다(코퍼스 대장 52행 불변) - 설계서
+    /// `docs/superpowers/specs/2026-09-06-대입-감쌈-벗기기-design.md` §12.
     /// </summary>
     public static class NonAggregateAssignmentExtractor
     {
@@ -195,12 +213,20 @@ namespace ReSet.Core.Services
         /// 반드시 `OVER(...)`를 동반해 행마다 계산되는 윈도 함수라 결과 카디널리티를
         /// 줄이지 않는다 - 이 목록이 막으려는 "0행이 1행이 된다"는 함정 자체가
         /// 성립하지 않으므로 넣지 않는다.
+        ///
+        /// [3 회차 - JSON_ARRAYAGG · JSON_OBJECTAGG를 더한다] 설계서 §12-5. 같은
+        /// Microsoft 분류("집계 함수 (Transact-SQL)")의 구성원이고 GROUP BY가 없으면
+        /// 원본이 비어도 정확히 1행(빈 배열/빈 객체)을 돌려주는 같은 진리조건을
+        /// 공유한다 - 목록에 없어서 형제·FROM(파생 테이블) 양쪽에서 새는 것을
+        /// 실행으로 재현했다(`Extract_SiblingJsonArrayAggInSameSelect_...` ·
+        /// `Extract_AggregateInsideDerivedTable_JsonObjectAgg_...`).
         /// </summary>
         private static readonly HashSet<string> AggregateNames = new(StringComparer.OrdinalIgnoreCase)
         {
             "MIN", "MAX", "SUM", "AVG", "COUNT", "COUNT_BIG", "STDEV", "STDEVP",
             "VAR", "VARP", "CHECKSUM_AGG", "STRING_AGG", "GROUPING", "GROUPING_ID",
-            "APPROX_COUNT_DISTINCT", "APPROX_PERCENTILE_CONT", "APPROX_PERCENTILE_DISC"
+            "APPROX_COUNT_DISTINCT", "APPROX_PERCENTILE_CONT", "APPROX_PERCENTILE_DISC",
+            "JSON_ARRAYAGG", "JSON_OBJECTAGG"
         };
 
         /// <summary>공통 앞머리. 두 갈래 모두 여기서 시작한다.</summary>
@@ -335,8 +361,15 @@ namespace ReSet.Core.Services
             public override void Visit(GoToStatement node) => HasBackwardFlow = true;
         }
 
-        /// <summary>FROM 절이 집계를 품었는지 본다(클래스 주석의 "집계는 FROM 절에도 산다").</summary>
-        private sealed class AggregateInFromDetector : TSqlFragmentVisitor
+        /// <summary>
+        /// 어떤 조각이든 그 안에 집계 함수 호출이 있는지 본다(클래스 주석의 "집계는
+        /// FROM 절에도 산다"). 3 회차 - 이름이 "FROM" 전용이던 시절의 흔적이었다.
+        /// 지금은 <see cref="GuaranteesZeroRowsWhenSourcesAreEmpty"/>가 질의 층마다
+        /// 재귀로 재사용하므로(형제 SelectSetVariable의 식이든, 파생 테이블 안쪽
+        /// QuerySpecification의 투영이든) 훑는 대상이 FROM 절 하나로 고정돼 있지
+        /// 않다 - 이름을 그 실태에 맞춘다.
+        /// </summary>
+        private sealed class AggregateFunctionDetector : TSqlFragmentVisitor
         {
             public bool Found { get; private set; }
 
@@ -393,44 +426,32 @@ namespace ReSet.Core.Services
             // 계속하므로 중첩된 QuerySpecification도 그대로 방문된다.
             public override void Visit(QuerySpecification node)
             {
-                // FROM이 없으면 무결과가 성립하지 않는다 - 확정 사실 문장이 거짓이 된다.
-                if (node.FromClause == null) return;
-
                 // WITH를 단 문장에 속하면 침묵한다(클래스 주석의 "집계는 CTE에도 산다").
+                // 문장 범위로 재는 판정이라 층에 이미 무관하다 - 재귀 술어 밖에
+                // 그대로 둔다(설계서 §12 "CTE 판정은 지금 방식 그대로 둬도 된다").
                 if (_cteStatements.Contains(node.StartOffset)) return;
 
-                var aggregateInFrom = new AggregateInFromDetector();
-                node.FromClause.Accept(aggregateInFrom);
-                if (aggregateInFrom.Found) return;
+                // SelectSetVariable이 아닌 형제가 있으면 대상 칸이 이 SELECT의
+                // 부분만을 가리키는 것이 맞는지가 판정 범위 밖이라 좁게 침묵한다(클래스
+                // 주석 "형제도 같은 함정을 연다"). 이것도 "이 문장이 판정 대상 대입문인가"
+                // 를 가리는 관문이지 "무결과 시 0행"의 진리치 자체는 아니라서 재귀
+                // 술어 밖에 둔다 - 파생 테이블 등 재귀 층에는 SelectSetVariable이
+                // 애초에 없으므로 이 조건을 술어 안에 넣으면 모든 재귀가 공허하게
+                // 거짓이 되어 버린다.
+                if (HasNonSetVariableSibling(node)) return;
 
-                // GROUP BY 없는 HAVING은 암묵적으로 전체를 한 그룹으로 묶어 무결과여도
-                // 1행을 돌려준다(클래스 주석 "암묵적 그룹화도 진리조건을 뚫는다"). 우변
-                // 모양과 무관하게 이 문장 전체를 침묵한다 - GROUP BY 유무는 가리지 않는다.
-                if (node.HavingClause != null) return;
-
-                // ★ 둘째 재검토 - 같은 진리조건이 GROUP BY 쪽에도 열려 있었다. 총계
-                // 그룹화 집합(grand total grouping set)은 원본이 비어도 그룹을 정확히
-                // 1개 만들어 1행을 돌려준다 - `GROUP BY ()` · `GROUPING SETS(())`(빈
-                // 원소를 하나라도 포함) · `ROLLUP(...)` · `CUBE(...)` · `... WITH ROLLUP`가
-                // 전부 이 모양이고, ScriptDom으로 직접 파싱해 각각의
-                // QuerySpecification.GroupByClause가 non-null임을 확인했다(단위 시험
-                // 일곱 개가 근거). `WITH ROLLUP`형은 우변이 맨 컬럼이어도 합법이라
-                // 2 회차의 리터럴 개방과 무관하게 1 회차부터 열려 있던 자리다.
-                //
-                // 변형을 하나하나 가려서 총계 그룹인 것만 침묵시키는 조건은 새로
-                // 만들지 않는다 - HavingClause 가드와 같은 논리로, 조건이 한 군데라도
-                // 새면 정반대 문장이 「수정 금지」 표에 그대로 실리고 뒤에서 거를 장치가
-                // 없다. 그래서 `GroupByClause`가 있으면 총계 그룹이 실제로 생기든
-                // 안 생기든(평범한 `GROUP BY A.x`처럼 총계 행이 없는 경우까지) 통째로
-                // 침묵한다 - 보수적 선택이다. 코퍼스에 SelectSetVariable을 가진
-                // QuerySpecification 중 GROUP BY를 단 것이 0건이라 이 선택의 비용은
-                // 지금 0이다(아래 코퍼스 시험의 groupByOnSetVariableQueries).
-                if (node.GroupByClause != null) return;
-
-                // 형제 SelectSetVariable이 집계를 품었거나, SelectSetVariable이 아닌
-                // 형제가 있으면 이 SELECT는 HAVING과 같은 함정을 연다(위 주석 "형제도
-                // 같은 함정을 연다"). 문장 전체를 비집계 쪽에서 침묵한다.
-                if (HasNonSetVariableSibling(node) || HasAggregateSibling(node)) return;
+                // ★ 3 회차(설계서 §12) - 진리 조건을 단일 재귀 술어로 접는다. 예전
+                // 코드는 여기서 FROM 유무 · FROM 집계 · HAVING · GROUP BY · 형제 집계를
+                // 조기 반환 다섯으로 각각 따로 봤고, 그중 FROM 집계 하나만
+                // `node.FromClause.Accept(...)`로 하위까지 훑었다 - HAVING·GROUP BY·
+                // 형제는 **이 질의 자신의 층만** 봤다. 그래서 같은 위험한 모양이 파생
+                // 테이블·APPLY 안으로 한 층만 들어가면 판정에서 벗어나 다시 열렸다
+                // (클래스 주석 "3 회차 검토가 세 번째로 낸 Critical"). 지금은 다섯 조건
+                // 전부(FROM 유무 포함)를 <see cref="GuaranteesZeroRowsWhenSourcesAreEmpty"/>
+                // 하나로 묻는다 - 그 술어가 FROM의 각 원천에 **같은 질문을 재귀로**
+                // 던지므로(<see cref="GuaranteesZeroRows(TableReference)"/>), 판정이
+                // "어느 층에 가드를 걸었는가"에서 자유로워진다.
+                if (!GuaranteesZeroRowsWhenSourcesAreEmpty(node)) return;
 
                 foreach (var element in node.SelectElements)
                 {
@@ -479,23 +500,188 @@ namespace ReSet.Core.Services
                 => node.SelectElements.Any(element => element is not SelectSetVariable);
 
             /// <summary>
-            /// 형제 <see cref="SelectSetVariable"/>의 식 어딘가에 집계 함수가 있는가
-            /// (클래스 주석 "형제도 같은 함정을 연다"). <see cref="AggregateInFromDetector"/>를
-            /// 재사용한다 - FROM 절 전용이 아니라 어떤 조각을 훑어도 그 안의
-            /// <see cref="FunctionCall"/> 이름만 본다.
+            /// §12-2 진리 조건 - "이 질의의 기저 테이블이 모두 비면, 이 질의는 0행을
+            /// 돌려준다" - 을 한 문장으로 못박은 단일 재귀 술어(설계서 §12-3). 이
+            /// QuerySpecification 자신의 층에서 HAVING·GROUP BY·투영 집계를 보고,
+            /// FROM의 각 원천에는 <see cref="GuaranteesZeroRows(TableReference)"/>로
+            /// 같은 질문을 재귀로 던진다 - 이 재귀가 3 회차의 핵심이다. 최상위
+            /// 대입문에서 호출될 때도, 파생 테이블·APPLY 안쪽 QuerySpecification에서
+            /// 재귀로 호출될 때도 **같은 메서드, 같은 조건**을 쓴다 - "어느 층인가"가
+            /// 판정에서 사라지는 지점이 여기다.
+            ///
+            /// [이 술어를 넓힐 때] 새 FROM 원천 종류를 추가로 담고 싶으면
+            /// <see cref="GuaranteesZeroRows(TableReference)"/>의 switch에 그 노드
+            /// 종류가 "기저 테이블이 비면 0행을 보장하는가"의 답을 더하면 된다 - 층을
+            /// 가리키는 코드를 이 메서드에 새로 얹지 마라, 그러면 3 회차 이전의 결함이
+            /// 그대로 되돌아온다.
             /// </summary>
-            private static bool HasAggregateSibling(QuerySpecification node)
+            private static bool GuaranteesZeroRowsWhenSourcesAreEmpty(QuerySpecification query)
             {
-                foreach (var element in node.SelectElements)
-                {
-                    if (element is not SelectSetVariable sibling || sibling.Expression == null) continue;
+                // FROM이 없으면 "무결과"라는 개념 자체가 없다 - 한 행이 반드시 돌아와
+                // 확정 사실 문장이 거짓이 된다.
+                if (query.FromClause == null) return false;
 
-                    var detector = new AggregateInFromDetector();
-                    sibling.Expression.Accept(detector);
+                // HAVING·GROUP BY는 변형을 가리지 않고 존재만 본다 - 보수적 선택이다
+                // (클래스 주석 "암묵적 그룹화도 진리조건을 뚫는다" · "★ 둘째 재검토"와
+                // 같은 논리를 재귀 층에도 그대로 적용한다. 파생 테이블 안쪽의 평범한
+                // `GROUP BY`까지 함께 침묵시키는 것도 포함해서다 - 설계서 §12-6의
+                // 마지막 "담긴다" 행이 이 자리다).
+                if (query.HavingClause != null) return false;
+                if (query.GroupByClause != null) return false;
+
+                // 투영(SELECT 목록)에 집계가 있으면 GROUP BY가 없어도 T-SQL이 암묵적
+                // 전체 그룹을 만들어 무결과여도 1행을 돌려준다 - HAVING·GROUP BY와
+                // 같은 함정이다. 최상위 대입문에서는 형제 SelectSetVariable의 식이
+                // 이 검사에 걸리고(구 코드의 HasAggregateSibling이 하던 일), 파생
+                // 테이블 등 재귀 층에서는 그 층의 SelectScalarExpression이 걸린다 -
+                // 두 자리가 결국 "이 QuerySpecification의 SELECT 목록"이라는 같은
+                // 개념이라 이 회차가 하나로 합쳤다.
+                if (ProjectionHasAggregate(query)) return false;
+
+                // FROM 층 - 쉼표로 나열한 원천은 암묵적 CROSS JOIN이므로(ScriptDom도
+                // 별도 조인 노드 없이 TableReferences에 여러 항목으로 그대로 담는다.
+                // 프로브로 확인 - 3 회차 보고서 PARSE SHAPES) INNER/CROSS와 같은 논리로
+                // 아무 하나만 보장해도 전체가 보장된다.
+                return query.FromClause.TableReferences.Any(GuaranteesZeroRows);
+            }
+
+            /// <summary>
+            /// 이 질의 자신의 투영에 집계 함수가 있는가(위 술어의 한 조각).
+            /// <see cref="AggregateFunctionDetector"/>를 재사용한다 - 형제
+            /// <see cref="SelectSetVariable"/>이든 파생 테이블의
+            /// <see cref="SelectScalarExpression"/>이든, "이 SELECT 목록의 식 하나에
+            /// 집계 함수 호출이 있는가"라는 같은 질문이다.
+            /// </summary>
+            private static bool ProjectionHasAggregate(QuerySpecification query)
+            {
+                foreach (var element in query.SelectElements)
+                {
+                    ScalarExpression? expression = element switch
+                    {
+                        SelectScalarExpression scalar => scalar.Expression,
+                        SelectSetVariable setVariable => setVariable.Expression,
+                        _ => null
+                    };
+                    if (expression == null) continue;
+
+                    var detector = new AggregateFunctionDetector();
+                    expression.Accept(detector);
                     if (detector.Found) return true;
                 }
 
                 return false;
+            }
+
+            /// <summary>
+            /// FROM 층 - 원천 하나가 "기저 테이블이 비면 0행을 보장"하는가(설계서
+            /// §12-3의 표를 그대로 코드로 옮긴다). 파싱 모양은 짐작하지 않고 프로브로
+            /// 직접 재서 확인했다(3 회차 보고서 PARSE SHAPES) - 쉼표로 나열한 원천은
+            /// 별도 조인 노드가 아니라 <see cref="FromClause.TableReferences"/>에 여러
+            /// 항목으로 그대로 들어오고, <c>UnqualifiedJoinType</c>은 CrossJoin·
+            /// CrossApply·OuterApply 셋뿐이며(LEFT/RIGHT APPLY라는 것은 없다),
+            /// <c>QualifiedJoinType</c>은 Inner·LeftOuter·RightOuter·FullOuter 넷뿐이다.
+            /// 모르는 노드 종류는 <c>default</c>로 떨어져 거짓이다 - "모르는 것은
+            /// 담지 않는다"(§12-3 마지막 행). 이 스위치에 없는 종류를 새로 담고 싶은
+            /// 다음 사람은 여기에 그 노드의 답만 추가하면 된다 - 호출부를 고칠 필요가
+            /// 없다(재귀가 알아서 새 갈래를 태운다).
+            /// </summary>
+            private static bool GuaranteesZeroRows(TableReference reference)
+            {
+                switch (reference)
+                {
+                    // 이름 있는 테이블 - 기저 테이블이 비면 0행이다. 카탈로그 뷰
+                    // (`sys.objects` 등)도 ScriptDom에서 이 노드와 구분되지 않는다 -
+                    // 3 회차 보고서 PREDICTION SCORECARD가 이 자리의 어긋남을 그대로
+                    // 적는다(§12-6은 카탈로그 뷰를 "침묵"으로 예측했지만 이 술어는
+                    // "이름 있는 테이블"을 노드 종류로만 판정하므로 구분하지 못한다).
+                    case NamedTableReference:
+                        return true;
+
+                    // 파생 테이블 - 안쪽 질의가 같은 질문에 재귀로 답할 때만.
+                    case QueryDerivedTable derived:
+                        return GuaranteesZeroRows(derived.QueryExpression);
+
+                    // 괄호로 감싼 조인 - 감쌈을 벗기고 안쪽 조인에 그대로 묻는다.
+                    case JoinParenthesisTableReference paren:
+                        return GuaranteesZeroRows(paren.Join);
+
+                    case QualifiedJoin qualified:
+                        return qualified.QualifiedJoinType switch
+                        {
+                            // INNER - 공집합 × 무엇 = 공집합이므로 한쪽만 보장해도 된다.
+                            QualifiedJoinType.Inner =>
+                                GuaranteesZeroRows(qualified.FirstTableReference)
+                                || GuaranteesZeroRows(qualified.SecondTableReference),
+                            // LEFT - 결과 행 수가 왼쪽 행 수 이상이므로 왼쪽이 보장할
+                            // 때만(설계서 §12-4 - 검토와 갈리는 판단. 오른쪽이 비어도
+                            // 왼쪽에 행이 있으면 NULL이 채워진 1행이 돌아오지만, 확정
+                            // 문장은 "무결과**면**"이라는 조건문이라 왼쪽에 행이 있는
+                            // 경우는 애초에 전건이 거짓이다).
+                            QualifiedJoinType.LeftOuter => GuaranteesZeroRows(qualified.FirstTableReference),
+                            QualifiedJoinType.RightOuter => GuaranteesZeroRows(qualified.SecondTableReference),
+                            // FULL - 양쪽 다 보장해야 결과도 보장된다.
+                            QualifiedJoinType.FullOuter =>
+                                GuaranteesZeroRows(qualified.FirstTableReference)
+                                && GuaranteesZeroRows(qualified.SecondTableReference),
+                            _ => false
+                        };
+
+                    case UnqualifiedJoin unqualified:
+                        return unqualified.UnqualifiedJoinType switch
+                        {
+                            // CROSS JOIN은 INNER와 같은 논리(한쪽만 보장해도 됨).
+                            UnqualifiedJoinType.CrossJoin =>
+                                GuaranteesZeroRows(unqualified.FirstTableReference)
+                                || GuaranteesZeroRows(unqualified.SecondTableReference),
+                            // CROSS/OUTER APPLY - 오른쪽은 왼쪽의 매 행마다 평가되므로
+                            // 왼쪽이 비면 오른쪽 내용과 무관하게 결과가 비고, 왼쪽이
+                            // 안 비면 오른쪽만 보고는 결과를 알 수 없다. 그래서 왼쪽만
+                            // 본다 - 오른쪽 파생 테이블은 재귀하지 않는다(§12-3
+                            // "CROSS/OUTER APPLY | 왼쪽이 보장할 때만").
+                            UnqualifiedJoinType.CrossApply => GuaranteesZeroRows(unqualified.FirstTableReference),
+                            UnqualifiedJoinType.OuterApply => GuaranteesZeroRows(unqualified.FirstTableReference),
+                            _ => false
+                        };
+
+                    // VALUES(InlineDerivedTable) · TVF(SchemaObjectFunctionTableReference) ·
+                    // PIVOT/UNPIVOT · 테이블 변수(VariableTableReference) · 그 밖의
+                    // 알지 못하는 노드 - 전부 "아니오"(§12-3). VALUES는 기저 테이블과
+                    // 무관하게 행을 만들고, TVF·테이블 변수는 비었는지 알 수 없으며,
+                    // PIVOT/UNPIVOT은 보수적으로 막는다.
+                    default:
+                        return false;
+                }
+            }
+
+            /// <summary>
+            /// 파생 테이블 안쪽 질의에 같은 질문을 던진다.
+            /// <see cref="QuerySpecification"/>이면 <see cref="GuaranteesZeroRowsWhenSourcesAreEmpty"/>
+            /// 로 재귀하고, <c>UNION</c>/<c>UNION ALL</c>(<see cref="BinaryQueryExpression"/>
+            /// 이고 <see cref="BinaryQueryExpressionType.Union"/>)이면 모든 갈래가
+            /// 보장할 때만 참이다(설계서 §12-3 "파생 테이블 안의 UNION/UNION ALL은
+            /// 모든 갈래가 보장할 때만 참"), 괄호는 벗긴다. `EXCEPT`/`INTERSECT`는
+            /// 설계서의 사전 예측표에 없는 모양이라 다루지 않는다 - "모르는 것은
+            /// 담지 않는다"로 떨어진다(보수적 - 실제로는 두 갈래가 다 보장해도
+            /// 참이지만, 이 회차의 범위가 아니라 넓히지 않는다).
+            /// </summary>
+            private static bool GuaranteesZeroRows(QueryExpression? expression)
+            {
+                switch (expression)
+                {
+                    case QuerySpecification spec:
+                        return GuaranteesZeroRowsWhenSourcesAreEmpty(spec);
+
+                    case BinaryQueryExpression binary
+                        when binary.BinaryQueryExpressionType == BinaryQueryExpressionType.Union:
+                        return GuaranteesZeroRows(binary.FirstQueryExpression)
+                               && GuaranteesZeroRows(binary.SecondQueryExpression);
+
+                    case QueryParenthesisExpression paren:
+                        return GuaranteesZeroRows(paren.QueryExpression);
+
+                    default:
+                        return false;
+                }
             }
         }
     }
