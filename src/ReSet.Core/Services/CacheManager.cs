@@ -276,6 +276,16 @@ namespace ReSet.Core.Services
         //     않는다** - 19가 아직 어떤 산출물에도 적용되지 않았다(명세서 재생성 전).
         //     설계는 `docs/superpowers/specs/2026-09-06-대입-감쌈-벗기기-design.md`
         //     §10에 있다.
+        //     [2026-09-07 최종 브랜치 검토 - 위 넓힘이 연 구멍을 가드 둘로 닫는다]
+        //     최상위 리터럴 개방(`case Literal: return true;`)이 `GROUP BY` 없는
+        //     `HAVING`과 만나면 T-SQL의 암묵적 한 그룹 규칙이 무결과여도 1행을 돌려줘
+        //     "무결과 시 대입이 일어나지 않는다"는 확정 문장을 거짓으로 만들고
+        //     (`SELECT @v = 1 FROM T HAVING COUNT(*) = 0`), 같은 SelectElements 안의
+        //     형제 집계(`SELECT @a = 1, @b = COUNT(*) FROM T`)도 같은 함정을 열어
+        //     정반대 확정 문장 둘을 한 표에 나란히 싣는다. `HavingClause` 존재와
+        //     형제(집계를 품었거나 `SelectSetVariable`이 아닌) 요소를 침묵 조건으로
+        //     추가해 닫았다 - 코퍼스(52행)에 두 모양 다 0건이라 대장 행이 한 행도 안
+        //     줄었다. 설계는 위 §10과 같은 문서 §11-5(다)·§11-9에 있다.
         private const int CurrentCacheFormatVersion = 19;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
