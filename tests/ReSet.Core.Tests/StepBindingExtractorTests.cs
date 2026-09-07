@@ -1,4 +1,3 @@
-using System.Linq;
 using ReSet.Core.Services;
 using Xunit;
 
@@ -105,6 +104,39 @@ UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_v_valIncVat AS INT);
             Assert.Equal("execute", fact.CallName);
             Assert.Equal("SQL_UPDATE_13", fact.StatementName);
             Assert.Equal("1.1", fact.Value);
+        }
+
+        // 키 클래스를 `p_[A-Za-z_0-9]+` 로 좁혀도 나머지 테스트가 전부 통과한다 -
+        // 오늘 코퍼스의 키 894 개가 전부 `p_` 로 시작하기 때문이다. 그러나 키 이름에
+        // 기대는 것은 이 설계가 **금지한 바로 그것**이다: 모델은 키를 마음대로 개명한다
+        // (`@v_valIncVat` -> `p_incVat`). 접두사 규약을 가정하면 개명하는 날 눈이 먼다.
+        [Fact]
+        public void Extract_DoesNotAssumeKeysCarryTheParameterPrefix()
+        {
+            var markdown = "### S01\n\n```pseudocode\n" +
+                           "execute(SQL_X, { ymd: batchYmd, incVat: 1.1 })\n```";
+
+            var facts = StepBindingExtractor.Extract(markdown);
+
+            Assert.Equal(2, facts.Count);
+            Assert.Contains(facts, f => f.Key == "incVat" && f.Value == "1.1");
+        }
+
+        // 값 클래스를 `[^,}\n]+` 로 줄 앵커해도 나머지 테스트가 전부 통과한다 -
+        // 오늘 코퍼스에 줄바꿈을 낀 값이 0 이기 때문이다. 값은 **원문**이라
+        // 줄바꿈에서 끊지 않는다.
+        [Fact]
+        public void Extract_KeepsValueTextThatWrapsToTheNextLine()
+        {
+            var markdown = "### S05\n\n```pseudocode\n" +
+                           "execute(SQL_X, {\n" +
+                           "    p_total: baseAmount\n" +
+                           "             + surcharge\n" +
+                           "})\n```";
+
+            var fact = Assert.Single(StepBindingExtractor.Extract(markdown));
+            Assert.Contains("baseAmount", fact.Value);
+            Assert.Contains("surcharge", fact.Value);
         }
 
         [Fact]
