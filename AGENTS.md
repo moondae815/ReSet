@@ -222,7 +222,7 @@ dotnet test
 
 - [ ] 컴파일 에러 0개, 경고 **0건**인지 확인했는가? 증분 빌드는 경고를 다시 보고하지 않아 이미 있던 경고도 0으로 보이므로 `dotnet clean && dotnet build 2>&1 | grep -cE "warning CS"`로 세야 한다. (기대 개수를 적지 않는다 — 여기 「정확히 8건」으로 적혀 있던 줄이 `8875e9f`가 그 경고를 지운 뒤로도 낡은 채 남아 있었다.)
 - [ ] `dotnet test` 명령어를 실행하여 **실패 0, 건너뜀 0**으로 모든 단위 테스트가 통과(Passed)하였는가? (기대 개수를 여기 적지 않는다 — 테스트를 하나 추가할 때마다 이 줄이 거짓이 되고, 낡은 숫자는 올바른 빌드에서 항목을 실패시켜 다음 사람이 이 체크리스트를 무시하도록 길들인다. 실제로 하루 만에 네 번 낡았다.)
-- [ ] 워크트리라면 코퍼스 재료 **넷**을 심링크했는가? 일부만 걸면 다른 테스트가 대신 꺼지는데 총 건너뜀 수는 줄어 성공처럼 보인다(`CorpusSetupGuardTests`).
+- [ ] 워크트리라면 코퍼스 재료 `output/` **하나**를 심링크했는가? 안 걸면 코퍼스 단언이 통째로 건너뛴다(`CorpusSkip`). 2026-09-07에 재료가 넷에서 하나가 되면서 「반쯤 설정」 상태와 그것을 막던 `CorpusSetupGuardTests`가 함께 폐기됐다 — 이 줄이 「넷」이라고 적힌 채 남아 있었다.
 - [ ] 취소 가능한 `await`를 감싸는 `catch`에 `when (ex is not OperationCanceledException)` 필터를 달았는가? (`CancellationPolicyTests`가 자동 검사하며, 기준선 파일 `tests/ReSet.Core.Tests/cancellation-policy-baseline.txt`의 숫자는 고칠 때마다 함께 내려야 한다)
 - [ ] AGENTS.md에 600바이트를 넘는 줄을 만들지 않았는가? 그런 줄은 규칙이 아니라 문단이다. (`DocumentationBudgetTests`가 자동 검사하며, 상한은 `tests/ReSet.Core.Tests/documentation-budget-baseline.txt`에 있다)
 - [ ] 심볼(클래스·메서드·상수)을 지웠다면 `grep -rn "<지운 이름>" docs/`로 남은 서술을 함께 고쳤는가? **그 grep은 이름 없이 산문으로만 쓴 자리를 원리적으로 못 잡는다** — 지운 심볼이 *하던 일*의 명사구로 2차 스윕하라. 기계 검사로 대신할 수 없다(문서 전문 대조는 오탐 88%). 실측 둘은 `docs/known-defects.md`의 「문서 스윕이 놓친 자리」에 있다.
