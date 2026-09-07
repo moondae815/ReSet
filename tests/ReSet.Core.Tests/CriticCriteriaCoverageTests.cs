@@ -208,13 +208,27 @@ namespace ReSet.Core.Tests
             // 그 축에 영영 닿지 않는다 - 규칙 5의 짝(바로 위 항목)과 형제다.
             var prompt = await CaptureCriticPromptAsync();
 
-            // 세 요소를 따로 잠근다. 하나로 뭉치면 문장이 반만 남아도 통과한다.
+            // 다섯 요소를 따로 잠근다. 하나로 뭉치면 문장이 반만 남아도 통과한다.
             // (a) 방출 SQL에 그 `DECLARE`가 남아야 한다
             Assert.Contains("DECLAREs with an initial value still carries that `DECLARE`", prompt);
             // (b) 바인딩으로 넘기면 타입 계약을 잃는다 - 감점 사유가 그것이다
             Assert.Contains("passes that value as a binding parameter instead has dropped the type contract", prompt);
             // (c) 주석에 적는 것은 못박는 것이 아니다
             Assert.Contains("stated only in a comment is not pinned", prompt);
+
+            // (d) 감점 사유에 관할이 붙어야 한다. 「바인딩 목록에는 원본 프로시저의
+            // 파라미터만 들어간다」는 절대 명제는 거짓이고, 같은 프롬프트의 Few-Shot이
+            // 그것을 세 번 반증한다 - `p_runId`(규칙 5가 입력에 더하지 말라고 해서
+            // 제어 테이블에서 읽는 값)와 `p_from`/`p_to`(규칙 8-1의 청크 경계)는 원본
+            // 프로시저의 파라미터가 아닌데 바인딩 목록에 있다. 그 명제를 진 채점
+            // 문장은 옳은 청크·저널 바인딩을 감점 대상으로 만들고, 자가 수정이 그것을
+            // 뜯어내 규칙 4(c)·8-1과 정면으로 부딪힌다 - 짝 규약이 반대 부호로 돈다.
+            Assert.Contains("not for a constant the source declared with its initial value", prompt);
+            Assert.DoesNotContain("the original procedure's parameters only", prompt);
+
+            // (e) 반대편도 함께 막는다. 오케스트레이션 자신의 값을 바인딩했다고
+            // 감점하면 옳게 쓴 단계가 깎이고 자가 수정이 그 바인딩을 뜯어낸다.
+            Assert.Contains("penalize a binding list for carrying a run id, a step code, or chunk bounds", prompt);
         }
     }
 }
