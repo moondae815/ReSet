@@ -2304,7 +2304,13 @@ commit()
 // mid-run failure leaves the earlier chunks durably committed. The chunk key must be a
 // column that actually exists in the target schema (rule 12), AND one where `from + size`
 // means something - an integer identity or sequence. If the business key is not (a CHAR(8)
-// date, say), chunk by the identity column and keep the business filter in the WHERE.
+// date, a VARCHAR client id, a composite key), you have two options and only two: chunk by
+// an integer identity column and keep the business filter in the WHERE, or - when no such
+// column exists - use the STRING/COMPOSITE key pattern below, which reads the next boundary
+// from the data with MAX instead of computing it. Never advance a non-integer key by
+// addition: `'abc' + 10000` either concatenates (matching zero rows, so the loop finishes
+// silently and reports success while the DELETE it already committed stays destroyed) or
+// fails to convert.
 lo, hi = queryRow(SQL_CHUNK_BOUNDS, { p_batchDate: batchYmd })  // MIN, MAX - both inclusive
 IF lo IS NULL: skip the loop      // the bounds query matched no rows
 from = lo
@@ -2363,8 +2369,12 @@ SELECT @p_batchDate, Col1, SUM(Col2) FROM dbo.SourceTable
  GROUP BY Col1;
 ```
 
-* Chunking Pattern (Combining chunking keys with existing business filters):
+* Chunking Pattern - NUMERIC key only (Combining chunking keys with existing business filters):
 ```pseudocode
+// `from + N` is arithmetic, so this shape is valid ONLY when the chunk key is an integer
+// type. For a string or composite key use the next example - never advance a string key
+// by addition; `'abc' + 10000` either concatenates (matching zero rows and finishing
+// silently) or fails to convert.
 lo, hi = queryRow(SQL_ID_BOUNDS, {})   // MIN, MAX - both inclusive
 IF lo IS NULL: skip the loop
 from = lo
@@ -2385,6 +2395,68 @@ INSERT INTO TargetTable (ID, Col1)
 SELECT ID, Col1 FROM SourceTable
  WHERE Status = 'P'                          -- Preserve original filter!
    AND ID >= @p_from AND ID < @p_to;         -- Chunking condition
+```
+
+* Chunking Pattern - STRING or COMPOSITE key (the key cannot be advanced by arithmetic):
+```pseudocode
+lo, hi = queryRow(SQL_KEY_BOUNDS, { p_batchDate: batchDate })   // MIN, MAX - both inclusive
+IF lo IS NULL: skip the loop
+from = lo
+WHILE from <= hi:
+    // The next boundary comes from the DATA, not from arithmetic. Ask the server for the
+    // LAST key of the next N rows.
+    to = queryScalar(SQL_CHUNK_UPPER_BOUND, { p_batchDate: batchDate, p_from: from, p_size: 10000 })
+    IF to IS NULL: to = hi
+    beginTransaction()
+    execute(SQL_COPY_CHUNK_BY_KEY, { p_from: from, p_to: to })
+    commit()
+    IF to >= hi: exit the loop        // `to` is INCLUSIVE here, so stop once it reaches MAX
+    from = nextKeyAfter(to)           // see SQL_NEXT_KEY - never reuse `to` as the next `from`
+```
+```sql
+-- SQL_KEY_BOUNDS - the original business filter belongs here too
+SELECT MIN(ClientID), MAX(ClientID) FROM SourceTable WHERE BatchDate = @p_batchDate;
+
+-- SQL_CHUNK_UPPER_BOUND - the LAST key of the next @p_size rows.
+-- It MUST be MAX. `MIN` over a set filtered by `ClientID >= @p_from` is `@p_from` itself,
+-- so `to` would equal `from`, the range would be empty and the WHILE loop would never
+-- advance. `TOP ... ORDER BY` then becomes dead code, which is the tell that MIN is wrong.
+SELECT MAX(ClientID) FROM (
+    SELECT DISTINCT TOP (@p_size) ClientID
+      FROM SourceTable
+     WHERE BatchDate = @p_batchDate
+       AND ClientID >= @p_from
+     ORDER BY ClientID
+) AS K;
+
+-- SQL_COPY_CHUNK_BY_KEY - `to` is INCLUSIVE, so the predicate uses `<=`
+INSERT INTO TargetTable (ClientID, Col1)
+SELECT ClientID, Col1 FROM SourceTable
+ WHERE BatchDate = @p_batchDate                -- Preserve original filter!
+   AND ClientID >= @p_from AND ClientID <= @p_to;
+
+-- SQL_NEXT_KEY - the smallest key strictly greater than the chunk we just finished
+SELECT MIN(ClientID) FROM SourceTable
+ WHERE BatchDate = @p_batchDate AND ClientID > @p_to;
+```
+
+* Carrying a computed expression from the spec's mapping table into the INSERT:
+```sql
+-- SQL_INSERT_FROM_MAPPING
+-- The `### INSERT 대상 테이블:` mapping table in the spec gives, for every target column,
+-- the SOURCE EXPRESSION - not just a source column. Copy that expression VERBATIM.
+-- A cast or a rounding call is part of the amount, not decoration: dropping
+-- `CAST(... AS INT)` lets an implicit conversion round instead of truncate, and the two
+-- differ by one unit of currency on every row that has a fraction. Same for the third
+-- argument of ROUND - it selects round-vs-truncate and it comes from the source data.
+INSERT INTO dbo.TargetTable (BatchDate, ClientID, CLComm, CLEtc, PGVat)
+SELECT @p_batchDate,
+       X.ClientID,
+       CAST(X.CLComm AS INT),                       -- mapping table says CAST - keep it
+       CAST(X.CLEtc AS INT),
+       CAST(X.PGComm * dbo.UF_GET_INCVTAXRATE(X.PGIncVTax) AS INT)
+  FROM dbo.SourceView AS X
+ WHERE X.BatchDate = @p_batchDate;
 ```
 
 * Failure path for the chunk-committed rebuild above (NOT for a single-transaction step):
@@ -4927,7 +4999,7 @@ Your ONLY source is the Korean specification document supplied by the user. You 
 Your ONLY source is the Korean specification documents supplied by the user. You have no access to the original SQL.
 
 [Absolute rules]
-1. Write in Korean. Output exactly one H2 section titled `## {stageNumber}. {stageTitle}` and nothing else — no preamble, no closing summary, no other headings.
+1. Write in Korean. Output exactly one H2 section titled `{PolicySectionContract.StageHeading(stageTitle)}` and nothing else — no preamble, no closing summary, no other headings.
 2. Open with 2 to 4 sentences of prose explaining what this stage does in BUSINESS terms. Then one markdown table.
 3. The table header row MUST be exactly:
    {PolicySectionContract.TableHeader}

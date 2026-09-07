@@ -14,10 +14,20 @@ namespace ReSet.Core.Services
     /// 2개뿐이고, 쓰기→읽기 그래프는 허브 테이블(3개 이상이 쓰는 테이블) 때문에 간선
     /// 99개의 거의 완전 그래프가 된다. 허브를 빼면 5개만 남고 전부 출발점이 요율
     /// 스냅샷 적재 SP다. 그래서 초안이 확정할 수 있는 것은 「산출을 남이 읽는 SP가
-    /// 앞」과 「EXEC로 묶인 무리」뿐이고, 나머지의 상호 순서는 모른다.
+    /// 앞」과 「EXEC로 묶인 무리」뿐이고, 나머지의 상호 순서는 모른다. EXEC 간선 수는
+    /// 아래 대상 대조가 `4fcdb938`에서 부분 일치→완전 일치로 좁혀지기 전에 잰 값이고,
+    /// 그 커밋의 재측정 목록(선행 적재 1 · 호출 무리 3 · 순서 미상 10)에 없다.
     ///
     /// 모르는 것을 지어내지 않는다. 자리표시자 단계에 모아 두고 사람에게 넘기며,
     /// 그 자리표시자가 남아 있는 한 SettlementRosterReconciler가 생성을 중단시킨다.
+    ///
+    /// [기계 확정 단계에도 자리표시자를 붙인다 - 2026-09-06 M2] 「기계 확정」이 확정하는
+    /// 것은 <b>묶음</b>(과 생산자 단계에서는 그 묶음이 앞선다는 것)뿐이고 <b>단계 이름</b>이
+    /// 아니다. 업무 이름은 코드에 없으므로 여기서도 지어내지 않는다 - 그래서 세 종류
+    /// 단계가 모두 자리표시자 제목을 받고, 사람이 이름을 붙이기 전에는 생성이 막힌다.
+    /// 각 단계에 붙는 주석도 그 구분을 그대로 말한다(「기계 확정: 묶음」 + 「이름은
+    /// 기계가 모른다」). 종전 주석은 「[기계 확정]」만 적어 제 옆의 자리표시자 제목과
+    /// 모순돼 보였다.
     /// </summary>
     public static class SettlementProcessRosterDraft
     {
@@ -124,7 +134,8 @@ namespace ReSet.Core.Services
             if (producers.Count > 0)
             {
                 sb.AppendLine($"## {number++}. {SettlementProcessRoster.PlaceholderMarker} (선행 적재)");
-                sb.AppendLine("<!-- [기계 확정] 아래 SP의 산출을 다른 SP가 읽습니다. 앞선다고 말할 수 있습니다. -->");
+                sb.AppendLine("<!-- [기계 확정: 묶음과 순서] 아래 SP의 산출을 다른 SP가 읽습니다. 앞선다고 말할 수 있습니다.");
+                sb.AppendLine("     단계 이름은 기계가 모릅니다 - 업무 이름을 붙여 주십시오(자리표시자가 남아 있으면 생성이 중단됩니다). -->");
                 foreach (var label in producers)
                 {
                     sb.AppendLine($"- {label}");
@@ -150,7 +161,8 @@ namespace ReSet.Core.Services
             foreach (var group in execGroups)
             {
                 sb.AppendLine($"## {number++}. {SettlementProcessRoster.PlaceholderMarker} (호출 무리)");
-                sb.AppendLine("<!-- [기계 확정] 첫 SP가 나머지를 EXEC 합니다. 한 단계로 묶을 수 있습니다. -->");
+                sb.AppendLine("<!-- [기계 확정: 묶음] 첫 SP가 나머지를 EXEC 합니다. 한 단계로 묶을 수 있습니다.");
+                sb.AppendLine("     단계 이름은 기계가 모릅니다 - 업무 이름을 붙여 주십시오(자리표시자가 남아 있으면 생성이 중단됩니다). -->");
                 foreach (var label in group)
                 {
                     sb.AppendLine($"- {label}");

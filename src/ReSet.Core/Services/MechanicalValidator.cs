@@ -230,6 +230,7 @@ namespace ReSet.Core.Services
                     CheckSetAssignments(cleansed, expectations, result);
                     CheckLocalVariableDeclarationTable(cleansed, expectations, result);
                     CheckErrorCodes(cleansed, expectations, result);
+                    CheckErrorCodeUniquenessClaim(cleansed, expectations, result);
                 }
             }
             catch (Exception ex)
@@ -271,6 +272,7 @@ namespace ReSet.Core.Services
                 ValidateMarkdownStructure(cleansed, RequiredConsolidatedHeaders, result);
                 CheckVerificationCartesianComparison(cleansed, result);
                 CheckBatchRunRowCreation(cleansed, result);
+                CheckControlTotalProducer(cleansed, result);
                 // 자기 try/catch로 감싼다 - 이 catch-all은 검사 하나가 던지면 Errors를
                 // 통째로 지우고 소프트 패스시키므로(아래 catch 블록), 가드가 없으면 새
                 // 검사의 예외가 기존 검사 전부의 판정을 삼킨다.
@@ -508,6 +510,7 @@ namespace ReSet.Core.Services
             CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
             SafeCheck(() => CheckStepIdInitialValue(stepMarkdown, step, result));
             SafeCheck(() => CheckDuplicateProjectionNames(stepMarkdown, result));
+            SafeCheck(() => CheckChunkUpperBoundProgress(stepMarkdown, result));
             SafeCheck(() => CheckControlStepErrorCodeBand(stepMarkdown, step, result, allSteps));
             SafeCheck(() => CheckLegacyStepErrorCodeInvention(stepMarkdown, step, result, codesByProcedure));
             // 최상위에 두는 이유: 이 검사의 오라클은 원본 DDL 하나뿐이라 명세서 사실
@@ -3811,6 +3814,67 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// 산문이 오류 코드를 「고유」라 단정했는데 <c>### 오류 코드</c> 기계 확정 표의
+        /// 코드 다중집합에 <b>중복이 있으면</b> 기각한다.
+        ///
+        /// [실물 - 2026-09-06 POQSettleBatch4 축 A 감사]
+        /// <c>UP_UTIL_SETTLE_EXCEPTION_PROC</c> 의 개요가 「각 문장 직후 <c>@@ERROR</c> 검사로
+        /// 실패 시 롤백 후 <b>고유</b> 음수 코드를 출력 파라미터에 설정한다」고 적었는데, 같은
+        /// 문서의 표는 <c>-1</c> 을 UPDATE 3·4 에, <c>-2</c> 를 5·6 에 중복으로 싣는다. 호출자가
+        /// 반환 코드로 실패 지점을 특정할 수 있다고 오해한다.
+        ///
+        /// [왜 이 검사가 안전한가] 판정이 산문 문자열이 아니라 <b>기계 확정 재료의 중복 여부</b>에
+        /// 걸린다. 산문 토큰은 「이 문장이 그 주장을 하는가」를 고르는 데만 쓰이고, 발화 여부는
+        /// <see cref="SpecExpectations.ErrorCodes"/> 가 정한다.
+        ///
+        /// [착수 전 코퍼스 실측] 「고유」가 「코드」와 같은 문장에 있는 명세서는 4 편이고 그중
+        /// 표에 중복이 있는 것은 EXCEPTION_PROC 하나뿐이다 — <b>발화 1 · 오탐 0</b>
+        /// (EXPECT_PROC 11 코드 · INS_EXTRA 5 · Settle_Summary 8 은 전부 서로 달라 침묵).
+        ///
+        /// [알려진 한계 - 미리 적어 둔다] 한국어 「고유」는 「유일한」과 「자신의」 둘 다로 쓰인다.
+        /// <c>UP_Util_Settle_Summary</c> 의 「자신의 <b>고유</b> 코드(-1~-8)」는 후자이고 지금은
+        /// 중복이 없어 침묵한다. <b>중복이 있는 「자신의 고유」가 나타나면 오탐이 된다</b> —
+        /// 오늘 코퍼스에는 없다. 그때는 토큰을 좁히지 말고 이 한계를 먼저 재라.
+        ///
+        /// [중복 자체는 고발하지 않는다] 원본이 같은 코드를 두 문장에 쓰는 것은 원본의 성질이지
+        /// 명세서 결함이 아니다. 산문이 「고유」라 단정했을 때만 기각한다 — 그 방향을 잠그지
+        /// 않으면 검사가 원본을 고발하게 된다(<c>…TableHasDuplicatesButProseIsSilent…</c> 가
+        /// 그 자리를 잠근다).
+        /// </summary>
+        private static void CheckErrorCodeUniquenessClaim(
+            string markdown, SpecExpectations expectations, ValidationResult result)
+        {
+            if (expectations.ErrorCodes.Count == 0) return;
+
+            var duplicated = expectations.ErrorCodes
+                .GroupBy(f => f.Code, StringComparer.Ordinal)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key)
+                .OrderBy(c => c, StringComparer.Ordinal)
+                .ToList();
+            if (duplicated.Count == 0) return;
+
+            // 「고유」·「서로 다른」이 「코드」와 같은 문장에 있을 때만 주장으로 본다.
+            // 문장 단위로 자르는 이유는 문서 어딘가에 두 낱말이 따로 있는 것을 주장으로
+            // 오인하지 않기 위해서다.
+            var claim = SplitIntoSentences(markdown)
+                .FirstOrDefault(sentence =>
+                    sentence.Contains("코드", StringComparison.Ordinal)
+                    && (sentence.Contains("고유", StringComparison.Ordinal)
+                        || sentence.Contains("서로 다른", StringComparison.Ordinal)));
+            if (claim == null) return;
+
+            var offenders = string.Join(", ", duplicated);
+            var trimmed = claim.Trim();
+            if (trimmed.Length > 80) trimmed = trimmed[..80] + "…";
+
+            result.Errors.Add(
+                $"명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 "
+                + $"중복된 코드 {offenders}이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 "
+                + $"특정할 수 없습니다. 해당 서술: \"{trimmed}\"");
+        }
+
+        /// <summary>
         /// 기계 확정 집합 술어 표가 명세서에 옮겨졌고, 각 행의 원소 집합이 원본과
         /// 같은지 본다.
         ///
@@ -6549,6 +6613,145 @@ namespace ReSet.Core.Services
 
 
         /// <summary>
+        /// 청크 상한 질의가 <c>MIN</c> 을 쓰는데 그 파생 테이블이 <c>TOP(n) … ORDER BY c</c> 로
+        /// 잘려 있고 WHERE 에 <c>c &gt;= &lt;파라미터&gt;</c> 가 있으면 발화한다.
+        ///
+        /// [실물 - 2026-09-06 POQSettleBatch4 축 B 감사, S11 🔴]
+        /// <code>
+        /// SELECT MIN(ClientID) FROM (
+        ///   SELECT DISTINCT TOP(@size+1) A.ClientID FROM … WHERE A.ClientID &gt;= @p_from
+        ///    ORDER BY A.ClientID) D
+        /// </code>
+        /// <c>ClientID &gt;= @p_from</c> 으로 거른 집합의 <c>MIN</c> 은 <c>@p_from</c> 자신이다
+        /// (그 키가 집합에 있다 — <c>from</c> 은 직전 회차의 경계 키다). 그래서 <c>to == from</c>
+        /// 이고 범위 <c>&gt;= from AND &lt; to</c> 가 항상 공집합이라 <b>WHILE 이 무한 루프</b>가
+        /// 된다. 후취정산이 전량 미반영된다.
+        ///
+        /// [판별자를 좁힌 근거 — <c>MIN</c> 하나로는 못 가른다]
+        /// 「<c>&gt;= @from</c> 인 첫 키를 찾는다」는 <b>정당한 용법</b>이 있다(다음 청크의 시작을
+        /// 구하는 자리). 결정적인 것은 의도가 아니라 <b>질의 자신의 모순</b>이다 — 파생 테이블이
+        /// <c>TOP(n) … ORDER BY c</c> 오름차순으로 잘려 있는데 바깥이 <c>MIN(c)</c> 을 취하면
+        /// 상위 n 개의 최솟값 = 전체의 최솟값이라 <b>TOP 이 죽은 코드</b>가 된다. 상한을 구하려면
+        /// <c>MAX</c> 여야 한다. 그래서 셋이 <b>동시에</b> 성립할 때만 발화한다 —
+        /// ① 바깥이 <c>MIN(c)</c> ② 파생 테이블에 <c>TOP</c> 과 <c>ORDER BY c</c>
+        /// ③ 그 WHERE 에 <c>c &gt;= &lt;파라미터/변수&gt;</c>.
+        ///
+        /// [이 검사가 쓰지 않는 것] 앵커를 쓰지 않는다 — 문장 모양만 본다. 그래서 앵커가 하나도
+        /// 없어 검사 B·C·D 가 통째로 꺼지는 단계(규칙 9 를 지켜 코드 앵커를 못 만드는 단계)에서도
+        /// 돈다. 그 사각지대는 분류표 §6 에 적혀 있다.
+        ///
+        /// [정화본을 쓰지 않는 이유] <see cref="CheckDuplicateProjectionNames"/> 와 같다 — 구문을
+        /// 보는 검사는 원문을 파싱한다. 문자열 리터럴을 지운 판은 파스가 깨진다.
+        /// </summary>
+        private static void CheckChunkUpperBoundProgress(string stepMarkdown, StepValidationResult result)
+        {
+            foreach (Match fence in Regex.Matches(
+                stepMarkdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                var parser = new TSql160Parser(initialQuotedIdentifiers: true);
+                var fragment = parser.Parse(new StringReader(fence.Groups["sql"].Value), out var errors);
+                if (fragment == null || (errors != null && errors.Count > 0)) continue;
+
+                var probe = new ChunkUpperBoundProbe();
+                fragment.Accept(probe);
+
+                foreach (var column in probe.Offenders)
+                {
+                    result.Errors.Add(
+                        $"청크 상한 질의가 `MIN({column})` 인데 그 파생 테이블이 " +
+                        $"`{column} >= @…` 로 걸러져 있습니다 — 그 집합의 최솟값은 하한 자신이라 " +
+                        "상한이 하한과 같아지고, 범위가 공집합이 되어 순회가 진행하지 않습니다. " +
+                        $"게다가 `TOP … ORDER BY {column}` 이 죽은 코드가 됩니다(상위 n 개의 " +
+                        $"최솟값은 전체의 최솟값입니다). 상한은 `MAX({column})` 이어야 합니다.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// <c>MIN(c)</c> 을 투영하는 질의의 원천이 파생 테이블이고, 그 파생 테이블이
+        /// <c>TOP</c> 과 <c>ORDER BY c</c> 를 지며 WHERE 에 <c>c &gt;= &lt;파라미터/변수&gt;</c> 가
+        /// 있는 자리를 모은다. 셋을 <b>모두</b> 요구하는 것이 이 프로브의 전부다 — 하나라도 빠지면
+        /// 정당한 용법과 구별되지 않는다(<c>…UsesMax…</c>·<c>…WithoutTop…</c> 가 그 두 방향을 잠근다).
+        /// </summary>
+        private sealed class ChunkUpperBoundProbe : TSqlFragmentVisitor
+        {
+            private readonly List<string> _offenders = new();
+            public IReadOnlyList<string> Offenders => _offenders;
+
+            public override void Visit(QuerySpecification node)
+            {
+                // ① 바깥 투영이 MIN(c) 하나인가
+                var minColumn = SoleMinColumn(node);
+                if (minColumn == null) return;
+
+                // 원천이 파생 테이블인가
+                var derived = node.FromClause?.TableReferences
+                    .OfType<QueryDerivedTable>()
+                    .Select(t => t.QueryExpression)
+                    .OfType<QuerySpecification>()
+                    .FirstOrDefault();
+                if (derived == null) return;
+
+                // ② TOP 과 ORDER BY c
+                if (derived.TopRowFilter == null) return;
+                var ordered = derived.OrderByClause?.OrderByElements
+                    .Select(e => ColumnName(e.Expression))
+                    .Any(n => string.Equals(n, minColumn, StringComparison.OrdinalIgnoreCase)) ?? false;
+                if (!ordered) return;
+
+                // ③ 그 WHERE 에 c >= <파라미터/변수>
+                if (derived.WhereClause == null) return;
+                var lowerBounded = new LowerBoundProbe(minColumn);
+                derived.WhereClause.Accept(lowerBounded);
+                if (!lowerBounded.Found) return;
+
+                if (!_offenders.Contains(minColumn, StringComparer.OrdinalIgnoreCase))
+                {
+                    _offenders.Add(minColumn);
+                }
+            }
+
+            /// <summary>투영이 <c>MIN(c)</c> 하나뿐일 때 그 컬럼 이름. 아니면 null.</summary>
+            private static string? SoleMinColumn(QuerySpecification node)
+            {
+                if (node.SelectElements.Count != 1) return null;
+                if (node.SelectElements[0] is not SelectScalarExpression scalar) return null;
+                if (scalar.Expression is not FunctionCall call) return null;
+                if (!string.Equals(call.FunctionName?.Value, "MIN", StringComparison.OrdinalIgnoreCase)) return null;
+                if (call.Parameters.Count != 1) return null;
+                return ColumnName(call.Parameters[0]);
+            }
+
+            private static string? ColumnName(ScalarExpression? expression)
+            {
+                var parts = (expression as ColumnReferenceExpression)?.MultiPartIdentifier?.Identifiers;
+                return parts == null || parts.Count == 0 ? null : parts[^1].Value;
+            }
+
+            /// <summary>파생 테이블 안쪽은 이 층이 아니다 — 그 층을 만날 때 따로 판정한다.</summary>
+            public override void ExplicitVisit(QueryDerivedTable node) { }
+        }
+
+        /// <summary><c>&lt;컬럼&gt; &gt;= &lt;파라미터/변수&gt;</c> 비교가 있는지만 본다.</summary>
+        private sealed class LowerBoundProbe : TSqlFragmentVisitor
+        {
+            private readonly string _column;
+            public LowerBoundProbe(string column) => _column = column;
+            public bool Found { get; private set; }
+
+            public override void Visit(BooleanComparisonExpression node)
+            {
+                if (node.ComparisonType != BooleanComparisonType.GreaterThanOrEqualTo) return;
+                if (node.FirstExpression is not ColumnReferenceExpression left) return;
+                if (node.SecondExpression is not VariableReference) return;
+
+                var parts = left.MultiPartIdentifier?.Identifiers;
+                var name = parts == null || parts.Count == 0 ? null : parts[^1].Value;
+                if (string.Equals(name, _column, StringComparison.OrdinalIgnoreCase)) Found = true;
+            }
+        }
+
+        /// <summary>
         /// 파생 테이블·CTE 가 같은 출력 컬럼 이름을 두 번 내는 것을 본다.
         ///
         /// [왜 오라클이 없는가]
@@ -8129,7 +8332,34 @@ namespace ReSet.Core.Services
                 // 조인 키 칸은 ON절(JoinColumns)에만 대조한다 - 위 문서 참고.
                 var predicatePresent = new HashSet<string>(
                     predicateColumns.Concat(joinColumns), StringComparer.OrdinalIgnoreCase);
-                var joinPresent = new HashSet<string>(joinColumns, StringComparer.OrdinalIgnoreCase);
+
+                // [콤마 조인 - 2026-09-06 POQSettleBatch4 축 B 감사]
+                // 콤마 조인(ANSI-89, `FROM A, B WHERE A.k = B.k`)에는 ON 절이 아예 없다.
+                // 결합 등식이 WHERE 에 있으므로 JoinColumns 는 항상 비고, 좁은 재료로
+                // 대조하면 명세서가 확정한 조인 키 **전량**이 「없다」로 발화한다.
+                // 실측: POQSettleBatch4/S08 의 9 건이 전량 이 오탐이었고, 그 오탐이
+                // SuggestedPromptFix 를 타고 산출물에 되먹여져 재생성 5 회를 태웠다
+                // (S08.md:38,167 의 「— 조인 키 AYMD, YMD, PGNAME, MALLID 만 사용」
+                // 주석이 그 되먹임의 자국이다). 레거시 SP 는 이 형태가 기본이라
+                // 콤마 조인을 원본대로 보존한 모든 단계에서 같은 오탐이 난다.
+                //
+                // [왜 문장별로 가르는가 - 무조건 넓히면 실물 검사가 죽는다]
+                // 감사 보고서(§5-2)의 처방은 「조인 키 칸도 술어 칸과 같은 재료로
+                // 대조한다 - 원본이 진짜 조인 키를 잃으면 술어 칸이 잡는다」였다.
+                // **뒷문장이 틀렸다.** 술어 칸의 기준값은 row.PredicateColumns 이고
+                // 조인 키 칸의 기준값은 row.JoinKeys 라, 술어 칸이 빈 행에서는 술어 칸이
+                // 아무것도 안 잡는다. 무조건 넓히면
+                // ValidateBatchStep_JoinKeyPresentOnlyInWhereNotOn_ShouldBeAnError 가
+                // 잠근 실물 결함(조인 키가 ON 에서 WHERE 필터로 퇴행한 S11 🟠)이 통째로
+                // 새 나간다.
+                //
+                // 그래서 **콤마 조인이 실재하는 문장에서만** 넓힌다. 그 문장에는 ON 이
+                // 없으니 「ON 에 없다」가 결함을 뜻하지 않는다. ON 을 쓰는 문장은 좁은
+                // 재료 그대로이므로 그 퇴행은 여전히 잡힌다. 판별자의 실측 근거는
+                // StepSqlStatement.HasCommaJoin 문서를 보라.
+                var joinPresent = group.Any(a => a.Statement.HasCommaJoin)
+                    ? predicatePresent
+                    : new HashSet<string>(joinColumns, StringComparer.OrdinalIgnoreCase);
 
                 // [하위 스코프 이전 - 소실과 구분한다]
                 // 원본이 최상위 WHERE에 두었던 술어를 이행이 CTE·파생 테이블·
@@ -8379,7 +8609,7 @@ namespace ReSet.Core.Services
                 // 술어·조인 키·GROUP BY·ORDER BY 어느 칸에든 등장하면 명세서가 그
                 // 이름을 이 문장에 인정한 것으로 본다 - 더 관대할수록 오탐이 준다.
                 var known = new HashSet<string>(
-                    row.PredicateColumns.Concat(row.JoinKeys).Concat(row.GroupBy).Concat(row.OrderBy),
+                    row.PredicateColumns.Concat(row.JoinKeys).Concat(row.OrderBy),
                     StringComparer.OrdinalIgnoreCase);
 
                 // [단계 내부 스테이징 - 대조할 원천이 아니다]
@@ -9282,6 +9512,125 @@ namespace ReSet.Core.Services
                     });
                 }
             }
+        }
+
+        /// <summary>
+        /// <see cref="ControlRowOrigin.ProducerInsertsOnly"/> 표를 <c>StepCode &lt;&gt; N'X'</c> 로
+        /// 읽는 자리가 있으면, 그 표에 행을 만드는 <b>X 아닌 다른 단계</b>가 최소 하나 있어야 한다.
+        ///
+        /// [실물 - 2026-09-06 POQSettleBatch4 축 B 감사, S16 🔴]
+        /// S16 이 <c>batch.BatchControlTotal</c> 을 <c>AND StepCode &lt;&gt; N'S16'</c> 으로 읽어
+        /// 「사전 단계가 적재한 제어합계」를 기대값으로 삼는데, 그 표로 들어가는 INSERT 는
+        /// <b>S16 자신 하나뿐</b>이었다. 그래서 Expected 가 항상 공집합이고
+        /// <c>WHEN NOT EXISTS THEN 1</c> 이 무조건 통과한다 — 검증이 검증을 하지 않는다.
+        ///
+        /// [왜 아무도 못 잡았나] 행 출처를 강제하는 세 자리가 전부 <c>ProducerInsertsOnly</c> 를
+        /// <c>continue</c> 로 걸러낸다(<see cref="CheckFirstStepRowCreation"/> ·
+        /// <see cref="CheckBatchRunRowCreation"/> · <c>BatchControlContract.ResolveRowCreators</c>).
+        /// 즉 이 부류의 표는 <b>「누가 행을 만드는가」를 아무도 묻지 않았다.</b>
+        ///
+        /// [왜 문서 단위인가] 단계 문서 하나만 봐서는 다른 단계가 그 표에 넣는지 알 수 없다.
+        /// <c>batch.BatchRun</c> 의 행 생성을 문서 단위에서 닫은 것과 같은 이유다.
+        ///
+        /// [자기 제외가 없으면 발화하지 않는다] 자기 제외가 없는 읽기는 자기가 적재한 행도
+        /// 기대값에 담으므로 생산자가 하나뿐이어도 공집합이 되지 않는다. 그것은 설계 선택이지
+        /// 결함이 아니다 — <c>…WhenReadDoesNotExcludeItself…</c> 가 그 방향을 잠근다.
+        ///
+        /// [단계 절을 코드로 자르는 이유] 실물 헤딩은 <c>### S01: …</c>·<c>### S02 | …</c>·
+        /// <c>### S03. …</c> 처럼 구분자가 갈린다(코퍼스 실측). 그래서 코드만 보고 자르고,
+        /// 다음 <c>#</c>~<c>###</c> 헤딩에서 절을 닫는다 — 부록의 SQL 이 마지막 단계에
+        /// 딸려 붙지 않게 하려는 것이다(계획서 부록에 이 표로 넣는 SQL 이 실재하는데
+        /// 그것을 실행하는 단계는 어디에도 없다).
+        /// </summary>
+        private static void CheckControlTotalProducer(string markdown, ValidationResult result)
+        {
+            var sections = SplitStepSections(markdown);
+            if (sections.Count == 0) return;
+
+            foreach (var table in BatchControlContract.Tables)
+            {
+                if (table.Origin != ControlRowOrigin.ProducerInsertsOnly) continue;
+
+                var bare = table.Name[(table.Name.LastIndexOf('.') + 1)..];
+                var fragment = QualifiedTableNameFragment(bare);
+
+                // 그 표를 읽으면서 자기 자신을 제외하는 단계를 모은다. 같은 펜스 안에서
+                // 표 참조와 제외 술어가 함께 있을 때만 그 표에 대한 제외로 본다 —
+                // 펜스를 건너 짝지으면 무관한 표의 제외를 이 표에 귀속시킨다.
+                foreach (var (code, body) in sections)
+                {
+                    // [정화본을 쓰지 않는다 - 이 검사가 찾는 것이 문자열 리터럴이다]
+                    // CleanedSqlFences 는 BlankCommentsAndStrings 로 주석과 **문자열**을 지운다.
+                    // 그러면 N'S16' 이 통째로 사라져 이 검사는 영영 발화하지 못한다.
+                    // 실제로 처음 구현이 그 함정에 빠졌고, 같은 기전이 CheckShadowBackupContract
+                    // 를 죽여 놓은 것을 축 B 분류가 이미 짚었다(규약이 런타임 조립을 의무화하는데
+                    // 인식 패턴은 리터럴만 안다). 여기서는 원문 펜스를 본다 — 표 참조와 제외
+                    // 술어가 **같은 펜스** 안에 함께 있을 것을 요구해 주석 오탐을 좁힌다.
+                    var excludesItself = false;
+                    foreach (Match fence in Regex.Matches(
+                        body, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+                    {
+                        var sql = fence.Groups["sql"].Value;
+                        if (!Regex.IsMatch(sql, $@"\b{fragment}", RegexOptions.IgnoreCase)) continue;
+                        if (Regex.IsMatch(
+                                sql,
+                                $@"StepCode\s*(<>|!=)\s*N?'{Regex.Escape(code)}'",
+                                RegexOptions.IgnoreCase))
+                        {
+                            excludesItself = true;
+                            break;
+                        }
+                    }
+
+                    if (!excludesItself) continue;
+
+                    var otherProducer = sections
+                        .Where(s => !string.Equals(s.Code, code, StringComparison.OrdinalIgnoreCase))
+                        .Any(s => CreatesRowIn(s.Body, bare));
+                    if (otherProducer) continue;
+
+                    result.Errors.Add(
+                        $"{code} 섹션이 `{table.Name}`을 `StepCode <> N'{code}'` 로 읽어 다른 단계가 "
+                        + $"적재한 제어합계를 기대값으로 삼는데, 그 표에 행을 만드는 단계가 {code} "
+                        + "자신뿐입니다 — 기대값이 항상 공집합이라 대조가 무조건 통과합니다. "
+                        + $"기대값을 적재하는 단계를 두거나, `{code}` 자기 제외를 걷어내십시오.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// 조립본을 단계 절로 자른다. 헤딩의 구분자가 Job 마다 갈리므로(<c>S01:</c>·<c>S02 |</c>·
+        /// <c>S03.</c>) 코드만 보고 열고, 다음 <c>#</c>~<c>###</c> 헤딩에서 닫는다.
+        /// </summary>
+        private static IReadOnlyList<(string Code, string Body)> SplitStepSections(string markdown)
+        {
+            var sections = new List<(string, string)>();
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            string? current = null;
+            var body = new StringBuilder();
+
+            foreach (var line in lines)
+            {
+                var heading = Regex.Match(line, @"^#{1,3}\s");
+                if (heading.Success)
+                {
+                    if (current != null)
+                    {
+                        sections.Add((current, body.ToString()));
+                        body.Clear();
+                        current = null;
+                    }
+
+                    var step = Regex.Match(line, @"^###\s*(?<code>S\d{2})\b");
+                    if (step.Success) current = step.Groups["code"].Value;
+                    continue;
+                }
+
+                if (current != null) body.AppendLine(line);
+            }
+
+            if (current != null) sections.Add((current, body.ToString()));
+            return sections;
         }
 
         /// <summary>

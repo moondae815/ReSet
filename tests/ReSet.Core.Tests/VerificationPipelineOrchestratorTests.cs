@@ -5801,8 +5801,55 @@ SELECT 1;
             Assert.Equal(sequential.Plan, reverse.Plan);
             // 셋 다 실제로 하한 배너를 달고 있어야 비교가 의미를 갖는다.
             Assert.Contains("[하한 미달]", sequential.Plan);
-            Assert.Contains("S03 (하한 미달)", sequential.Plan);
-            Assert.Contains("S06 (하한 미달)", sequential.Plan);
+            Assert.Contains("S03 (하한 미달:", sequential.Plan);
+            Assert.Contains("S06 (하한 미달:", sequential.Plan);
+        }
+
+        /// <summary>
+        /// 하한 미달 기록이 <b>왜</b> 떨어졌는지를 싣는다.
+        ///
+        /// [무엇이 틀렸었나 - 2026-09-06 POQSettleBatch4 축 B 감사]
+        /// 예전에는 마지막 시도의 <c>stepResult.Errors</c> 를 버리고 `(하한 미달)` 이라는
+        /// 상수만 남겼다. 읽는 사람에게 남는 사유는 배너가 문안에 적어 둔 세 요건
+        /// (블록 1 개 이상 · 대상 테이블 전부 · 원본 오류코드 전부)뿐인데,
+        /// <c>ValidateBatchStep</c> 이 떨어뜨리는 사유는 그보다 훨씬 많다
+        /// (검사 A·B·C·지역 변수·상태 변수 초기값 …).
+        ///
+        /// 실물: POQSettleBatch4/S08 은 그 세 요건을 <b>전부 충족</b>하는데
+        /// (블록 16 · 대상 테이블 18 회 · 오류코드 17 개 전량) 하한 미달 배너를 받았다.
+        /// 진짜 사유는 검사 B 의 조인 키 오탐이었다. 배너를 읽은 사람은 없는 결함을
+        /// 찾게 되고, 감사는 그 배너를 근거로 잘못된 결론을 세운다 — 실제로 세웠다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenStepMissesFloor_BannerCarriesTheActualReason()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            // S01 은 대상 테이블과 오류코드는 적었으나 코드 블록이 없다 — 셋 중 하나만
+            // 못 채운다. 배너가 「그 하나」를 이름 대야 한다.
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return step.Code == "S01"
+                        ? new AiResult { Content = "### S01 단계\n\ndbo.T1과 -1만 적고 코드 블록은 없다." }
+                        : new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var outcome = await RunBatchPipeline(aiService);
+
+            // 사유의 **내용**으로 잠근다. 「(하한 미달)」이 있는가로 잠그면 상수를 그대로
+            // 두고도 초록이다.
+            Assert.Contains("S01 (하한 미달:", outcome.Plan);
+            Assert.Contains("SQL 또는 의사코드 블록이 없습니다", outcome.Plan);
         }
 
         /// <summary>

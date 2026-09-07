@@ -123,7 +123,9 @@ namespace ReSet.Core.Services
             var end = -1;
             for (var i = cells.Count - 2; i >= start; i--)
             {
-                if (cells[i].EndsWith("\"", StringComparison.Ordinal))
+                // 닫힘 앵커는 계약이 정한다 - 곧은 따옴표만 보면 굽은 것으로 닫은 행이
+                // 되살아나지 못하고 칸 수 불일치로 통째로 조용히 스킵된다(2026-09-06 M1).
+                if (PolicySectionContract.EndsWithQuote(cells[i]))
                 {
                     end = i;
                     break;

@@ -10,7 +10,8 @@ namespace ReSet.Core.Services
     /// [왜 채택을 명세서가 정하는가] 추출은 DDL로 해야 정확하지만(동적 SQL 조각을 걸러야
     /// 하므로 ScriptDom), 채택은 Spec.md가 정해야 「근거는 명세서뿐」이라는 계약이 선다.
     /// 둘을 나눠 두면 정확도와 계약을 함께 가진다. 실측 채택률은 (SP, 상수) 출현 기준
-    /// 114/115다.
+    /// 114/115다 — 다만 아래 <c>IsAdoptable</c>이 자를 좁히기 전, 순수 부분 문자열
+    /// 대조로 잰 값이고 그 뒤 재측정하지 않았다(계보는 `docs/architecture.md`).
     /// </summary>
     public static class SettlementCodebookBuilder
     {
@@ -18,8 +19,10 @@ namespace ReSet.Core.Services
         /// 값만으로 매칭할 때 요구하는 최소 길이.
         ///
         /// 'Y'·'N'·'1' 같은 값은 아무 테이블에서나 걸려 매칭이 잡음이 된다(실질 상수
-        /// 64개 중 13개가 길이 2 이하, 2026-09-06 실측). 이런 플래그의 의미는 코드
-        /// 테이블이 아니라 컬럼 이름과 명세서 서술에 있고, 그건 AI가 Spec 인용으로
+        /// 64개 중 13개가 길이 2 이하, 2026-09-06 실측). 이 64도 위 114/115와 같이
+        /// <c>IsAdoptable</c> 이전의 자로 잰 값이다 - 앵커링 커밋에 재측정 기록이 있으나
+        /// 그 목록(Entries 53 · MatchEligible 41 등)에 이 양은 없다. 이런 플래그의 의미는
+        /// 코드 테이블이 아니라 컬럼 이름과 명세서 서술에 있고, 그건 AI가 Spec 인용으로
         /// 이미 다룬다.
         /// </summary>
         public const int MinimumMatchableLength = 3;

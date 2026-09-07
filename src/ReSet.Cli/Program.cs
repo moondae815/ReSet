@@ -102,6 +102,41 @@ namespace ReSet.Cli
                 .FirstOrDefault(child => string.Equals(child.Key, wanted, StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>
+        /// 인자 파싱 결과. 실패면 <see cref="Arguments"/>가 null이고
+        /// <see cref="UserMessage"/>에 화면에 낼 안내가, <see cref="ExitCode"/>에 1이 담긴다.
+        /// </summary>
+        public sealed record CliArgsParse(CliArgs? Arguments, string? UserMessage, int ExitCode);
+
+        /// <summary>
+        /// <see cref="ParseCommandLineArgs"/>가 던지는 인자 오류를 잡아, 화면에 낼 말과
+        /// 종료 코드로 바꾼다.
+        ///
+        /// [왜 이 자리가 필요한가 - 2026-09-06 I1] 파서는 폐기된 옵션에 대해
+        /// ArgumentException을 던지지만(위 `--policy-sps` 분기), Main의 유일한 catch는
+        /// OperationCanceledException이고 AppDomain.UnhandledException 핸들러는 이
+        /// 저장소에 없다. 그래서 그 오류는 날것 스택 트레이스와 런타임이 정한 종료
+        /// 코드로 사용자에게 갔다 - 「던지는가」를 소유한 자리는 있었지만 「사용자가
+        /// 행동할 수 있는 말로 받는가」를 소유한 자리가 없었다.
+        ///
+        /// [왜 여기서 화면에 직접 쓰지 않는가] 안내 문구가 실제로 행동할 수 있는
+        /// 말인지를 테스트가 재려면 반환값으로 봐야 한다 - AnsiConsole은 출력 대상을
+        /// 첫 사용 시점에 캐시해 테스트가 가로챌 수 없다는 실측이 이미 있다
+        /// (CoverageMapCommandTests). 화면 출력과 Environment.ExitCode 대입은
+        /// Main이 <see cref="ReportUnmatchedTargets"/>와 같은 관례로 옮긴다.
+        /// </summary>
+        public static CliArgsParse TryParseCommandLineArgs(string[] args)
+        {
+            try
+            {
+                return new CliArgsParse(ParseCommandLineArgs(args), null, 0);
+            }
+            catch (ArgumentException ex)
+            {
+                return new CliArgsParse(null, ex.Message, 1);
+            }
+        }
+
         public static CliArgs ParseCommandLineArgs(string[] args)
         {
             var cliArgs = new CliArgs();
@@ -205,7 +240,20 @@ namespace ReSet.Cli
             _currentCts = globalCts;
 
             // 1. 커맨드라인 아규먼트 및 환경 변수 파싱
-            var cliArgs = ParseCommandLineArgs(args);
+            //
+            // 인자 오류는 예외로 새어 나가지 않는다 - 이 파일의 다른 CLI 오류 경로
+            // (ReportUnmatchedTargets 등)와 같은 관례로 빨간 안내 한 줄과 종료 코드 1을
+            // 낸다. 판정 자체는 TryParseCommandLineArgs가 소유하고 여기서는 옮기기만 한다.
+            var parse = TryParseCommandLineArgs(args);
+            if (parse.Arguments is null)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[red]에러: {Markup.Escape(parse.UserMessage ?? "커맨드라인 인자를 해석하지 못했습니다.")}[/]");
+                Environment.ExitCode = parse.ExitCode;
+                return;
+            }
+
+            var cliArgs = parse.Arguments;
 
             // 2. 설정 로드
             var configuration = new ConfigurationBuilder()

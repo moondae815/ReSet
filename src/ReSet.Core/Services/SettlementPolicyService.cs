@@ -115,13 +115,14 @@ namespace ReSet.Core.Services
             var specsByLabel = stagedSources.ToDictionary(
                 s => s.Label, s => s.SpecMarkdown, StringComparer.OrdinalIgnoreCase);
 
-            // [stageHeadings는 명부 제목을 변형 없이 이어 붙인 것이어야 한다]
+            // [stageHeadings는 계약이 만든다 - 여기서 손으로 짓지 않는다]
             // PolicyDocumentParser·PolicyAttributionValidator 둘 다 MarkdownSectionLocator의
-            // 정확 일치(exact: true) 경로로 이 헤딩을 찾는다. 대소문자를 고치거나
-            // 추가로 Trim/정규화하면 두 검증기가 그 절을 못 찾아 단계 전체가 검사에서
-            // 빠진다 - roster.Stages[i].Title은 파서가 "## " 접두만 벗기고 Trim한
-            // 값이므로 여기서 다시 손대지 않는다.
-            var stageHeadings = roster.Stages.Select(s => "## " + s.Title).ToList();
+            // 정확 일치(exact: true) 경로로 이 헤딩을 찾고, 생성 프롬프트
+            // (AiService.GeneratePolicyStageAsync)는 모델에게 같은 문자열을 요구한다.
+            // 그 셋이 한 함수를 읽어야 갈리지 않는다 - 2026-09-06 C1에서 프롬프트와
+            // 이 자리가 각자 헤딩을 지어 어느 명부로도 일치하지 않았다.
+            var stageHeadings = roster.Stages
+                .Select(s => PolicySectionContract.StageHeading(s.Title)).ToList();
             var stageBodies = new List<string>();
 
             for (var i = 0; i < roster.Stages.Count; i++)

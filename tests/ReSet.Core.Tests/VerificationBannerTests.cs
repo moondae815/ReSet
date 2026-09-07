@@ -256,6 +256,28 @@ public sealed class VerificationBannerTests
         Assert.Contains("최소 요건", banner);
     }
 
+    /// <summary>
+    /// 문안이 요건 목록을 <b>열거하지 않는다</b> — 2026-09-06 POQSettleBatch4 축 B 감사.
+    ///
+    /// 옛 문안은 「블록 1개 이상 · 선언된 대상 테이블 전부 · 원본 오류코드 전부」 셋을
+    /// 최소 요건으로 못박아 적었다. 하한 검사가 떨어뜨리는 사유는 그보다 훨씬 많으므로
+    /// 그 목록은 검사가 늘 때마다 조용히 낡는다. 실물(POQSettleBatch4/S08)은 셋을 전부
+    /// 충족하는데 이 배너를 받아 읽는 사람이 없는 결함을 찾았다.
+    ///
+    /// 「사유를 실었는가」로 잠그면 문안을 되돌려도 초록이다 — 사라져야 할 문구의
+    /// 부재로 잠근다.
+    /// </summary>
+    [Fact]
+    public void StepFloorViolations_DoesNotEnumerateAStaleRequirementList()
+    {
+        var banner = VerificationBanner.StepFloorViolations(new[] { "S10 (하한 미달: 검사 B 조인 키)" });
+
+        Assert.DoesNotContain("SQL 또는 의사코드 블록 1개 이상", banner);
+        Assert.DoesNotContain("원본 오류코드 전부", banner);
+        // 사유는 항목 줄이 나른다.
+        Assert.Contains(">   - S10 (하한 미달: 검사 B 조인 키)", banner);
+    }
+
     // 목차 커버리지 누락: StepFloorViolations(내용이 부실한 단계)와 다른 사실이다 —
     // 이건 그 프로시저를 다룰 단계 자체가 목차에 없다는 뜻이다. 개수 대신
     // 프로시저명을 실어야 읽는 사람이 무엇을 직접 확인할지 안다.

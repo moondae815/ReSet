@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using NSubstitute;
@@ -71,22 +72,20 @@ namespace ReSet.Core.Tests
             return ai;
         }
 
-        private static string Stage(int n, string title, string label, string quote) =>
-            $"## {n}. {title}\n\n산문 개요.\n\n"
-            + PolicySectionContract.TableHeader + "\n" + PolicySectionContract.TableSeparator + "\n"
-            + $"| S{n}-01 | 업무 규칙 | {label} · ## 개요 > \"{quote}\" | {PolicySectionContract.NoCodeValue} |\n";
-
         /// <summary>
-        /// Stage()와 달리 제목에 번호를 붙이지 않는다 - 명부 헤딩 자체가 번호 없는
-        /// 형태("## 요율 적재")일 때, 서비스가 만드는 stageHeadings("## " + Title)와
-        /// 문자 그대로 일치시키기 위해서다. ID 접두사(S{n}-)는 명부의 등장 순서로
-        /// 계산된 실효 단계 번호를 그대로 쓴다 - EffectiveStageNumber가 옳게 동작하면
-        /// n번째 등장 단계가 항상 Sn- 을 받아야 한다.
+        /// 스텁이 낼 단계 본문. <paramref name="rosterTitle"/>는 <b>명부에 적힌 제목
+        /// 그대로</b>이고, 헤딩은 손으로 짓지 않고 계약 함수에서 유도한다.
+        ///
+        /// [왜 손으로 안 짓는가 - 2026-09-06 C1] 종전에는 이 헬퍼가 `## {n}. {title}`을
+        /// 손으로 만들고, 번호 없는 명부용으로 `StageNoNumber`가 따로 있었다. 즉 스텁이
+        /// 계약의 한쪽 편(서비스가 찾는 헤딩)에 손으로 맞춰져 있었고 반대쪽(프롬프트가
+        /// 실제로 요구하는 헤딩)은 시험에 든 적이 없었다 - 그래서 3720개가 전부 초록인
+        /// 채로 헤딩 계약이 갈려 있었다. 계약 함수를 쓰면 스텁이 제품보다 초록일 수 없다.
+        /// 명부에 번호가 있고 없고는 이제 rosterTitle 한 인자로 갈린다.
+        /// ID 접두사(S{n}-)는 실효 단계 번호(EffectiveStageNumber)를 따른다.
         /// </summary>
-        private static string StageNoNumber(int n, string title, string label, string quote) =>
-            $"## {title}\n\n산문 개요.\n\n"
-            + PolicySectionContract.TableHeader + "\n" + PolicySectionContract.TableSeparator + "\n"
-            + $"| S{n}-01 | 업무 규칙 | {label} · ## 개요 > \"{quote}\" | {PolicySectionContract.NoCodeValue} |\n";
+        private static string Stage(int n, string rosterTitle, string label, string quote) =>
+            BodyUnder(PolicySectionContract.StageHeading(rosterTitle), n, label, quote);
 
         [Fact]
         public async Task 명부가_없으면_초안을_쓰고_중단한다()
@@ -118,8 +117,8 @@ namespace ReSet.Core.Tests
             WriteRoster();
             var before = File.ReadAllText(Path.Combine(_root, "settlement-process.md"));
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             await service.GenerateAsync(_root, profiler: null, effort: null);
 
@@ -131,8 +130,8 @@ namespace ReSet.Core.Tests
         {
             WriteRoster();
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
 
@@ -146,8 +145,8 @@ namespace ReSet.Core.Tests
         {
             WriteRoster();
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
             var document = File.ReadAllText(outcome.PolicyPath);
@@ -168,8 +167,8 @@ namespace ReSet.Core.Tests
         {
             WriteRoster();
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
             var document = File.ReadAllText(outcome.PolicyPath);
@@ -202,8 +201,8 @@ namespace ReSet.Core.Tests
                 + "## 2. 원장 적재\n- dbo.UP_B\n\n"
                 + "## 제외\n");
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재 (선행)", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재 (선행)", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
             var document = File.ReadAllText(outcome.PolicyPath);
@@ -221,8 +220,8 @@ namespace ReSet.Core.Tests
         {
             WriteRoster();
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
             var document = File.ReadAllText(outcome.PolicyPath);
@@ -236,8 +235,8 @@ namespace ReSet.Core.Tests
         {
             WriteRoster();
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "원문에 없는 구절"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "원문에 없는 구절"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
 
@@ -254,8 +253,8 @@ namespace ReSet.Core.Tests
             // 부록 B의 표 행("| ... | dbo.UP_B |")과 형태가 달라 서로 혼동되지 않는다.
             WriteRoster();
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_A", "요율을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_A", "요율을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
             var document = File.ReadAllText(outcome.PolicyPath);
@@ -270,8 +269,8 @@ namespace ReSet.Core.Tests
         {
             WriteRoster();
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
 
@@ -283,8 +282,8 @@ namespace ReSet.Core.Tests
         {
             WriteRoster();
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
 
@@ -305,8 +304,8 @@ namespace ReSet.Core.Tests
             WriteRoster();
 
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
 
@@ -322,8 +321,8 @@ namespace ReSet.Core.Tests
         {
             WriteRoster();
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             await service.GenerateAsync(_root, profiler: null, effort: null);
 
@@ -347,8 +346,8 @@ namespace ReSet.Core.Tests
         {
             WriteRoster();
             var service = new SettlementPolicyService(
-                AiWriting(Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                          Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재")));
+                AiWriting(Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                          Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재")));
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
             var document = File.ReadAllText(outcome.PolicyPath);
@@ -389,8 +388,8 @@ namespace ReSet.Core.Tests
         {
             WriteRoster();
             var ai = AiWriting(
-                Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재"));
+                Stage(1, "1. 요율 적재", "dbo.UP_A", "요율을 적재"),
+                Stage(2, "2. 원장 적재", "dbo.UP_B", "원장을 적재"));
             var service = new SettlementPolicyService(ai);
 
             await service.GenerateAsync(_root, profiler: null, effort: null);
@@ -424,8 +423,8 @@ namespace ReSet.Core.Tests
                 "# 정산 프로세스 명부\n\n## 요율 적재\n- dbo.UP_A\n\n## 원장 적재\n- dbo.UP_B\n\n## 제외\n");
 
             var ai = AiWriting(
-                StageNoNumber(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
-                StageNoNumber(2, "원장 적재", "dbo.UP_B", "원장을 적재"));
+                Stage(1, "요율 적재", "dbo.UP_A", "요율을 적재"),
+                Stage(2, "원장 적재", "dbo.UP_B", "원장을 적재"));
             var service = new SettlementPolicyService(ai);
 
             var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
@@ -439,32 +438,124 @@ namespace ReSet.Core.Tests
 
             Assert.DoesNotContain(outcome.Defects, d => d.Type == PolicyDefectType.IdPrefixMismatch);
         }
+
+        /// <summary>
+        /// 최종 전체 리뷰 C1 - 단계 헤딩 계약이 두 파일로 갈려 있었다.
+        /// 생성 프롬프트(AiService)는 `## {번호}. {제목}`을 요구했고, 서비스는
+        /// `"## " + 제목`을 찾았다. 명부 제목에 번호가 있으면 프롬프트가 번호를
+        /// 두 번 붙였고(`## 1. 1. 요율 적재`), 없으면 서비스가 못 찾았다 -
+        /// 어느 명부로도 둘이 일치하지 않았다.
+        ///
+        /// [왜 스텁을 안 거치는가] 이 회차의 스텁(AiWriting)은 stageTitle 인자를
+        /// 아예 읽지 않고 미리 만든 문자열을 stageNumber로 골랐다. 그래서 헤딩
+        /// 계약의 한쪽 편만 손으로 맞춰 놓은 채 3720개가 전부 초록이었다.
+        /// 이 테스트는 <b>제품(AiService)이 실제로 만든 시스템 프롬프트</b>에서
+        /// 요구 헤딩을 뽑아 그것을 그대로 본문 H2로 쓴다 - 「프롬프트를 그대로
+        /// 따르는 모델」이 온 경우다. 그 헤딩이 서비스가 찾는 것과 갈리면
+        /// StageMissing이 나고 그 단계의 규칙 표가 통째로 검사에서 빠진다.
+        ///
+        /// 명부에 번호가 있는 경우와 없는 경우를 둘 다 잠근다 - 실효 번호 폴백
+        /// (EffectiveStageNumber)이 그 둘을 가르는 자리이기 때문이다.
+        /// </summary>
+        [Theory]
+        [InlineData("1. 요율 적재", "2. 원장 적재")]
+        [InlineData("요율 적재", "원장 적재")]
+        public async Task 프롬프트가_요구한_헤딩을_그대로_쓴_본문을_서비스가_찾아낸다(
+            string title1, string title2)
+        {
+            File.WriteAllText(Path.Combine(_root, "settlement-process.md"),
+                $"# 정산 프로세스 명부\n\n## {title1}\n- dbo.UP_A\n\n## {title2}\n- dbo.UP_B\n\n## 제외\n");
+
+            var heading1 = await RequiredHeadingFromRealPromptAsync(1, title1);
+            var heading2 = await RequiredHeadingFromRealPromptAsync(2, title2);
+
+            var service = new SettlementPolicyService(AiWriting(
+                BodyUnder(heading1, 1, "dbo.UP_A", "요율을 적재"),
+                BodyUnder(heading2, 2, "dbo.UP_B", "원장을 적재")));
+
+            var outcome = await service.GenerateAsync(_root, profiler: null, effort: null);
+            var document = File.ReadAllText(outcome.PolicyPath);
+
+            // ① 서비스가 찾는 헤딩(명부에서 유도)과 프롬프트가 요구한 헤딩이 갈리면
+            //    여기서 StageMissing이 난다 - 두 경로를 맞대는 단언은 이것이다.
+            Assert.DoesNotContain(outcome.Defects, d => d.Type == PolicyDefectType.StageMissing);
+            Assert.DoesNotContain(outcome.Defects, d => d.Type == PolicyDefectType.IdPrefixMismatch);
+
+            // ② 그 절이 배너 인용이 아니라 진짜 규칙 표로 파싱되는지까지 잰다.
+            var rules = PolicyDocumentParser.Parse(document, new[] { heading1, heading2 });
+            Assert.Contains(rules, r => r.StageHeading == heading1 && r.Id == "S1-01");
+            Assert.Contains(rules, r => r.StageHeading == heading2 && r.Id == "S2-01");
+        }
+
+        /// <summary>
+        /// 제품이 만든 시스템 프롬프트에서 「이 H2를 쓰라」고 지시한 헤딩 문자열을 뽑는다.
+        /// 스텁 IAiClient를 물린 진짜 AiService를 부른다 - 프롬프트 문자열 자체가
+        /// 시험 대상이므로 그것을 테스트가 다시 짓지 않는다.
+        /// </summary>
+        private static async Task<string> RequiredHeadingFromRealPromptAsync(
+            int stageNumber, string stageTitle)
+        {
+            var client = Substitute.For<IAiClient>();
+            client.ChatAsync(
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(),
+                    effort: Arg.Any<string?>(), cancellationToken: Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "본문" }));
+
+            var result = await new AiService(client, 0.2f, false, 8, true, null)
+                .GeneratePolicyStageAsync(
+                    stageNumber, stageTitle,
+                    new[] { ("dbo.UP_A", "## 개요\n\n본문\n") },
+                    Array.Empty<CodebookEntry>());
+
+            Assert.NotNull(result.SystemPrompt);
+            var match = Regex.Match(result.SystemPrompt!, @"titled `(##[^`]*)`");
+            Assert.True(match.Success, "프롬프트가 H2 헤딩을 백틱으로 지시하지 않습니다.");
+            return match.Groups[1].Value;
+        }
+
+        /// <summary>주어진 헤딩 아래에 규칙 표 하나를 놓은 단계 본문.</summary>
+        private static string BodyUnder(string heading, int n, string label, string quote) =>
+            heading + "\n\n산문 개요.\n\n"
+            + PolicySectionContract.TableHeader + "\n" + PolicySectionContract.TableSeparator + "\n"
+            + $"| S{n}-01 | 업무 규칙 | {label} · ## 개요 > \"{quote}\" | {PolicySectionContract.NoCodeValue} |\n";
     }
 
     /// <summary>
     /// 좌표자 권고 ④ - 교차 태스크 불변식을 영구 테스트로 못박는다.
     ///
     /// 실물 코퍼스에서 만든 초안 명부를 파서와 대조기에 태우면 PlaceholderTitleRemaining
-    /// 외의 결함이 없어야 한다. 절대 경로를 쓴다 - 상대 경로는 테스트 호스트 cwd로 풀려
-    /// 픽스처 1편만 재고도 초록이 되는 함정이 실제로 있었다(좌표자가 밟았다). 이 클래스는
-    /// 읽기만 하므로 임시 디렉터리가 필요 없다.
+    /// 외의 결함이 없어야 한다. 이 클래스는 읽기만 하므로 임시 디렉터리가 필요 없다.
+    ///
+    /// [경로를 어떻게 잡는가 - 2026-09-06 I2] 상대 경로는 테스트 호스트 cwd로 풀려
+    /// 픽스처 1편만 재고도 초록이 되는 함정이 있다. 그렇다고 절대 경로를 <b>박으면</b>
+    /// 세 가지가 한꺼번에 생긴다 - 이미 있는 헬퍼의 네 번째 사본이 되고, 다른 기계·CI에서
+    /// Find가 빈 목록을 돌려 「건너뜀이 아니라 실패」가 되며, 어느 워크트리에서 돌든
+    /// 공유 체크아웃을 읽는다. 옳은 규칙은 「절대 경로를 써라」가 아니라 「경로가 자기
+    /// 워크트리 밖으로 풀리지 않게 하라」이고, <see cref="CorpusPaths.RepoRoot"/>가
+    /// 그것을 한다 - 아는 실물 SP 파일 하나가 실제로 있는 조상까지만 올라가 얕은
+    /// 스크래치(bin/…/output의 dbo.USP_Root 1건)에서 멈추는 조용한 오측도 함께 막는다.
+    ///
+    /// 다만 정확히 말해 둔다(2026-09-06 실측): 워크트리가 메인 체크아웃 <b>안에</b>
+    /// 있으면(`.claude/worktrees/…`) 자기 `output` 심링크가 없을 때 탐색이 메인
+    /// 체크아웃까지 올라간다. 즉 이 함수가 보증하는 것은 「심링크를 건 워크트리는
+    /// 자기 것을 읽는다」이지 「절대 밖을 못 읽는다」가 아니다 - 심링크 넷을 걸고
+    /// 시작하라는 규약이 그래서 필요하다. 코퍼스가 아예 없는 기계에서는 빈 문자열이
+    /// 돌아와 <b>실패가 아니라 건너뜀</b>이 된다.
     /// </summary>
     public sealed class SettlementRosterDraftCrossTaskInvariantTests
     {
-        private const string RealOutputRoot = "/Users/payletter/git-root/ReSet/output";
-
-        [Fact]
+        [SkippableFact]
         public void 실물_코퍼스의_대상_수는_14다()
         {
-            var targets = PolicyTargetDiscovery.Find(RealOutputRoot);
+            var targets = PolicyTargetDiscovery.Find(RealOutputRoot());
 
             Assert.Equal(14, targets.Count);
         }
 
-        [Fact]
+        [SkippableFact]
         public void 실물_코퍼스_초안_명부는_PlaceholderTitleRemaining_외의_결함이_없다()
         {
-            var targets = PolicyTargetDiscovery.Find(RealOutputRoot);
+            var targets = PolicyTargetDiscovery.Find(RealOutputRoot());
             Assert.Equal(14, targets.Count);
 
             var sources = targets
@@ -480,6 +571,20 @@ namespace ReSet.Core.Tests
                 roster, sources.Select(s => s.Label).ToList());
 
             Assert.All(defects, d => Assert.Equal(RosterDefectType.PlaceholderTitleRemaining, d.Type));
+        }
+
+        /// <summary>
+        /// 자기 워크트리(또는 체크아웃)에 걸린 `output/`. 코퍼스가 없으면 건너뛴다 -
+        /// 다른 코퍼스 테스트와 같은 관례다(CorpusSkip.Reason이 심링크 넷을 안내한다).
+        /// </summary>
+        private static string RealOutputRoot()
+        {
+            var root = CorpusPaths.RepoRoot();
+            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
+
+            var outputRoot = Path.Combine(root, "output");
+            Skip.IfNot(Directory.Exists(outputRoot), CorpusSkip.Reason);
+            return outputRoot;
         }
     }
 }

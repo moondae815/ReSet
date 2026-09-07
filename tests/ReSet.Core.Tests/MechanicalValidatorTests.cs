@@ -4002,6 +4002,83 @@ SELECT ISNULL(SUM(L.S),0), ISNULL(SUM(R.S),0) FROM L CROSS JOIN R HAVING ISNULL(
         // 감사 실측: INSERT INTO batch.BatchRun이 번들 전체에 0건이었다. 단계 검사로는
         // 잡을 수 없다 - 어느 단계가 첫 단계인지 단계 문서 하나만 봐서는 모른다.
         // 통합 문서는 계획서 전체를 보므로 여기서 닫는다.
+        // ─────────────────────────────────────────────────────────────────────
+        // D1 제어합계 생산자 — 2026-09-06 POQSettleBatch4 축 B 감사의 S16 🔴 둘째.
+        //
+        // 실물: S16 이 batch.BatchControlTotal 을 `AND StepCode <> N'S16'` 으로 읽어
+        // 「사전 단계가 적재한 제어합계」를 기대값으로 삼는데, 코퍼스 전체에서 그 표로
+        // 들어가는 INSERT 는 S16 자신 하나뿐이다. 그래서 Expected 가 **항상 공집합**이고
+        // `WHEN NOT EXISTS THEN 1` 이 무조건 통과한다 — 검증이 검증을 안 한다.
+        //
+        // [왜 아무도 못 잡았나] batch.BatchControlTotal 의 Origin 은 ProducerInsertsOnly 인데,
+        // 행 출처를 강제하는 세 자리가 전부 그 값을 `continue` 로 걸러낸다. 즉 이 부류의 표는
+        // **「누가 행을 만드는가」를 아무도 묻지 않는다.**
+        //
+        // [단계 검사로는 못 닫는다] 단계 문서 하나만 봐서는 다른 단계가 그 표에 넣는지 모른다.
+        // batch.BatchRun 의 행 생성을 문서 단위에서 닫은 것과 같은 이유다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateConsolidated_WhenSelfExcludingReadHasNoOtherProducer_IsReported()
+        {
+            var markdown = ConsolidatedDocumentWithSteps(
+                ("S16", @"
+SELECT ControlName, ControlValue
+  FROM batch.BatchControlTotal
+ WHERE RunId = @RunId
+   AND StepCode <> N'S16';
+
+INSERT INTO batch.BatchControlTotal (RunId, StepCode, ControlName, ControlValue, CapturedAtUtc)
+VALUES (@RunId, N'S16', N'TSettleMst_Sum_TXAMT', @v_actual, SYSUTCDATETIME());"));
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            // 결과의 내용으로 잠근다 — 표 이름과 제외된 단계 코드가 메시지에 있어야 한다.
+            var error = Assert.Single(result.Errors, e => e.Contains("제어합계"));
+            Assert.Contains("batch.BatchControlTotal", error);
+            Assert.Contains("S16", error);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_WhenAnotherStepProducesTheControlTotal_StaysSilent()
+        {
+            // 음성 ①: 다른 단계가 적재하면 Expected 가 비지 않는다 — 침묵해야 한다.
+            var markdown = ConsolidatedDocumentWithSteps(
+                ("S05", @"
+INSERT INTO batch.BatchControlTotal (RunId, StepCode, ControlName, ControlValue, CapturedAtUtc)
+SELECT @RunId, N'S05', N'TSettleMst_Sum_TXAMT', SUM(TXAMT), SYSUTCDATETIME()
+  FROM SETTLE_POQ_DB.dbo.TSettleMst WHERE YMD = @p_ymd;"),
+                ("S16", @"
+SELECT ControlName, ControlValue
+  FROM batch.BatchControlTotal
+ WHERE RunId = @RunId
+   AND StepCode <> N'S16';"));
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어합계"));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_WhenReadDoesNotExcludeItself_StaysSilent()
+        {
+            // 음성 ②: 자기 제외가 없으면 자기가 적재한 행도 기대값에 들어온다 — 설계 선택이지
+            // 결함이 아니다. 이 방향을 잠그지 않으면 「생산자가 하나뿐」이라는 이유만으로
+            // 정상 문서를 고발하게 된다.
+            var markdown = ConsolidatedDocumentWithSteps(
+                ("S16", @"
+SELECT ControlName, ControlValue
+  FROM batch.BatchControlTotal
+ WHERE RunId = @RunId;
+
+INSERT INTO batch.BatchControlTotal (RunId, StepCode, ControlName, ControlValue, CapturedAtUtc)
+VALUES (@RunId, N'S16', N'TSettleMst_Sum_TXAMT', @v_actual, SYSUTCDATETIME());"));
+
+            var result = new MechanicalValidator().ValidateConsolidated(markdown);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("제어합계"));
+        }
+
         [Fact]
         public void ValidateConsolidated_RejectsADocumentThatUpdatesBatchRunButNeverInsertsIt()
         {
@@ -4308,6 +4385,28 @@ WHERE RunId = @RunId;");
             var result = new MechanicalValidator().ValidateConsolidated(markdown);
 
             Assert.DoesNotContain(result.DetailedErrors, e => e.Type == ErrorType.BatchRunRowNeverCreated);
+        }
+
+        /// <summary>
+        /// 단계 절이 여럿인 조립본을 만든다. 실물 헤딩은 `### S01: …`·`### S02 | …`·`### S03. …`
+        /// 처럼 구분자가 갈리므로(코퍼스 실측) 검사도 테스트도 코드만 보고 자른다.
+        /// </summary>
+        private static string ConsolidatedDocumentWithSteps(params (string Code, string Sql)[] steps)
+        {
+            var body = new System.Text.StringBuilder();
+            body.AppendLine("## 통합 배치 아키텍처 개요\n\n내용.\n");
+            body.AppendLine("## Mermaid 기반 통합 흐름도\n\n```mermaid\nflowchart TD\nA[\"시작\"] --> B[\"끝\"]\n```\n");
+            body.AppendLine("## 단계별 이행 상세 및 의사코드\n");
+            foreach (var (code, sql) in steps)
+            {
+                body.AppendLine($"### {code}. 단계\n");
+                body.AppendLine("```sql");
+                body.AppendLine(sql.Trim());
+                body.AppendLine("```\n");
+            }
+            body.AppendLine("## 통합 데이터 정합성 검증 SQL 세트\n\n내용.\n");
+            body.AppendLine("## 운영 및 배포 고려사항\n\n내용.");
+            return body.ToString();
         }
 
         /// <summary>
@@ -7700,6 +7799,108 @@ END";
         }
 
         // ─────────────────────────────────────────────────────────────────────
+        // 검사 B 콤마 조인(ANSI-89) 사각지대 - 2026-09-06 POQSettleBatch4 축 B 감사.
+        //
+        // 레거시 SP 는 `FROM A, B WHERE A.k = B.k` 를 기본으로 쓰고 이행이 그것을
+        // 원본대로 보존한다. 그 모양에는 **ON 절이 아예 없다** - 결합 등식이 WHERE 에
+        // 있다. 그런데 JoinColumns 는 FROM 절만 훑어 모으므로 항상 비고, 조인 키 칸이
+        // 명세서가 확정한 키 **전량**을 「없다」로 발화했다(POQSettleBatch4/S08 에서 9 건).
+        // 그 오탐은 SuggestedPromptFix 를 타고 산출물에 되먹여져 재생성 5 회를 태웠고,
+        // S08.md 에 「— 조인 키 AYMD, YMD, PGNAME, MALLID 만 사용」이라는 주석까지 남겼다.
+        //
+        // [판별자를 좁힌 이유 - 감사 보고서의 처방을 그대로 쓰면 안 된다]
+        // 보고서(§5-2)는 「조인 키 칸도 술어 칸과 같은 재료로 대조한다. 원본이 진짜
+        // 조인 키를 잃으면 술어 칸이 잡는다」고 적었다. **뒷문장이 틀렸다** - 술어 칸의
+        // 기준값은 row.PredicateColumns 이고 조인 키 칸의 기준값은 row.JoinKeys 라,
+        // 술어 칸이 비어 있으면 아무것도 안 잡는다. 무조건 넓히면 바로 위
+        // ValidateBatchStep_JoinKeyPresentOnlyInWhereNotOn_ShouldBeAnError 가 잠근
+        // 실물 결함(조인 키가 ON 에서 WHERE 필터로 퇴행)이 통째로 새 나간다.
+        //
+        // 그래서 **콤마 조인이 실재하는 문장에서만** 넓힌다. 그 문장에는 ON 이 없으므로
+        // 「ON 에 없다」가 결함을 뜻하지 않는다. ON 이 있는 문장은 좁은 재료 그대로다.
+        //
+        // [판별자 실측 - 보고서의 기전 설명도 틀렸다] 보고서는 콤마 조인이
+        // `UnqualifiedJoin` 으로 파스된다고 적었으나 아니다. 실측(TSql150Parser):
+        //   `FROM A, B`           → FromClause.TableReferences = 2 (NamedTableReference 둘)
+        //   `FROM A INNER JOIN B` → TableReferences = 1 (QualifiedJoin 하나)
+        //   `FROM A CROSS APPLY f`→ TableReferences = 1 (UnqualifiedJoin 하나)
+        //   `FROM A, B INNER JOIN C ON …` → TableReferences = 2 (Named + QualifiedJoin)
+        // 즉 UnqualifiedJoin 은 CROSS JOIN·APPLY 이지 콤마 조인이 아니다. 판별자는
+        // **최상위 FROM 절의 TableReferences 가 둘 이상인가**이다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_CommaJoinKeysInWhere_StaysSilent()
+        {
+            // 음성 표본. 실물 모양 그대로다 - POQSettleBatch4/S08 의 SQL_UPDATE_4.
+            // 합성 픽스처가 실물보다 단순해 코퍼스에서 침묵한 전례가 있어(접힘 좁힘
+            // 첫 시도, 2026-09-05) 원문을 옮겨 쓴다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 4, 120, "TSettleMst",
+                        Array.Empty<string>(), new[] { "AYMD", "YMD", "PGNAME", "MALLID" },
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S08 단계\n\n```sql\n" +
+                "-- 갱신 4\n" +
+                "UPDATE A\n" +
+                "SET PGCOMM = PGCOMM + C.CommissionCancelAmt\n" +
+                "FROM SETTLE_POQ_DB.dbo.TSettleMst A, SETTLE_POQ_DB.dbo.TPGSettleRate C\n" +
+                "WHERE A.AYMD = C.YMD\n" +
+                "  AND A.YMD = @p_ymd\n" +
+                "  AND A.PGNAME = C.PGNAME\n" +
+                "  AND A.MALLID = C.MALLID;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S08"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("조인 키"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CommaJoinWithAKeyActuallyLost_IsStillReported()
+        {
+            // 양성 표본. 음성만 있으면 방향이 뒤집힌 사본(전부-접기)이 조용히 통과한다.
+            // 같은 콤마 조인 모양인데 MALLID 결합을 진짜로 잃었다 - 그 컬럼은 WHERE 에도
+            // ON 에도 없다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("UPDATE", 4, 120, "TSettleMst",
+                        Array.Empty<string>(), new[] { "AYMD", "YMD", "PGNAME", "MALLID" },
+                        Array.Empty<string>(), Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S08 단계\n\n```sql\n" +
+                "-- 갱신 4\n" +
+                "UPDATE A\n" +
+                "SET PGCOMM = PGCOMM + C.CommissionCancelAmt\n" +
+                "FROM SETTLE_POQ_DB.dbo.TSettleMst A, SETTLE_POQ_DB.dbo.TPGSettleRate C\n" +
+                "WHERE A.AYMD = C.YMD\n" +
+                "  AND A.YMD = @p_ymd\n" +
+                "  AND A.PGNAME = C.PGNAME;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S08"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            // 잃은 것만 고발해야 한다 - 나열 내용으로 잠근다. 「발화했는가」로 잠그면
+            // 규칙을 아무렇게나 세게 만들어도 초록이다.
+            var error = Assert.Single(result.Errors, e => e.Contains("조인 키"));
+            var reported = error[..error.IndexOf("이(가) 없습니다", StringComparison.Ordinal)];
+            Assert.Contains("MALLID", reported);
+            Assert.DoesNotContain("PGNAME", reported);
+            Assert.DoesNotContain("AYMD", reported);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
         // 검사 B 태스크 22 - 문장↔spec 행 대응 재설계 뒤 드러난 두 새 함정.
         //
         // [1] 대상 테이블을 대조하지 않았다. (Ordinal, Kind)만 보면 단계가 완전히
@@ -7715,6 +7916,90 @@ END";
         // 진짜 필터(PGName·ClientID 등)는 그 CTE 안의 WHERE에 있는데 최상위만
         // 보는 조인 키 대조는 이를 "없다"고 거짓 보고한다.
         // ─────────────────────────────────────────────────────────────────────
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 검사 C 의 `known` 에서 GROUP BY 칸을 뺀다 — 2026-09-06 축 B 감사의 S15 🔴.
+        //
+        // 실물: 원본 INSERT 1 의 최상위 WHERE 에 없던 `A.OUTSTATE = 9` 를 이행이 새로 걸었다.
+        // 명세서는 OUTSTATE 를 **GROUP BY 키일 뿐 WHERE 에는 없는 자유 그룹키**로 확정한다.
+        // DELETE 가 13 키로 모든 OUTSTATE 그룹을 지우는데 INSERT 는 =9 만 되넣어
+        // **OUTSTATE≠9 요약행이 소실**된다.
+        //
+        // [왜 침묵했나] `known` 이 술어·조인 키뿐 아니라 **GROUP BY·ORDER BY 칸까지** 인정해,
+        // 새로 붙은 술어가 「명세서가 인정한 이름」으로 흡수됐다.
+        //
+        // [논거가 비순환이다] GROUP BY 키가 정당한 필터이기도 하면 명세서는 그것을 **술어 칸에도**
+        // 적는다. 그러니 GROUP BY 에만 있고 술어 칸에 없는 이름을 WHERE 에 새로 거는 것은
+        // 정의상 「원본에 없는 조건」이다.
+        //
+        // [ORDER BY 는 빼지 않았다 - 실측] 함께 빼도 코퍼스 발화가 21 로 같았다(무효). 근거가
+        // 같더라도 오늘 값을 안 하는 변경은 표면만 넓히므로 하지 않는다. 필요해지면 다시 재라.
+        //
+        // [코퍼스 차분] 검사 C 20 → 21. 새 발화가 **정확히 하나**이고 그것이 이 S15 다.
+        // 기준선 20 건은 하나도 바뀌지 않았다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_NewPredicateOnAGroupByOnlyColumn_IsReported()
+        {
+            // 명세서: INSERT 1 의 최상위 술어는 YMD 뿐이고 OUTSTATE 는 GROUP BY 키다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 77, "TSettleByOUT",
+                        new[] { "YMD" }, Array.Empty<string>(),
+                        new[] { "YMD", "CLIENTID", "OUTSTATE" }, Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S15 단계\n\n```sql\n" +
+                "/* INSERT 1: 지급 요약 재삽입 */\n" +
+                "INSERT INTO dbo.TSettleByOUT (YMD, CLIENTID, OUTSTATE)\n" +
+                "SELECT A.YMD, A.CLIENTID, A.OUTSTATE\n" +
+                "  FROM dbo.TSettleMst AS A\n" +
+                " WHERE A.YMD = @p_ymd\n" +
+                "   AND A.OUTSTATE = 9\n" +
+                " GROUP BY A.YMD, A.CLIENTID, A.OUTSTATE;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S15"), new[] { "dbo.TSettleByOUT" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            var error = Assert.Single(result.Errors, e => e.Contains("명세서에 없는"));
+            Assert.Contains("OUTSTATE", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_PredicateOnAColumnThatIsAlsoInThePredicateCell_StaysSilent()
+        {
+            // 음성: 같은 이름이 GROUP BY 이자 **술어 칸에도** 있으면 원본이 실제로 거는
+            // 조건이므로 침묵해야 한다. 이 방향이 비순환 논거의 반대편이다.
+            var facts = new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXCEPTION_PROC"] = new SpecStatementFacts(
+                    new[] { new SpecDmlRow("INSERT", 1, 77, "TSettleByOUT",
+                        new[] { "YMD", "OUTSTATE" }, Array.Empty<string>(),
+                        new[] { "YMD", "CLIENTID", "OUTSTATE" }, Array.Empty<string>()) },
+                    Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>())
+            };
+
+            var markdown = "### S15 단계\n\n```sql\n" +
+                "/* INSERT 1: 지급 요약 재삽입 */\n" +
+                "INSERT INTO dbo.TSettleByOUT (YMD, CLIENTID, OUTSTATE)\n" +
+                "SELECT A.YMD, A.CLIENTID, A.OUTSTATE\n" +
+                "  FROM dbo.TSettleMst AS A\n" +
+                " WHERE A.YMD = @p_ymd\n" +
+                "   AND A.OUTSTATE = 9\n" +
+                " GROUP BY A.YMD, A.CLIENTID, A.OUTSTATE;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S15"), new[] { "dbo.TSettleByOUT" },
+                new Dictionary<string, SpecConditions>(), null, null, facts);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("명세서에 없는"));
+        }
 
         [Fact]
         public void ValidateBatchStep_AnchoredStatementTargetsADifferentPhysicalTable_StaysSilent()
@@ -7804,6 +8089,96 @@ END";
         //
         // 이 검사는 오라클이 없다 — 명세서도 원본 DDL 도 안 본다. SQL 자체가
         // 서지 않는 것을 본다.
+        // ─────────────────────────────────────────────────────────────────────
+        // D4 청크 순회 진행 — 2026-09-06 POQSettleBatch4 축 B 감사의 S11 🔴.
+        //
+        // 실물: 청크 상한을
+        //   SELECT MIN(ClientID) FROM (
+        //     SELECT DISTINCT TOP(@size+1) A.ClientID FROM … WHERE A.ClientID >= @p_from
+        //      ORDER BY A.ClientID) D
+        // 로 구한다. 그런데 `ClientID >= @p_from` 으로 거른 집합의 MIN 은 @p_from 자신이다
+        // (그 키가 집합에 있으므로 — from 은 직전 회차의 경계 키다). 그래서 to == from 이고
+        // 범위 `>= from AND < to` 가 항상 공집합이라 **WHILE 이 무한 루프**가 된다.
+        // 후취정산이 전량 미반영된다.
+        //
+        // [판별자를 왜 이렇게 좁혔는가 — MIN 하나로는 못 가른다]
+        // 「`>= @from` 인 첫 키를 찾는다」는 **정당한 용법**이 있다(다음 청크의 시작을 구할 때).
+        // 결정적인 것은 의도가 아니라 **질의 자신의 모순**이다 — 파생 테이블이
+        // `TOP(n) … ORDER BY c` 오름차순으로 잘려 있는데 바깥이 `MIN(c)` 을 취하면
+        // 상위 n 개의 최솟값 = 전체의 최솟값이라 **TOP 이 죽은 코드**가 된다. 상한을 구하려면
+        // MAX 여야 한다. 그래서 이 검사는 세 조건이 **동시에** 성립할 때만 발화한다:
+        //   ① 바깥이 MIN(c) ② 파생 테이블에 TOP 과 ORDER BY c ③ 그 WHERE 에 c >= <파라미터>
+        //
+        // 이 검사는 앵커를 쓰지 않는다 — 문장 모양만 본다. S11 처럼 앵커가 붙는 단계뿐 아니라
+        // 앵커가 하나도 없는 단계(S13 계열)에서도 돈다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_ChunkUpperBoundUsesMinOverLowerBoundedSet_IsReported()
+        {
+            // 실물 모양 그대로다(POQSettleBatch4/S11 의 SQL_CHUNK_UPPER_BOUND).
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "-- SQL_CHUNK_UPPER_BOUND\n" +
+                "SELECT MIN(ClientID)\n" +
+                "  FROM (\n" +
+                "    SELECT DISTINCT TOP (CAST(@p_size AS INT) + 1) A.ClientID\n" +
+                "      FROM SETTLE_POQ_DB.dbo.TSettleMst A\n" +
+                "     WHERE A.YMD = @p_strYMD\n" +
+                "       AND A.ClientID >= @p_from\n" +
+                "     ORDER BY A.ClientID\n" +
+                "  ) D;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            // 결과의 내용으로 잠근다 — 컬럼 이름과 MAX 처방이 메시지에 있어야 한다.
+            var error = Assert.Single(result.Errors, e => e.Contains("청크 상한"));
+            Assert.Contains("ClientID", error);
+            Assert.Contains("MAX", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ChunkUpperBoundUsesMax_StaysSilent()
+        {
+            // 음성 ①: 같은 모양인데 MAX 다 — 이것이 옳은 상한 질의이므로 침묵해야 한다.
+            // 이 방향을 잠그지 않으면 「TOP + ORDER BY + >= 」만 보고 정상을 고발한다.
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "SELECT MAX(ClientID)\n" +
+                "  FROM (\n" +
+                "    SELECT DISTINCT TOP (CAST(@p_size AS INT) + 1) A.ClientID\n" +
+                "      FROM SETTLE_POQ_DB.dbo.TSettleMst A\n" +
+                "     WHERE A.ClientID >= @p_from\n" +
+                "     ORDER BY A.ClientID\n" +
+                "  ) D;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("청크 상한"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_MinOverLowerBoundedSetWithoutTop_StaysSilent()
+        {
+            // 음성 ②: TOP·ORDER BY 가 없으면 「>= @from 인 첫 키를 찾는다」는 **정당한 용법**이다
+            // (다음 청크의 시작을 구하는 자리). 자기모순이 없으므로 발화하면 안 된다.
+            var markdown = "### S11 단계\n\n```sql\n" +
+                "SELECT MIN(A.ClientID)\n" +
+                "  FROM SETTLE_POQ_DB.dbo.TSettleMst A\n" +
+                " WHERE A.ClientID >= @p_from;\n" +
+                "```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S11"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("청크 상한"));
+        }
+
         [Fact]
         public void ValidateBatchStep_DerivedTableProjectsTheSameNameTwice_IsReported()
         {
@@ -10336,6 +10711,114 @@ END"
             var result = new MechanicalValidator().Validate(markdown, expectations);
 
             Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.ErrorCodeTableMissing);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 오류 코드 「고유」 주장 기각 — 2026-09-06 POQSettleBatch4 축 A 감사.
+        //
+        // 실물: UP_UTIL_SETTLE_EXCEPTION_PROC 의 개요가 「각 문장 직후 @@ERROR 검사로
+        // 실패 시 롤백 후 **고유** 음수 코드를 출력 파라미터에 설정한다」고 적었는데,
+        // 같은 문서의 `오류 코드` 기계 확정 표는 -1 을 UPDATE 3·4 에, -2 를 5·6 에
+        // 중복으로 싣는다. 호출자가 반환 코드로 실패 지점을 특정할 수 있다고 오해한다.
+        //
+        // [왜 이 검사가 안전한가] 판정이 산문 문자열이 아니라 **기계 확정 재료의
+        // 중복 여부**에 걸린다. 착수 전 코퍼스 실측: 「고유」가 「코드」와 같은 문장에
+        // 있는 명세서 4 편 중 표에 중복이 있는 것은 EXCEPTION_PROC 하나뿐이라
+        // 발화 1 · 오탐 0 이다(EXPECT_PROC 11 코드·INS_EXTRA 5·Settle_Summary 8 은
+        // 전부 서로 달라 침묵한다).
+        //
+        // [알려진 한계 - 미리 적는다] 한국어 「고유」는 「유일한」과 「자신의」 둘 다로
+        // 쓰인다. Settle_Summary 의 「자신의 고유 코드(-1~-8)」는 후자이고 지금은
+        // 중복이 없어 침묵한다. **중복이 있는 「자신의 고유」가 나타나면 오탐이 된다** —
+        // 오늘 코퍼스에는 없다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ErrorCodeTable_WhenProseClaimsUniqueButTableHasDuplicates_IsReported()
+        {
+            // 실물 모양 그대로다 — 같은 코드가 서로 다른 두 문장에 붙는다.
+            var expectations = EmptySpecExpectations() with
+            {
+                ErrorCodes = new[]
+                {
+                    new ErrorCodeFact("UPDATE", 3, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 4, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 5, "-2", "@po_intRetVal"),
+                }
+            };
+
+            var markdown = WrapSpec(
+                "각 문장 직후 `@@ERROR` 검사로 실패 시 롤백 후 고유 음수 코드를 "
+                + "출력 파라미터에 설정하고 즉시 종료합니다.\n\n"
+                + DmlScopeExtractor.ErrorCodeTableHeading + "\n\n"
+                + "| 문장 | 오류 코드 | 설정 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| UPDATE 3 | -1 | @po_intRetVal |\n"
+                + "| UPDATE 4 | -1 | @po_intRetVal |\n"
+                + "| UPDATE 5 | -2 | @po_intRetVal |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            // 「발화했는가」가 아니라 **메시지가 나열하는 토큰**으로 잠근다 - 규칙을
+            // 아무렇게나 세게 만들어도 발화는 나기 때문이다.
+            var error = Assert.Single(result.Errors, e => e.Contains("고유"));
+            Assert.Contains("-1", error);
+            Assert.DoesNotContain("-2", error);   // 중복이 아닌 코드는 고발하지 않는다
+        }
+
+        [Fact]
+        public void ErrorCodeTable_WhenProseClaimsUniqueAndTableHasNone_StaysSilent()
+        {
+            // 음성 표본. 한쪽만으로는 방향이 뒤집힌 사본이 조용히 통과한다.
+            var expectations = EmptySpecExpectations() with
+            {
+                ErrorCodes = new[]
+                {
+                    new ErrorCodeFact("UPDATE", 1, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 2, "-2", "@po_intRetVal"),
+                }
+            };
+
+            var markdown = WrapSpec(
+                "각 단계 후 `@@ERROR` 검사에 실패하면 `ROLLBACK TRAN` 후 고유 오류 코드를 "
+                + "`@po_intRetVal` 에 설정하고 즉시 `RETURN` 합니다.\n\n"
+                + DmlScopeExtractor.ErrorCodeTableHeading + "\n\n"
+                + "| 문장 | 오류 코드 | 설정 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| UPDATE 1 | -1 | @po_intRetVal |\n"
+                + "| UPDATE 2 | -2 | @po_intRetVal |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("고유"));
+        }
+
+        [Fact]
+        public void ErrorCodeTable_WhenTableHasDuplicatesButProseIsSilent_StaysSilent()
+        {
+            // 중복 자체는 원본의 성질이라 결함이 아니다 - 산문이 「고유」라 단정했을
+            // 때만 기각한다. 이 방향을 잠그지 않으면 검사가 원본을 고발하게 된다.
+            var expectations = EmptySpecExpectations() with
+            {
+                ErrorCodes = new[]
+                {
+                    new ErrorCodeFact("UPDATE", 3, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 4, "-1", "@po_intRetVal"),
+                }
+            };
+
+            var markdown = WrapSpec(
+                "오류 코드 -1 이 두 곳(UPDATE 3·4)에서 중복 사용됩니다. 호출자가 "
+                + "실패 지점을 특정할 수 없습니다.\n\n"
+                + DmlScopeExtractor.ErrorCodeTableHeading + "\n\n"
+                + "| 문장 | 오류 코드 | 설정 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| UPDATE 3 | -1 | @po_intRetVal |\n"
+                + "| UPDATE 4 | -1 | @po_intRetVal |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("고유"));
         }
 
         [Fact]
