@@ -77,5 +77,45 @@ namespace ReSet.Core.Tests
 
             Assert.DoesNotContain("DECLARE @v_valIncVat", text);
         }
+
+        /// <summary>
+        /// 규칙 5-1 과 Few-Shot 블록 안 주석이 **거짓 절대 명제**로 되돌아가지 않게
+        /// 잠근다.
+        ///
+        /// [무엇이 거짓이었나] 「the binding list carries the original procedure's
+        /// parameters only」. 같은 프롬프트 문자열 안의 Few-Shot 이 그것을 반증한다 -
+        /// `SQL_CREATE_AND_CAPTURE_SHADOW` 는 `p_runId` 를, `SQL_INSERT_CHUNK` 와
+        /// `SQL_COPY_CHUNK` 는 `p_from`·`p_to` 를 바인딩하는데 셋 다 원본 프로시저의
+        /// 파라미터가 아니다. `runId` 는 **규칙 5 가 「입력에 더하지 마라」고 해서**
+        /// 제어 테이블에서 읽는 값이고, `from`/`to` 는 규칙 8-1 의 청크 경계다.
+        /// 모델이 그 명제를 문자 그대로 따르면 규칙 4(c)·8-1 과 정면으로 부딪힌다.
+        ///
+        /// [왜 여기에 또 잠그는가 - 재감염 경로] `CriticCriteriaCoverageTests` 의
+        /// `DoesNotContain` 은 **Critic 프롬프트만** 본다. 생성 프롬프트 쪽 두 자리는
+        /// 무주공산이었다 - 옛 명제가 돌아와도 조용하다. 그리고 그 둘은 **언어가
+        /// 다르다**(규칙은 영문, Few-Shot 블록 안 주석은 한글). 하나만 잠그면 다른
+        /// 쪽이 조용히 돌아오므로 넷을 따로 건다.
+        ///
+        /// [왜 Contains 도 함께 거는가] `DoesNotContain` 만 있으면 문장을 **통째로
+        /// 지워도** 초록이다. 없앴을 때 깨지는 쪽이 있어야 검사가 효력을 가진다.
+        /// </summary>
+        [Fact]
+        public void BatchStepPrompt_ScopesTheBindingListClaimInsteadOfClaimingParametersOnly()
+        {
+            var text = PromptText();
+
+            // (a) 옛 절대 명제가 규칙 5-1 로 돌아오지 않는다 - 영문 자리.
+            Assert.DoesNotContain("the original procedure's parameters only", text);
+            // (b) 옛 절대 명제가 Few-Shot 블록 안 주석으로 돌아오지 않는다 - 한글 자리.
+            //     생성물은 주석이 아니라 예시를 베끼므로 이 자리가 가장 멀리 퍼진다.
+            Assert.DoesNotContain("바인딩 목록에는 원본 프로시저의 파라미터만 들어간다", text);
+
+            // (c) 규칙 5-1 이 관할을 밝힌 문장을 싣는다 - 지우면 여기서 깨진다.
+            Assert.Contains(
+                "the binding list carries the step's own parameters and the values the orchestration itself supplies",
+                text);
+            // (d) Few-Shot 블록 안 주석도 관할이 붙은 문장이다 - 지우면 여기서 깨진다.
+            Assert.Contains("원본이 초기값과 함께 선언한 상수는 바인딩 목록에 넣지 않는다", text);
+        }
     }
 }
