@@ -121,8 +121,8 @@ git diff "$BASE"..HEAD -- src/ | grep -E "^[+-]" | grep -v "^[+-][+-]" \
 1단계 결과를 바탕으로 문서 간의 괴리를 항목별로 특정한다.
 
 - 새 기능/설정 키가 `README.md`의 `주요 특징` 또는 `appsettings.json 설정` 섹션에 누락되었는가?
-- `src/`에 존재하는 새 클래스가 `architecture.md` 2.2 테이블에 없는가?
-- 변경된 데이터 흐름·로깅 규칙·아키텍처 제약이 `architecture.md` 또는 `AGENTS.md`에 반영되지 않았는가?
+- `src/`에 존재하는 새 클래스가 `docs/architecture/2.2-module-catalog.md` 테이블에 없는가?
+- 변경된 데이터 흐름·로깅 규칙·아키텍처 제약이 `docs/architecture/*.md`(해당 절 파일) 또는 `AGENTS.md`에 반영되지 않았는가?
 - `AGENTS.md`의 참조 링크가 존재하지 않는 파일을 가리키는가? (4단계 검증 커맨드로 확인)
 - `dotnet test`가 **실패 0, 건너뜀 0**인가? (워크트리라면 코퍼스 재료 **둘**을 심링크해야 0이 된다 — AGENTS.md의 워크트리 코퍼스 절) (기대 개수를 적는 방식은 폐기됐다. 4단계 검증 커맨드로 확인)
 - Mermaid 다이어그램이 신규 모듈 연동이나 흐름 변경을 반영하지 못하고 과거 구조에 머물러 있는가?
@@ -179,7 +179,7 @@ grep -nE "무관|하지 않|않습니다|사용하지|없습니다|불가능|미
 - 기존 설명 스타일(한국어, 기술적 서술) 유지
 
 **AGENTS.md 작성 원칙**
-- **새 클래스는 `docs/architecture.md` §2.2 표에만 추가한다. AGENTS.md는 손대지 않는다.**
+- **새 클래스는 `docs/architecture/2.2-module-catalog.md` 표에만 추가한다. AGENTS.md는 손대지 않는다.**
   AGENTS.md에는 클래스 목록이 없다 — 있었고, 그것이 이 문서를 108KB로 만들었다.
 - AGENTS.md를 여는 것은 **새 규칙**이 생겼을 때뿐이며, 3-0 판정에서 마지막 칸이 나온
   경우로 한정한다
