@@ -144,5 +144,44 @@ END";
 
             Assert.Contains(facts, f => f.Kind == ExecutionSemanticsFacts.AggregateAssignmentKind);
         }
+
+        [Fact]
+        public void Collect_AggregateAssignment_RendersTheRightHandSideInsteadOfElidingTheArgument()
+        {
+            // 2026-09-06 이전에는 대상 칸이 `SELECT @v = SUM(...)` 로 **인자를 생략**했다.
+            // 읽는 사람이 무엇을 합산하는지 표에서 알 수 없었다. 원문을 싣는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = SUM(A.CLTotal) FROM dbo.T A WITH(NOLOCK)
+END";
+
+            var facts = ExecutionSemanticsFacts.Collect(ddl, null, null, new Dictionary<string, string>());
+
+            var fact = Assert.Single(
+                facts, f => f.Kind == ExecutionSemanticsFacts.AggregateAssignmentKind);
+            Assert.Equal("SELECT @v = SUM(A.CLTotal)", fact.Target);
+        }
+
+        [Fact]
+        public void Collect_NonAggregateAssignmentWithABranchExpression_RendersTheExpressionVerbatim()
+        {
+            // 대상 칸이 컬럼 이름만 실으면 분기가 지워진다 - 이 배선이 🔴 #1 의 나머지 절반이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = IIF(A.Flag = 1, A.RateA, A.RateB) FROM dbo.T A WITH(NOLOCK)
+END";
+
+            var facts = ExecutionSemanticsFacts.Collect(ddl, null, null, new Dictionary<string, string>());
+
+            var fact = Assert.Single(
+                facts, f => f.Kind == ExecutionSemanticsFacts.NonAggregateAssignmentKind);
+            Assert.Equal("SELECT @v = IIF(A.Flag = 1, A.RateA, A.RateB)", fact.Target);
+        }
     }
 }

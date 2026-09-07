@@ -9,11 +9,12 @@ namespace ReSet.Core.Services
 {
     /// <param name="Line">대입문의 원본 줄 번호.</param>
     /// <param name="Variable">대입 대상 변수명.</param>
-    /// <param name="Aggregate">집계 함수 이름(대문자).</param>
+    /// <param name="Aggregate">집계 함수 이름(대문자). 감쌈을 벗긴 뒤의 이름이다.</param>
+    /// <param name="Expression">대입식 우변의 원문(감쌈을 벗기지 않은 그대로).</param>
     /// <param name="HasInitializer">DECLARE에 초기값이 있었는가.</param>
     /// <param name="Sentence">확정 사실 문장.</param>
     public sealed record AggregateAssignmentFact(
-        int Line, string Variable, string Aggregate, bool HasInitializer, string Sentence);
+        int Line, string Variable, string Aggregate, string Expression, bool HasInitializer, string Sentence);
 
     /// <summary>
     /// `SELECT @v = AGG(...)` 형태의 변수 대입을 뽑는다.
@@ -31,6 +32,18 @@ namespace ReSet.Core.Services
     ///
     /// [왜 비집계 대입은 담지 않는가] `SELECT @v = c FROM t`는 무결과면 대입 자체가
     /// 일어나지 않아 변수가 직전 값을 유지한다 - 정확히 반대 의미다. 담으면 거짓이 된다.
+    ///
+    /// [감쌈을 한 겹 벗긴다 - 2026-09-06] 우변이 `ISNULL(<집계>, 리터럴)`이나
+    /// `COALESCE(<집계>, 리터럴)`이면 최상위가 집계 이름이 아니라 이 추출기가 놓쳤고,
+    /// 비집계 추출기도 "맨 컬럼이 아님"으로 떨어뜨려 **두 그물 사이로 샜다**
+    /// (`UP_UTIL_SETTLE_PROC_ETC:116`, 2026-09-06 축 A 감사 🟠).
+    /// <see cref="AssignmentExpressionUnwrapper"/>로 한 겹 벗겨 안쪽으로 갈래를 정한다.
+    ///
+    /// 그런데 이 감쌈은 **대입되는 값을 실제로 바꾼다** - 무결과 시 집계는 NULL이지만
+    /// 기본값이 그것을 덮는다. 그래서 문장 갈래가 셋에서 넷이 됐다. 순서가 곧 판정이다:
+    /// GROUP BY(0행이면 ISNULL이 돌 자리가 없다) > COUNT(NULL을 내지 않으므로 감쌈이
+    /// 무동작이다) > 감쌈 있음 > 맨 집계. 기본값이 리터럴이 아니면 벗기지 않는다 -
+    /// 무엇이 들어가는지 말할 수 없으면 담지 않는 것이 이 표의 규칙이다.
     ///
     /// [실측] UP_UTIL_SETTLE_INS_EXTRA:16,21-25와 UP_UTIL_SETTLE_SUMMARY_EXTRA:20,25-29.
     /// 둘 다 초기값 ''가 NULL로 덮이는 사실이 명세서 전체에 한 번도 없었고, 그 결과
@@ -108,7 +121,13 @@ namespace ReSet.Core.Services
                     // NonAggregateAssignmentExtractor)과 같은 규칙으로 거른다.
                     if (setVariable.AssignmentKind != AssignmentKind.Equals) continue;
 
-                    if (setVariable.Expression is not FunctionCall call) continue;
+                    if (setVariable.Expression == null) continue;
+
+                    // 감쌈을 한 겹 벗겨 안쪽으로 갈래를 정한다(클래스 주석). 대상 칸에는
+                    // 벗기기 **전** 원문을 싣는다 - 벗긴 것을 실으면 원문에 없는 문장이
+                    // 표에 들어간다.
+                    var unwrapped = AssignmentExpressionUnwrapper.Unwrap(setVariable.Expression);
+                    if (unwrapped.Inner is not FunctionCall call) continue;
 
                     var name = call.FunctionName?.Value;
                     if (string.IsNullOrWhiteSpace(name)) continue;
@@ -148,6 +167,15 @@ namespace ReSet.Core.Services
                     {
                         sentence = "집계 SELECT는 무결과여도 한 행을 돌려주므로 대입이 항상 일어납니다. COUNT는 0을 넣습니다.";
                     }
+                    else if (unwrapped.Fallback != null)
+                    {
+                        // 감쌈이 대입되는 값을 바꾼다 - 무결과 시 집계는 NULL이지만
+                        // 기본값이 그것을 덮는다. 「무결과 시 NULL이 대입됩니다」를 그대로
+                        // 실으면 거짓이다.
+                        sentence = "집계 SELECT는 무결과여도 한 행을 돌려주므로 대입이 항상 일어납니다. "
+                                   + $"무결과 시 집계가 NULL이지만 `{unwrapped.WrapperName}`의 "
+                                   + $"기본값 `{unwrapped.Fallback.Value}`이 대입됩니다.";
+                    }
                     else
                     {
                         sentence = "집계 SELECT는 무결과여도 한 행을 돌려주므로 대입이 항상 일어납니다. 무결과 시 NULL이 대입됩니다"
@@ -155,7 +183,12 @@ namespace ReSet.Core.Services
                     }
 
                     Facts.Add(new AggregateAssignmentFact(
-                        setVariable.StartLine, variable, upper, hasInitializer, sentence));
+                        setVariable.StartLine,
+                        variable,
+                        upper,
+                        AssignmentExpressionUnwrapper.TextOf(setVariable.Expression),
+                        hasInitializer,
+                        sentence));
                 }
             }
         }

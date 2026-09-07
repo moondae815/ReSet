@@ -214,7 +214,96 @@ namespace ReSet.Core.Services
         //     하나라도 깨지면 이 승격은 근거를 잃는다.
         //     번호 충돌 확인: 전 브랜치에서 18이 비어 있음을 확인했다(main·origin/main·
         //     local/main·이 물결의 워크트리 브랜치 전부 17 또는 그 이하).
-        private const int CurrentCacheFormatVersion = 18;
+        // 19: 2026-09-06 - 「실행 의미」 표의 `집계 대입`·`비집계 대입` 두 갈래가 함께
+        //     넓어졌다(표 종류는 늘지 않는다).
+        //     (1) 비집계 대입: 우변 가드가 「맨 컬럼」에서 「감쌈을 한 겹 벗긴 뒤 전부
+        //     컬럼 참조인 분기식」으로 넓어져 `IIF`·`CASE`·`ISNULL(X, 리터럴)`·
+        //     `COALESCE(X, 리터럴)`로 감싼 대입이 새로 실린다. 실물은
+        //     UF_GET_COMM4CLIENT4PARTIALCANCEL:43의 수수료율 분기(축 A 🔴) -
+        //     넓히기 전에는 어떤 기계 확정 표에도 없고 명세서가 한 줄도 서술하지
+        //     않았다. 비집계 코퍼스 대장
+        //     (NonAggregateAssignmentExtractorTests.Extract_OverTheCorpus_
+        //     ShouldCollectExactlyTheseRows)이 43행(NULL확정 27 · 중립 16)을 못박는다.
+        //     (2) 집계 대입: `ISNULL(<집계>, 리터럴)`·`COALESCE(<집계>, 리터럴)`이 새로
+        //     실리고, 그 행은 문장 갈래가 셋에서 넷("기본값대입")이 된다 - 감쌈 없는
+        //     집계는 무결과 시 NULL을 넣지만 감쌈이 있으면 리터럴 기본값이 그것을
+        //     덮는다. 실물은 UP_UTIL_SETTLE_PROC_ETC:116·130(축 A 🟠) - 넓히기 전에는
+        //     집계 그물(최상위가 집계 이름이어야 함)과 비집계 그물(맨 컬럼이어야 함)
+        //     사이로 새어 어떤 표에도 없었다. 집계 코퍼스 대장
+        //     (AggregateAssignmentExtractorTests.Extract_OverTheCorpus_
+        //     ShouldCollectExactlyTheseRows)이 10행 중 2행을 "기본값대입" 갈래로
+        //     못박는다.
+        //     (3) 두 갈래의 대상 칸이 우변 원문을 싣는다 - 다만 갈래마다 전사(前史)가
+        //     다르다. 집계 쪽은 **기존 8행 전부**가 바뀐다 - `AggregateAssignmentFact`
+        //     에는 `Expression` 필드 자체가 없었고(필드는 `Line·Variable·Aggregate·
+        //     HasInitializer·Sentence` 뿐이었다) 대상 칸은 `fact.Aggregate`로 인자를
+        //     생략한 고정 문자열 `SELECT @v = {Aggregate}(...)`였다. 이 회차가
+        //     `Expression`을 레코드에 새로 추가하고(네 번째 위치) 대상 칸을 그 실제
+        //     인자(예: `SELECT @v_intTotal = MIN(YMD)`)로 바꿨다. 비집계 쪽은
+        //     정반대다 - `NonAggregateAssignmentFact`에는 이미 `Column`이라는 필드가
+        //     있었고, 이 회차가 그 필드 **이름만** `Expression`으로 바꿨다. 맨 컬럼
+        //     대입인 기존 36행은 컬럼 참조의 원문이 곧 컬럼 이름이므로 **표기 값이
+        //     바이트 단위로 그대로다**. 새 표기(분기식 축자, 예: 위 IIF 전체)를 싣는
+        //     것은 이 회차가 새로 담기 시작한 7행뿐이다. 옛 엔트리와 새 엔트리를
+        //     섞으면 집계 표에서는 표기가 갈리고, 비집계 표에서는 새 7행의 유무 자체가
+        //     갈린다.
+        //     프롬프트 입력이 달라졌으므로 옛 엔트리를 재사용하면: 수수료율 분기
+        //     (UF_GET_COMM4CLIENT4PARTIALCANCEL:43류)가 산문에도 표에도 없는 명세서,
+        //     대사 집계식(UP_UTIL_SETTLE_PROC_ETC:116·130류)이 어디에도 없는 명세서,
+        //     그리고 살아남은 옛 집계 행마저 대상 칸이 `SELECT @v = SUM(...)`처럼
+        //     인자를 생략한 낡은 표기 그대로인 명세서가 그대로 배송된다.
+        //     번호 충돌 확인: main·origin/main·integration/settlement-policy·
+        //     feat/settlement-policy-redesign 전부 18이고 19는 비어 있음을 확인했다.
+        //     [2026-09-07 2 회차 - 같은 19 안에서 비집계 갈래가 다시 넓어졌다] 분기식
+        //     (`IIF`/`CASE`)의 결과(THEN·ELSE) 판정이 "전부 컬럼 참조"에서 "컬럼 참조 /
+        //     리터럴 / 그 둘의 산술식"으로 넓어졌다(한 겹만 - 결과 안에 또 분기식이
+        //     오거나 함수 호출·하위 질의가 오면 여전히 침묵한다). 비집계 코퍼스 대장이
+        //     43행에서 **52행**(NULL확정 31 · 중립 21)으로 늘었다. 실물은
+        //     UF_GET_COMM4CLIENT4INTEREST:35·UF_GET_COMM4PG4INTEREST:42
+        //     (`CASE … END / 100.0` - 최상위가 분기식을 품은 산술식) ·
+        //     UF_GET_EXTRACOMM4CLIENT:41·53·66(`ISNULL(CASE … THEN 컬럼-컬럼 산술식
+        //     … ELSE 0 END, 0)`) · UF_Get_ExtraCardCommissionAmt:42·47(`ISNULL(CASE
+        //     … THEN 컬럼 … ELSE 0 END, 0)` - THEN이 맨 컬럼이고 리터럴은 ELSE뿐,
+        //     EXTRACOMM4CLIENT와는 다른 모양이다) · UF_GET_PGCommOption:21(`CASE …
+        //     THEN 컬럼 … ELSE 0 END`) · UF_GET_SETTLE_EXCHANGERATE:26(컬럼 산술 +
+        //     곱셈으로 묶인 **형제** `IIF` 둘, 그중 하나의 결과가 리터럴·컬럼·산술식)
+        //     이다. 집계 대장은 10행으로 무변경 -
+        //     `AggregateAssignmentExtractor`는 이 판정을 쓰지 않는다. 통째 완화(모든
+        //     산술식 재귀 허용)를 먼저 실측했으나 원본 줄 주석이 대상 칸 안으로 섞여
+        //     드는 부작용이 나와(중첩 분기식·함수 호출·하위 질의 다섯 자리) 그 셋을
+        //     배제하는 좁은 술어로 되돌렸다 - 늘어난 9행 전량을 원본 DDL로 대조해
+        //     거짓 행 0·주석 섞임 0을 확인했다. **캐시 형식 버전은 20으로 올리지
+        //     않는다** - 19가 아직 어떤 산출물에도 적용되지 않았다(명세서 재생성 전).
+        //     설계는 `docs/superpowers/specs/2026-09-06-대입-감쌈-벗기기-design.md`
+        //     §10에 있다.
+        //     [2026-09-07 최종 브랜치 검토 - 위 넓힘이 연 구멍을 가드 둘로 닫는다]
+        //     최상위 리터럴 개방(`case Literal: return true;`)이 `GROUP BY` 없는
+        //     `HAVING`과 만나면 T-SQL의 암묵적 한 그룹 규칙이 무결과여도 1행을 돌려줘
+        //     "무결과 시 대입이 일어나지 않는다"는 확정 문장을 거짓으로 만들고
+        //     (`SELECT @v = 1 FROM T HAVING COUNT(*) = 0`), 같은 SelectElements 안의
+        //     형제 집계(`SELECT @a = 1, @b = COUNT(*) FROM T`)도 같은 함정을 열어
+        //     정반대 확정 문장 둘을 한 표에 나란히 싣는다. `HavingClause` 존재와
+        //     형제(집계를 품었거나 `SelectSetVariable`이 아닌) 요소를 침묵 조건으로
+        //     추가해 닫았다 - 코퍼스(52행)에 두 모양 다 0건이라 대장 행이 한 행도 안
+        //     줄었다. 설계는 위 §10과 같은 문서 §11-5(다)·§11-9에 있다.
+        //     [2026-09-07 3 회차(설계서 §12) - 진리 조건을 단일 재귀 술어로 접는다]
+        //     위 두 회차가 더한 조기 반환들(FROM 절 집계·HAVING·GROUP BY·형제)은
+        //     FROM 절 집계 하나만 하위로 훑고 나머지는 최상위 질의 한 층만 봤다 -
+        //     그래서 같은 위험한 모양(집계 없이 무결과가 1행이 되는 조건)이 파생
+        //     테이블·APPLY 안으로 한 층만 들어가면 판정을 벗어나 다시 열렸다(3 회차
+        //     검토가 세 번째로 낸 Critical). 이 회차는 조건의 집합을 넓히거나
+        //     좁히지 않고 흩어진 여섯 조기 반환을 단일 재귀 술어
+        //     (`GuaranteesZeroRowsWhenSourcesAreEmpty`)로 접는다 - FROM의 각 원천
+        //     (이름 있는 테이블·파생 테이블·INNER/LEFT/RIGHT/FULL 조인·CROSS/OUTER
+        //     APPLY·VALUES·TVF·PIVOT/UNPIVOT·테이블 변수)에 같은 질문을 재귀로
+        //     던진다. 코퍼스 대장은 52행 그대로다(비집계) - 층을 넘나드는 이 모양이
+        //     코퍼스에 0건이라서다. 집계 대장도 10행 그대로다 -
+        //     `AggregateAssignmentExtractor`는 이 술어를 쓰지 않는다. 같은 회차가
+        //     `AggregateNames`에 `JSON_ARRAYAGG`·`JSON_OBJECTAGG`도 더했다(§12-5).
+        //     프롬프트·출력 형식은 바뀌지 않아(추출기 내부 판정만 재구성했을 뿐
+        //     담김/침묵의 경계는 그대로다) **캐시 형식 버전은 20으로 올리지 않는다**.
+        //     설계는 위와 같은 문서 §12에 있다.
+        private const int CurrentCacheFormatVersion = 19;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",

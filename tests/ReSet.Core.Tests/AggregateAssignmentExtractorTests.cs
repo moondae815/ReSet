@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Xunit;
 using ReSet.Core.Services;
@@ -132,6 +135,221 @@ END";
             Assert.Equal("COUNT", fact.Aggregate);
             Assert.Contains("이전 값", fact.Sentence);
             Assert.Contains("일어나지 않습니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_IsNullWrappingAnAggregate_SaysTheDefaultIsAssigned()
+        {
+            // UP_UTIL_SETTLE_PROC_ETC:116 실측 - 이 자리가 두 그물 사이로 샜다.
+            // 집계 쪽엔 「최상위가 집계 이름이 아님」, 비집계 쪽엔 「맨 컬럼이 아님」.
+            // 그 결과 대사 집계식이 어떤 기계 확정 표에도 없었다(축 A 🟠).
+            //
+            // 여기서 문장이 갈리는 것이 요점이다 - 감싸지 않은 SUM 은 NULL 을 넣지만
+            // ISNULL 로 감싸면 0 이 들어간다. 「무결과 시 NULL 이 대입됩니다」를 그대로
+            // 실으면 거짓이다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v_intTotal INT
+    SELECT @v_intTotal = ISNULL(SUM(A.CLTotal), 0)
+    FROM   dbo.T A WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(AggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Equal("@v_intTotal", fact.Variable);
+            Assert.Equal("SUM", fact.Aggregate);
+            Assert.Equal("ISNULL(SUM(A.CLTotal), 0)", fact.Expression);
+            Assert.Contains("대입이 항상 일어납니다", fact.Sentence);
+            Assert.Contains("0", fact.Sentence);
+            Assert.DoesNotContain("NULL이 대입됩니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_BareAggregate_KeepsSayingNullIsAssigned()
+        {
+            // 감쌈이 없으면 셋째 갈래 그대로다. 넷째 갈래를 더하면서 셋째가 잠식되지
+            // 않았음을 못박는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = SUM(A.CLTotal) FROM dbo.T A WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(AggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Equal("SUM(A.CLTotal)", fact.Expression);
+            Assert.Contains("무결과 시 NULL이 대입됩니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_IsNullWrappingCount_KeepsTheCountSentence()
+        {
+            // 우선순위 2 > 3. COUNT 는 NULL 을 내지 않으므로 이 ISNULL 은 무동작이다 -
+            // 「기본값이 대입된다」고 말하면 원인을 틀리게 짚는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = ISNULL(COUNT(A.ID), 0) FROM dbo.T A WITH(NOLOCK)
+END";
+
+            var fact = Assert.Single(AggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Contains("COUNT는 0을 넣습니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_IsNullWrappingAnAggregateUnderGroupBy_KeepsTheGroupBySentence()
+        {
+            // 우선순위 1 > 3. 0 행이면 ISNULL 이 돌 자리가 없다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = ISNULL(SUM(A.CLTotal), 0)
+    FROM   dbo.T A WITH(NOLOCK)
+    GROUP BY A.ClientID
+END";
+
+            var fact = Assert.Single(AggregateAssignmentExtractor.Extract(ddl));
+
+            Assert.Contains("이전 값을 그대로 유지합니다", fact.Sentence);
+        }
+
+        [Fact]
+        public void Extract_IsNullWhoseDefaultIsNotALiteral_StaysSilent()
+        {
+            // 기본값이 리터럴이 아니면 무엇이 들어가는지 말할 수 없다. 벗기지 않으므로
+            // 최상위가 ISNULL 인 채로 남고, 집계 이름 화이트리스트에 걸리지 않아 침묵한다.
+            // 넓히면서도 「모르는 것을 확정 표에 싣는다」 방향으로는 한 발도 안 간다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    DECLARE @d INT = 0
+    SELECT @v = ISNULL(SUM(A.CLTotal), @d) FROM dbo.T A WITH(NOLOCK)
+END";
+
+            Assert.Empty(AggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [SkippableFact]
+        public void Extract_OverTheCorpus_ShouldCollectExactlyTheseRows()
+        {
+            // 이 클래스에는 코퍼스 대장이 없었다. 형제 NonAggregateAssignmentExtractorTests가
+            // 대장을 가진 덕에 그쪽 회차의 증분은 눈에 보였지만, 집계 쪽은 규칙이 흘러도
+            // 단위 테스트가 그대로 통과한다. 감쌈 벗기기 회차(2026-09-06)가 이 표의 행을
+            // 늘리므로, 늘기 **전에** 여기 대장을 세워 증분이 diff로 읽히게 한다.
+            //
+            // 갈래를 행에 함께 싣는다 - 이 추출기의 요점은 무결과 귀결이 갈린다는 것이고
+            // (GROUP BY / COUNT / NULL), 갈래가 바뀌는 것은 대상 칸이 바뀌는 것보다
+            // 훨씬 무겁다(확정 문장이 거짓이 된다).
+            var objects = CorpusObjects().ToList();
+            Skip.If(objects.Count == 0, CorpusSkip.Reason);
+
+            var collected = new List<string>();
+            foreach (var (name, ddl) in objects)
+            {
+                foreach (var fact in AggregateAssignmentExtractor.Extract(ddl))
+                {
+                    var branch =
+                        fact.Sentence.Contains("이전 값을 그대로 유지합니다") ? "유지"
+                        : fact.Sentence.Contains("COUNT는 0을 넣습니다") ? "COUNT0"
+                        : fact.Sentence.Contains("기본값") ? "기본값대입"
+                        : "NULL대입";
+                    collected.Add($"{name}:{fact.Line} {fact.Variable} = {fact.Expression} [{fact.Aggregate}] [{branch}]");
+                }
+            }
+
+            Assert.Equal(
+                new[]
+                {
+                    "dbo.UF_GET_COLLECTYMD.Function:123 @po_strCollectYMD = MIN(YMD) [MIN] [NULL대입]",
+                    "dbo.UF_GET_COLLECTYMD.Function:138 @po_strCollectYMD = MAX(YMD) [MAX] [NULL대입]",
+                    "dbo.UF_GET_OUTYMD4REFUND.Function:22 @po_strOutYMD = MIN(OutYMD) [MIN] [NULL대입]",
+                    "dbo.UIF_SettleYMD.Function:125 @po_strSettleYMD = MIN(YMD) [MIN] [NULL대입]",
+                    "dbo.UIF_SettleYMD.Function:140 @po_strSettleYMD = MAX(YMD) [MAX] [NULL대입]",
+                    "dbo.UP_UTIL_SETTLE_INS_EXTRA.Procedure:21 @v_strReqYMD = MIN(ReqYMD) [MIN] [NULL대입]",
+                    "dbo.UP_UTIL_SETTLE_PROC_ETC.Procedure:116 @v_intPostChkAmt1 = ISNULL(SUM(CAST(CLTotal AS MONEY)),0) [SUM] [기본값대입]",
+                    "dbo.UP_UTIL_SETTLE_PROC_ETC.Procedure:130 @v_intPostChkAmt2 = ISNULL(SUM(CAST(CLSettleAmt AS MONEY)),0) [SUM] [기본값대입]",
+                    "dbo.UP_UTIL_SETTLE_PROC_ETC.Procedure:79 @v_intID = MAX(ID) [MAX] [NULL대입]",
+                    "dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA.Procedure:25 @v_strReqYMD = MIN(ReqYMD) [MIN] [NULL대입]"
+                },
+                collected.OrderBy(x => x, StringComparer.Ordinal).ToArray());
+        }
+
+        /// <summary>
+        /// 저장소 뿌리. "output/Objects를 가진 첫 조상"으로 찾으면 안 된다 - 다른 테스트가
+        /// 실행 중에 bin/Debug/net10.0/output/Objects에 가짜 객체를 만들어 두어, 그쪽이
+        /// 먼저 걸리면 남의 테스트 찌꺼기를 코퍼스로 착각한다. 그래서 src/ReSet.Core를
+        /// 가진 조상을 찾는다.
+        /// </summary>
+        private static string? RepoRoot()
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir != null)
+            {
+                if (Directory.Exists(Path.Combine(dir.FullName, "src", "ReSet.Core")))
+                {
+                    return dir.FullName;
+                }
+
+                dir = dir.Parent;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 코퍼스 객체 전량 - 로컬 <c>output/Objects</c> **와** 외부 DB
+        /// <c>output/External/[DB]/Objects</c> 둘 다.
+        ///
+        /// [왜 External을 함께 훑는가 - 2026-09-06] 이 대장은 오래도록 로컬 24개만 훑었다.
+        /// 그런데 명세서가 만들어지는 객체는 그 24개가 아니라 **참조 폐포**이고, 폐포에는
+        /// 외부 DB 함수 7개가 들어 있다(reset-consistency-audit SKILL.md 1-1절). 실제로
+        /// 축 A 🔴 하나의 대상 <c>UF_GET_COMM4CLIENT4PARTIALCANCEL</c>이 그 7개 안에
+        /// 있어서, 로컬만 훑는 자로는 그 결함이 이 대장에 **한 번도 나타나지 않았다.**
+        /// 자가 관할을 좁게 잡으면 결함이 아니라 자가 침묵한다.
+        ///
+        /// 이름은 외부 DB만 <c>[DB]/</c>로 접두한다 - 로컬 이름 24개가 그대로 남아야
+        /// 이 회차의 증분이 diff에서 바로 읽힌다.
+        /// </summary>
+        private static IEnumerable<(string Name, string Ddl)> CorpusObjects()
+        {
+            var root = RepoRoot();
+            if (root == null) yield break;
+
+            var roots = new List<(string Prefix, string Dir)>();
+
+            var local = Path.Combine(root, "output", "Objects");
+            if (Directory.Exists(local)) roots.Add((string.Empty, local));
+
+            var external = Path.Combine(root, "output", "External");
+            if (Directory.Exists(external))
+            {
+                foreach (var db in Directory.GetDirectories(external).OrderBy(x => x, StringComparer.Ordinal))
+                {
+                    var objects = Path.Combine(db, "Objects");
+                    if (Directory.Exists(objects)) roots.Add((Path.GetFileName(db) + "/", objects));
+                }
+            }
+
+            foreach (var (prefix, dir) in roots)
+            {
+                foreach (var objectDir in Directory.GetDirectories(dir).OrderBy(x => x, StringComparer.Ordinal))
+                {
+                    var path = Path.Combine(objectDir, "raw", "object_definition.sql");
+                    if (!File.Exists(path)) continue;
+                    yield return (prefix + Path.GetFileName(objectDir), File.ReadAllText(path));
+                }
+            }
         }
     }
 }
