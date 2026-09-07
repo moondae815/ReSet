@@ -188,6 +188,20 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public void IsCapturableExpression_2RoundUnaryWrappingANestedCaseInABranch_Fails()
+        {
+            // 좁게 유지 - 분기 결과가 단항 부호로 감싼 분기식이어도 담지 않는다. `-CASE …`는
+            // ScriptDom이 `UnaryExpression{ Expression = SearchedCaseExpression }`로 파싱한다
+            // (직접 재서 확인 - 짐작 아님). Unary 재귀도 Binary·Paren과 같은 "매개변수를
+            // 실어 나르는" 구조라 셋 중 하나만 하드코드해도 불변식이 뚫린다.
+            // 리뷰 라운드 2, FINDING(세 재귀 자리 중 Unary만 뮤턴트로 안 잠겨 있었다) - 이
+            // 시험으로 Binary·Paren·Unary **셋 다** 뮤턴트로 잠겼다.
+            Assert.False(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl(
+                    "IIF(A.Flag = 1, -CASE WHEN A.X = 1 THEN A.RateA ELSE A.RateB END, A.RateD)"))));
+        }
+
+        [Fact]
         public void IsCapturableExpression_2RoundFunctionCallInABranch_Fails()
         {
             // 좁게 유지 - 분기 결과가 함수 호출이면 담지 않는다.

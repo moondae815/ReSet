@@ -569,6 +569,25 @@ END";
         }
 
         [Fact]
+        public void Extract_UnaryWrappingANestedCaseInABranch_StaysSilent()
+        {
+            // 좁게 유지 - 분기 결과가 단항 부호로 감싼 분기식이어도 담지 않는다. `-CASE …`는
+            // `UnaryExpression{ Expression = SearchedCaseExpression }`로 파싱된다(직접 재서
+            // 확인). Binary·Paren·Unary 셋 다 "매개변수를 실어 나르는" 재귀 구조를 공유하므로
+            // 셋 다 뮤턴트로 잠가야 한다(리뷰 라운드 2 - 이 시험이 Unary를 마저 잠근다).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = IIF(A.Flag = 1, -CASE WHEN A.Flag2 = 1 THEN A.RateB ELSE A.RateC END, A.RateD)
+    FROM   dbo.T A WITH(NOLOCK)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
         public void Extract_FunctionCallInABranch_StaysSilent()
         {
             // 좁게 유지 - 분기 결과가 함수 호출이면 담지 않는다.
