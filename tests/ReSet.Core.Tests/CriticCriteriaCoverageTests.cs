@@ -199,5 +199,22 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("are also not step error codes and stay strings", prompt);
         }
+
+        [Fact]
+        public async Task Critic_ShouldCheckTheLocalVariableTypeContract()
+        {
+            // 규칙 5-1의 짝. 규칙만 더하고 채점을 두면 「초기값과 함께 선언된 지역
+            // 변수를 바인딩 파라미터로 강등」이 점수에 안 잡히고, 자가 수정 회차가
+            // 그 축에 영영 닿지 않는다 - 규칙 5의 짝(바로 위 항목)과 형제다.
+            var prompt = await CaptureCriticPromptAsync();
+
+            // 세 요소를 따로 잠근다. 하나로 뭉치면 문장이 반만 남아도 통과한다.
+            // (a) 방출 SQL에 그 `DECLARE`가 남아야 한다
+            Assert.Contains("DECLAREs with an initial value still carries that `DECLARE`", prompt);
+            // (b) 바인딩으로 넘기면 타입 계약을 잃는다 - 감점 사유가 그것이다
+            Assert.Contains("passes that value as a binding parameter instead has dropped the type contract", prompt);
+            // (c) 주석에 적는 것은 못박는 것이 아니다
+            Assert.Contains("stated only in a comment is not pinned", prompt);
+        }
     }
 }
