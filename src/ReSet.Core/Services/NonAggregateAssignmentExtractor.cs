@@ -88,7 +88,13 @@ namespace ReSet.Core.Services
     /// [집계는 FROM 절에도 산다] 수정 라운드 1 - 식이 컬럼 참조여도
     /// `FROM (SELECT MAX(ID) AS MaxID FROM t) X`처럼 파생 테이블이 집계를 품으면 원본이
     /// 비어도 한 행이 돌아온다. 그러면 이 SELECT는 0행이 되지 않아 "무결과"를 전제한
-    /// 문장을 읽는 사람이 정반대로 이해한다. 그래서 FROM 절이 집계를 품으면 담지 않는다.
+    /// 문장을 읽는 사람이 정반대로 이해한다. 그래서 FROM의 각 원천이 재귀 판정을
+    /// 통과하지 못하면 담지 않는다(이 라운드는 FROM 절 전체를 하나로 봤으나, 3
+    /// 회차가 이 조건을 원천별 재귀 판정으로 일반화했다 - 아래 "3 회차" 문단과
+    /// <see cref="NonAggregateAssignmentVisitor.GuaranteesZeroRows(TableReference)"/>
+    /// 참고. "FROM 절이 집계를 품으면 통째로 침묵한다"는 지금은 거짓이다 - 예를 들어
+    /// `FROM T0 OUTER APPLY (SELECT COUNT(*) n FROM S) X`는 왼쪽 `T0`가 보장하므로
+    /// 오른쪽의 집계와 무관하게 담긴다).
     /// **코퍼스에 이 모양은 없다** - 31개 객체(로컬 24 + 외부 7)의 object_definition.sql을
     /// 이 추출기로 훑어 이 가드 도입 전후 행이 43행으로 같음을 확인했다(2026-09-06 재실측 -
     /// 코퍼스가 External까지 넓어지고 우변 가드가 감쌈까지 담게 되면서 8행이던 예전 수치가
@@ -191,6 +197,24 @@ namespace ReSet.Core.Services
     /// 답하는가"만 물으면 된다 - 층 자체가 판정에서 사라졌기 때문이다. 조건의
     /// 집합은 이 회차에서 넓히거나 좁히지 않았다(코퍼스 대장 52행 불변) - 설계서
     /// `docs/superpowers/specs/2026-09-06-대입-감쌈-벗기기-design.md` §12.
+    ///
+    /// [4 회차 - 암묵적 그룹화를 켜는 절은 셋이다] 3 회차까지는 이 목록을 SELECT
+    /// 목록(투영)·`HAVING` 둘로 셌다. **다음 사람이 넷째를 찾을 때를 위해 지금
+    /// 아는 셋을 여기 못박는다** - `GROUP BY` 없는 질의에서 T-SQL의 암묵적 전체
+    /// 그룹화를 켜는 절은:
+    /// 1. SELECT 목록(투영) - <see cref="NonAggregateAssignmentVisitor.ProjectionHasAggregate"/>.
+    /// 2. `HAVING` - 절의 **존재 자체**가 켠다(집계 유무와 무관, 위 "암묵적
+    ///    그룹화도 진리조건을 뚫는다" 문단).
+    /// 3. `ORDER BY` - 단, 이쪽은 절의 존재가 아니라 **집계를 품을 때만** 켠다
+    ///    (`ORDER BY`는 결과 카디널리티를 바꾸지 않고 정렬만 하므로, 집계가 없으면
+    ///    무결과 시 실제로 0행이다) -
+    ///    <see cref="NonAggregateAssignmentVisitor.OrderByHasAggregate"/>.
+    /// `GROUP BY` 자체도 총계 그룹화 집합이면 같은 함정을 열지만 그것은 이 목록과
+    /// 별도로 다룬다(둘째 재검토 문단, 절 유무 통짜 침묵). 코퍼스 노출은 0이다 -
+    /// `SelectSetVariable`을 가진 질의 32건 중 `ORDER BY`를 단 것 4건이 있고, 그
+    /// 넷 전부 원본에서 집계를 품지 않는다(설계서 §14). 실행 재현은 SQL Server로
+    /// 직접 확인하지 못했다(로컬은 빈 스키마) - 파싱 통과와 이 침묵은 실측이고,
+    /// 무결과 시 1행 반환은 T-SQL 명세에 근거한 판단이다.
     /// </summary>
     public static class NonAggregateAssignmentExtractor
     {
@@ -538,6 +562,23 @@ namespace ReSet.Core.Services
                 // 개념이라 이 회차가 하나로 합쳤다.
                 if (ProjectionHasAggregate(query)) return false;
 
+                // ★ 4 회차(설계서 §14) - 암묵적 그룹화를 켜는 절은 SELECT 목록·
+                // HAVING뿐 아니라 ORDER BY까지 셋이다(다음 사람이 넷째를 찾을 때
+                // 여기를 봐라). GROUP BY 없는 질의는 ORDER BY 안에 집계 함수가
+                // 있어도 T-SQL이 전체를 암묵적 한 그룹으로 묶어 무결과여도 1행을
+                // 돌려준다(`SELECT @v = 1 FROM T ORDER BY COUNT(*)`가 T가 비어도
+                // 1행을 돌려주고 @v에 1이 실제로 대입된다). 그러면 "무결과 시 대입이
+                // 일어나지 않는다"는 이 확정 문장이 거짓이 된다.
+                //
+                // HAVING·GROUP BY와 달리 여기서는 **절의 존재 자체가 아니라 집계를
+                // 품을 때만** 그룹화가 켜진다 - ORDER BY는 그 자체로는 결과 집합의
+                // 카디널리티를 바꾸지 않기 때문이다(정렬만 한다). 그래서
+                // `OrderByClause != null`로 통짜 침묵하면 집계 없는 ORDER BY(코퍼스
+                // 대장 52행 중 4건이 이 모양이다)까지 거짓으로 줄인다 - 대신 같은
+                // `AggregateFunctionDetector`를 재사용해 `ProjectionHasAggregate`와
+                // 대칭을 맞춘다(둘 다 "집계를 품을 때만" 침묵).
+                if (OrderByHasAggregate(query)) return false;
+
                 // FROM 층 - 쉼표로 나열한 원천은 암묵적 CROSS JOIN이므로(ScriptDom도
                 // 별도 조인 노드 없이 TableReferences에 여러 항목으로 그대로 담는다.
                 // 프로브로 확인 - 3 회차 보고서 PARSE SHAPES) INNER/CROSS와 같은 논리로
@@ -566,6 +607,30 @@ namespace ReSet.Core.Services
 
                     var detector = new AggregateFunctionDetector();
                     expression.Accept(detector);
+                    if (detector.Found) return true;
+                }
+
+                return false;
+            }
+
+            /// <summary>
+            /// 이 질의 자신의 <see cref="QuerySpecification.OrderByClause"/>에 집계
+            /// 함수가 있는가(위 술어의 한 조각, 설계서 §14). `ProjectionHasAggregate`와
+            /// 같은 <see cref="AggregateFunctionDetector"/>를 재사용해 판정 자를
+            /// 갈라지지 않게 한다 - 두 곳이 다른 목록을 쓰면 한쪽만 새는 자리가
+            /// 생긴다.
+            /// </summary>
+            private static bool OrderByHasAggregate(QuerySpecification query)
+            {
+                var orderBy = query.OrderByClause;
+                if (orderBy == null) return false;
+
+                foreach (var element in orderBy.OrderByElements)
+                {
+                    if (element.Expression == null) continue;
+
+                    var detector = new AggregateFunctionDetector();
+                    element.Expression.Accept(detector);
                     if (detector.Found) return true;
                 }
 

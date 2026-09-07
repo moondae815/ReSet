@@ -1430,6 +1430,176 @@ END";
             Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
         }
 
+        // ============================================================================
+        // 4 회차(설계서 §14) - 암묵적 그룹화를 켜는 셋째 절, ORDER BY.
+        //
+        // T-SQL은 GROUP BY 없는 질의를 SELECT 목록·HAVING뿐 아니라 ORDER BY에
+        // 집계가 있어도 암묵적으로 한 그룹으로 묶는다 - 무결과여도 1행을 돌려준다.
+        // 다만 HAVING·GROUP BY(절의 존재 자체가 그룹화를 켠다)와 달리 ORDER BY는
+        // "집계를 품을 때만" 그룹화를 켠다 - 그래서 마지막 대비 시험(집계 없는
+        // ORDER BY)은 여전히 담긴다. 코퍼스에 이 모양이 4건이고(대장 52행 중
+        // `dbo.UP_UTIL_SETTLE_PROC_ETC.Procedure:72` 포함 넷) 원본을 직접 열어
+        // 넷 다 집계를 품지 않음을 확인했다 - 이 가드가 대장을 줄이지 않는다.
+        // ============================================================================
+
+        [Fact]
+        public void Extract_OrderByWithAggregate_OverLiteralAssignment_ShouldNotBeCollected()
+        {
+            // 실행 재현 여섯 중 첫째 - `SELECT @v = 1 FROM T ORDER BY COUNT(*)`는
+            // T가 비어도 1행을 돌려줘 @v에 1이 실제로 대입된다(설계서 §14 CANNOT
+            // VERIFY - 로컬은 빈 스키마라 SQL Server로 실행 확인은 못 했다. 파싱
+            // 통과와 이 침묵은 이 시험이 실측한다).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T WITH(NOLOCK) ORDER BY COUNT(*)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_OrderByWithAggregate_OverArithmeticAssignment_ShouldNotBeCollected()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1+2 FROM dbo.T WITH(NOLOCK) ORDER BY COUNT(*)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_OrderByWithAggregate_OverIsNullAssignment_ShouldNotBeCollected()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = ISNULL(1, 0) FROM dbo.T WITH(NOLOCK) ORDER BY COUNT(*)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_OrderByWithAggregate_OverCaseAssignment_ShouldNotBeCollected()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = CASE WHEN 1 = 1 THEN 1 ELSE 2 END FROM dbo.T WITH(NOLOCK) ORDER BY COUNT(*)
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_OrderByWithAggregateInsideUnionBranchOfDerivedTable_ShouldNotBeCollected()
+        {
+            // 재현 여섯째 - UNION ALL 첫 갈래가 `ORDER BY … OFFSET 0 ROWS`로 집계를
+            // 품는다(파생 테이블 안 ORDER BY는 TOP 또는 OFFSET을 동반해야 SQL
+            // Server가 허용한다). 파생 테이블 안의 UNION 재귀가 이 가드를 갈래마다
+            // 태우는지 잠근다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.c FROM (SELECT 1 c FROM dbo.T ORDER BY COUNT(*) OFFSET 0 ROWS UNION ALL SELECT 2 c FROM dbo.S) D
+END";
+
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
+        [Fact]
+        public void Extract_OrderByWithoutAggregate_IsStillCollected()
+        {
+            // 대비 - ORDER BY는 절의 존재 자체가 아니라 집계를 품을 때만 그룹화를
+            // 켠다. 집계 없는 ORDER BY는 무결과 시 실제로 0행이 된다 - 코퍼스
+            // 대장 52행의 4건이 이 모양이다(통짜로 막았다면 대장이 줄었을 자리).
+            const string ddl = @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = A.x FROM dbo.T A WITH(NOLOCK) ORDER BY A.x
+END";
+
+            var fact = Assert.Single(NonAggregateAssignmentExtractor.Extract(ddl));
+            Assert.Equal("A.x", fact.Expression);
+        }
+
+        public static IEnumerable<object[]> OrderByAggregatePoisonAcrossLayers()
+        {
+            yield return new object[]
+            {
+                "top-level",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = 1 FROM dbo.T WITH(NOLOCK) ORDER BY COUNT(*)
+END"
+            };
+            yield return new object[]
+            {
+                "derived",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.c FROM (SELECT TOP 1 1 AS c FROM dbo.T ORDER BY COUNT(*)) D
+END"
+            };
+            yield return new object[]
+            {
+                // GrandTotalGroupPoisonAcrossLayers의 "apply-left-poisoned"과 같은
+                // 이유로 오염을 APPLY의 왼쪽에 둔다 - §12-3 규칙("CROSS/OUTER
+                // APPLY는 왼쪽이 보장할 때만")이 실제로 검사하는 자리이기 때문이다.
+                "apply-left-poisoned",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D.c FROM (SELECT TOP 1 1 AS x FROM dbo.T ORDER BY COUNT(*)) L CROSS APPLY (SELECT 1 AS c) D
+END"
+            };
+            yield return new object[]
+            {
+                "nested-derived",
+                @"
+CREATE PROCEDURE dbo.P
+AS
+BEGIN
+    DECLARE @v INT
+    SELECT @v = D2.c FROM (SELECT D1.c FROM (SELECT TOP 1 1 AS c FROM dbo.T ORDER BY COUNT(*)) D1) D2
+END"
+            };
+        }
+
+        [Theory]
+        [MemberData(nameof(OrderByAggregatePoisonAcrossLayers))]
+        public void Extract_OrderByAggregatePoison_StaysSilentRegardlessOfLayer(string layer, string ddl)
+        {
+            // HAVING·GROUP BY 총계 그룹과 같은 함정 - 3 회차까지의 진리 조건에는
+            // ORDER BY가 없었다(설계서 §14, 이 회차가 연다). 네 층 전부가 침묵해야
+            // 재귀가 이 조건에도 실제로 걸려 있다는 증거다.
+            _ = layer;
+            Assert.Empty(NonAggregateAssignmentExtractor.Extract(ddl));
+        }
+
         [SkippableFact]
         public void Extract_OverTheCorpus_ShouldCollectExactlyTheseRows()
         {
