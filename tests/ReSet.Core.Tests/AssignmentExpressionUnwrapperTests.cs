@@ -97,53 +97,99 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
-        public void TryColumnBranches_Iif_WhenBothBranchesAreColumns_Succeeds()
+        public void IsCapturableExpression_Iif_WhenBothBranchesAreColumns_Succeeds()
         {
             // UF_GET_COMM4CLIENT4PARTIALCANCEL:43 실측 - 축 A 🔴 #1 의 자리다.
-            var ok = AssignmentExpressionUnwrapper.TryColumnBranches(
-                RightHandSide(Ddl("IIF(@v IN (0,2), A.CommissionRate, A.FreeInterestInstCommRate)")),
-                out var branches);
-
-            Assert.True(ok);
-            Assert.Equal(2, branches.Count);
+            Assert.True(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("IIF(@v IN (0,2), A.CommissionRate, A.FreeInterestInstCommRate)"))));
         }
 
         [Fact]
-        public void TryColumnBranches_Case_WhenEveryBranchIncludingElseIsAColumn_Succeeds()
+        public void IsCapturableExpression_Case_WhenEveryBranchIncludingElseIsAColumn_Succeeds()
         {
-            var ok = AssignmentExpressionUnwrapper.TryColumnBranches(
-                RightHandSide(Ddl("CASE WHEN A.Flag = 1 THEN A.RateA ELSE A.RateB END")),
-                out var branches);
-
-            Assert.True(ok);
-            Assert.Equal(2, branches.Count);
+            Assert.True(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("CASE WHEN A.Flag = 1 THEN A.RateA ELSE A.RateB END"))));
         }
 
         [Fact]
-        public void TryColumnBranches_CaseWithoutElse_Fails()
+        public void IsCapturableExpression_CaseWithoutElse_Fails()
         {
-            // ELSE가 없으면 어느 WHEN도 참이 아닐 때 NULL이 대입된다. 분기가 "전부 컬럼"이라는
-            // 전제가 깨지므로 담지 않는다 - 거짓 행보다 없는 행이 낫다.
-            Assert.False(AssignmentExpressionUnwrapper.TryColumnBranches(
-                RightHandSide(Ddl("CASE WHEN A.Flag = 1 THEN A.RateA END")), out _));
+            // ELSE가 없으면 어느 WHEN도 참이 아닐 때 NULL이 대입된다. 분기 결과가
+            // "컬럼/리터럴/산술식"이라는 전제가 깨지므로 담지 않는다 - 거짓 행보다
+            // 없는 행이 낫다.
+            Assert.False(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("CASE WHEN A.Flag = 1 THEN A.RateA END"))));
         }
 
         [Fact]
-        public void TryColumnBranches_WhenAnyBranchIsALiteralOrExpression_Fails()
+        public void IsCapturableExpression_2RoundBranchIsALiteral_Succeeds()
         {
-            Assert.False(AssignmentExpressionUnwrapper.TryColumnBranches(
-                RightHandSide(Ddl("IIF(@v = 1, A.RateA, 0)")), out _));
-            Assert.False(AssignmentExpressionUnwrapper.TryColumnBranches(
-                RightHandSide(Ddl("IIF(@v = 1, A.RateA, A.RateB + 1)")), out _));
+            // 2 회차 넓힘 - 분기 결과가 리터럴이어도 이제 담는다.
+            // (구 시험 Extract_IifWithANonColumnBranch_StaysSilent이 이 방향으로 뒤집혔다.)
+            Assert.True(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("IIF(@v = 1, A.RateA, 0)"))));
         }
 
         [Fact]
-        public void TryColumnBranches_Aggregate_Fails()
+        public void IsCapturableExpression_2RoundBranchIsArithmeticOfColumns_Succeeds()
         {
-            // 집계는 잎이 아니므로 컬럼 분기 판정에 걸리지 않는다. 이것이 두 갈래를
+            // 2 회차 넓힘 - 분기 결과가 컬럼 간 산술식이어도 이제 담는다.
+            Assert.True(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("IIF(@v = 1, A.RateA, A.RateB + 1)"))));
+        }
+
+        [Fact]
+        public void IsCapturableExpression_2RoundBranchIsArithmeticOfColumnAndLiteral_Succeeds()
+        {
+            // 2 회차 넓힘 - 컬럼과 리터럴의 산술식(단항 부호 포함)도 담는다.
+            Assert.True(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("CASE WHEN A.Flag = 1 THEN A.RateA - B.RateB ELSE -1 END"))));
+        }
+
+        [Fact]
+        public void IsCapturableExpression_2RoundTopLevelArithmeticContainingOneCase_Succeeds()
+        {
+            // UF_GET_COMM4CLIENT4INTEREST:35 · UF_GET_COMM4PG4INTEREST:42 실측 모양 -
+            // 최상위가 분기식을 품은 산술식(`CASE … END / 100.0`)이면, 그 안의 분기
+            // 결과가 컬럼/리터럴/산술식일 때 담는다.
+            Assert.True(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("CASE WHEN A.Flag = 1 THEN A.RateA ELSE 0 END / 100.0"))));
+        }
+
+        [Fact]
+        public void IsCapturableExpression_2RoundNestedCaseInABranch_Fails()
+        {
+            // 좁게 유지 - 분기 결과 안에 또 분기식(중첩 CASE)이 오면 담지 않는다.
+            // UF_GET_COLLECTYMD:31·UIF_SettleYMD:39 실측 모양이다.
+            Assert.False(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl(
+                    "CASE WHEN A.Flag = 1 THEN CASE WHEN B.Flag = 1 THEN A.RateA ELSE A.RateB END ELSE A.RateC END"))));
+        }
+
+        [Fact]
+        public void IsCapturableExpression_2RoundFunctionCallInABranch_Fails()
+        {
+            // 좁게 유지 - 분기 결과가 함수 호출이면 담지 않는다.
+            Assert.False(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("IIF(@v = 1, dbo.UF_GET_RATE(A.ClientID), A.RateB)"))));
+        }
+
+        [Fact]
+        public void IsCapturableExpression_2RoundSubqueryInABranch_Fails()
+        {
+            // 좁게 유지 - 분기 결과가 하위 질의면 담지 않는다.
+            // UF_Get_CLComm4MobileCo:25 실측 모양이다.
+            Assert.False(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("CASE WHEN A.Flag = 1 THEN (SELECT TOP 1 Rate FROM dbo.T2) ELSE A.RateB END"))));
+        }
+
+        [Fact]
+        public void IsCapturableExpression_Aggregate_Fails()
+        {
+            // 집계는 잎이 아니므로 이 판정에 걸리지 않는다. 이것이 두 갈래를
             // 배타적으로 만드는 기전이다 - 비집계 소비자가 집계를 담을 길이 없다.
-            Assert.False(AssignmentExpressionUnwrapper.TryColumnBranches(
-                RightHandSide(Ddl("SUM(A.CLTotal)")), out _));
+            Assert.False(AssignmentExpressionUnwrapper.IsCapturableExpression(
+                RightHandSide(Ddl("SUM(A.CLTotal)"))));
         }
 
         [Fact]

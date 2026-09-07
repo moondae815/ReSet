@@ -27,7 +27,7 @@ namespace ReSet.Core.Services
     /// UP_UTIL_SETTLE_PROC_ETC가 72행(비집계) · 79행(집계)으로 둘 다 가진 실물이다.
     ///
     /// [남는 값이 무엇인지는 판정될 때만 말한다] 수정 라운드 1 - "직전 대입이 남긴 값이라
-    /// DECLARE 초기값과 다르다"고 뭉뚱그리면 코퍼스 43행 중 27행에서 거짓이 된다. 그 27행은
+    /// DECLARE 초기값과 다르다"고 뭉뚱그리면 코퍼스 52행 중 31행에서 거짓이 된다. 그 31행은
     /// 앞선 대입이 아예 없어서 남는 값이 정확히 NULL이기 때문이다. 그래서 갈래를 둘로
     /// 나눈다(<see cref="AggregateAssignmentExtractor"/>가 초기값 유무로 문장을 가르는
     /// 것과 같은 방식이다).
@@ -36,9 +36,13 @@ namespace ReSet.Core.Services
     ///   모르므로 말하지 않는다.
     /// 판정 조건은 <see cref="SurvivingValueIsNull"/>에 있다.
     ///
-    /// [무엇을 담는가 - 2026-09-06 넓힘] 우변이 컬럼 참조이거나, 모든 분기가 컬럼 참조인
-    /// `IIF`/`CASE`이거나, 그 둘을 `ISNULL(X, 리터럴)`/`COALESCE(X, 리터럴)`로 한 겹 감싼
-    /// 것이면 담는다(<see cref="AssignmentExpressionUnwrapper"/>).
+    /// [무엇을 담는가 - 2026-09-06 넓힘, 2026-09-07 2 회차 재넓힘] 우변이 컬럼 참조 /
+    /// 리터럴 / 그 둘의 산술식이거나, 그 셋을 결과(`THEN`·`ELSE`)로 갖는 `IIF`/`CASE`
+    /// (한 겹만), 그리고 그 전체를 `ISNULL(X, 리터럴)`/`COALESCE(X, 리터럴)`로 한 겹 감싼
+    /// 것이면 담는다(<see cref="AssignmentExpressionUnwrapper.IsCapturableExpression"/>).
+    /// 1 회차는 "분기가 전부 컬럼"만 담았으나, 대상 칸이 이미 우변 원문을 축자로 싣게 된
+    /// 뒤로는 그 좁힘의 근거(대상 칸이 흐려진다)가 사라져 있었다 - 2 회차가 분기 결과에
+    /// 리터럴·산술식도 더했다.
     ///
     /// 넓혀도 확정 문장이 거짓이 되지 않는 이유가 중요하다 - 이 문장은 **행이 없다**를
     /// 말하지 우변의 모양을 말하지 않는다. 0행이면 대입 자체가 일어나지 않으므로 우변이
@@ -46,10 +50,12 @@ namespace ReSet.Core.Services
     /// (거기서는 `ISNULL`이 대입되는 값을 실제로 바꾼다 -
     /// <see cref="AggregateAssignmentExtractor"/>가 그 갈래를 따로 말한다).
     ///
-    /// [그래도 좁게 잡는 자리들] 한 분기라도 리터럴·산술식이면 담지 않고, `ELSE` 없는
-    /// `CASE`도 담지 않으며, 감쌈의 기본값이 리터럴이 아니면 벗기지 않는다. 대입식이
-    /// 집계를 품으면 결론이 정반대로 뒤집히므로(무결과여도 한 행이 돌아온다) 그쪽은
-    /// 집계 추출기의 몫이다 - 집계는 잎이 아니라 컬럼 분기 판정에 걸리지 않고, 그것이
+    /// [그래도 좁게 잡는 자리들] 분기 결과 안에 또 분기식(중첩 `CASE`/`IIF`)이 오거나,
+    /// 함수 호출·하위 질의가 오면 담지 않는다 - 통째 완화를 실측해 보니 그 모양이
+    /// 원본 줄 주석을 대상 칸 안으로 끌고 들어왔다(2026-09-07 2 회차 사전선언 §10-1).
+    /// `ELSE` 없는 `CASE`도 담지 않으며, 감쌈의 기본값이 리터럴이 아니면 벗기지 않는다.
+    /// 대입식이 집계를 품으면 결론이 정반대로 뒤집히므로(무결과여도 한 행이 돌아온다)
+    /// 그쪽은 집계 추출기의 몫이다 - 집계는 잎이 아니라 이 판정에 걸리지 않고, 그것이
     /// 두 갈래를 배타적으로 만드는 기전이다. 실물: 101행 `MAX(ID)+1`, 116행
     /// `ISNULL(SUM(...),0)`.
     ///
@@ -65,7 +71,8 @@ namespace ReSet.Core.Services
     /// **코퍼스에 이 모양은 없다** - 31개 객체(로컬 24 + 외부 7)의 object_definition.sql을
     /// 이 추출기로 훑어 이 가드 도입 전후 행이 43행으로 같음을 확인했다(2026-09-06 재실측 -
     /// 코퍼스가 External까지 넓어지고 우변 가드가 감쌈까지 담게 되면서 8행이던 예전 수치가
-    /// 낡았다).
+    /// 낡았다). 그 뒤 2026-09-07 2 회차가 분기 결과 판정을 다시 넓혀 43행에서 52행이
+    /// 됐다 - 이 가드의 분모(FROM 절이 집계를 품은 문장 수)는 그 회차도 여전히 0건이다.
     ///
     /// [집계는 CTE에도 산다] 수정 라운드 2 - 같은 함정인데 붙는 자리가 다르다.
     /// `WITH c AS (SELECT MAX(ID) AS m FROM t) SELECT @v = c.m FROM c`에서 WITH 절은
@@ -85,7 +92,7 @@ namespace ReSet.Core.Services
     /// **코퍼스에 이 모양도 없다** - 31개 객체를 파싱해 <c>CommonTableExpression</c> 노드를
     /// 센 결과가 0건이다. 문자열 검색(`WITH ... AS (`)이 아니라 AST 노드 수로 확인했다 -
     /// 코퍼스는 `WITH(NOLOCK)` 힌트를 곳곳에 쓰고 있어 문자열로는 둘이 구분되지 않는다.
-    /// 그 0건과 아래 43행을 함께 못박은 것이
+    /// 그 0건과 아래 52행(2026-09-07 2 회차 재넓힘 반영)을 함께 못박은 것이
     /// <c>NonAggregateAssignmentExtractorTests.Extract_OverTheCorpus_...</c>다.
     ///
     /// [복합 대입은 담지 않는다] 수정 라운드 2 - `SELECT @v += col`도 SelectSetVariable로
@@ -326,7 +333,7 @@ namespace ReSet.Core.Services
                     if (setVariable.Expression == null) continue;
 
                     var unwrapped = AssignmentExpressionUnwrapper.Unwrap(setVariable.Expression);
-                    if (!AssignmentExpressionUnwrapper.TryColumnBranches(unwrapped.Inner, out _)) continue;
+                    if (!AssignmentExpressionUnwrapper.IsCapturableExpression(unwrapped.Inner)) continue;
 
                     var expressionText = AssignmentExpressionUnwrapper.TextOf(setVariable.Expression);
                     if (string.IsNullOrWhiteSpace(expressionText)) continue;

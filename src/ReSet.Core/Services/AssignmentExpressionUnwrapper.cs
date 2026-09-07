@@ -13,7 +13,8 @@ namespace ReSet.Core.Services
 
     /// <summary>
     /// 변수 대입의 우변에서 **행 수를 바꾸지 않는 스칼라 감쌈**을 한 겹 벗기고, 안쪽이
-    /// 「전부 컬럼 참조인 분기식」인지 판정한다.
+    /// 「컬럼 참조 / 리터럴 / 그 둘의 산술식」이거나 그 셋을 결과로 갖는 분기식(한 겹만)인지
+    /// 판정한다.
     ///
     /// [왜 필요한가 - 2026-09-06 축 A 감사] 두 대입 추출기의 우변 가드가 각각
     /// <c>Expression is not ColumnReferenceExpression</c>(비집계)와
@@ -61,59 +62,68 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 식이 컬럼 참조이거나, 모든 분기가 컬럼 참조인 <c>IIF</c>/<c>CASE</c>인지 본다.
+        /// 식이 「컬럼 참조 / 리터럴 / 그 둘의 산술식」이거나, 그 셋을 결과(<c>THEN</c>·
+        /// <c>ELSE</c>)로 갖는 <c>IIF</c>/<c>CASE</c>(**한 겹만**)인지 본다.
         ///
-        /// [왜 "전부"를 요구하는가] 한 분기라도 리터럴·산술식이면 그 분기가 골라졌을 때
-        /// 대입값이 컬럼에서 오지 않는다. 그러면 비집계 확정 문장("무결과면 대입 자체가
-        /// 일어나지 않는다")은 여전히 참이지만 대상 칸이 실을 것이 흐려진다. 좁게 잡는다.
+        /// [2026-09-07 2 회차 - 왜 넓혔는가] 1 회차는 "분기가 전부 컬럼"만 담았다.
+        /// 그런데 대상 칸이 이미 우변 원문을 축자로 싣게 됐으므로(1 회차 ②), 분기
+        /// 결과가 리터럴이거나 산술식이어도 대상 칸이 흐려지지 않는다 - 가드가 자기
+        /// 근거보다 오래 살아 있었다(설계서 §9-9 첫 항목). 그래서 담는 모양을
+        /// 「컬럼/리터럴/산술식」으로 넓힌다.
+        ///
+        /// [왜 "한 겹"만 허용하는가] 통째로 완화(모든 산술식 재귀 허용)해 코퍼스를
+        /// 돌려 보니, 분기 결과 안에 또 분기식(중첩 CASE)이 오는 자리 다섯에서 원본
+        /// 줄 주석이 셀 안으로 섞여 「아는 것을 틀리게 싣는」 결과가 나왔다(설계서
+        /// §10-1). 중첩 분기식·함수 호출·하위 질의를 배제하면 그 자리가 애초에
+        /// 안 들어온다 - 길이가 아니라 모양으로 자르는 것이다.
         ///
         /// [ELSE 없는 CASE는 거른다] 어느 WHEN도 참이 아니면 NULL이 대입되므로
-        /// "분기가 전부 컬럼"이라는 전제가 깨진다.
+        /// "분기 결과가 셋 중 하나"라는 전제가 깨진다.
         /// </summary>
-        public static bool TryColumnBranches(
-            ScalarExpression expression, out IReadOnlyList<ColumnReferenceExpression> branches)
-        {
-            var found = new List<ColumnReferenceExpression>();
-            branches = found;
+        public static bool IsCapturableExpression(ScalarExpression? expression)
+            => IsCapturableExpression(expression, allowBranchExpression: true);
 
+        private static bool IsCapturableExpression(ScalarExpression? expression, bool allowBranchExpression)
+        {
             switch (expression)
             {
                 case ColumnReferenceExpression column:
-                    if (column.ColumnType != ColumnType.Regular) return false;
-                    found.Add(column);
+                    return column.ColumnType == ColumnType.Regular;
+
+                case Literal:
                     return true;
 
-                case IIfCall iif:
-                    return Collect(found, iif.ThenExpression, iif.ElseExpression);
+                case ParenthesisExpression paren:
+                    return IsCapturableExpression(paren.Expression, allowBranchExpression);
 
-                case SearchedCaseExpression searched:
-                    return Collect(
-                        found,
-                        searched.WhenClauses.Select(w => w.ThenExpression)
-                            .Concat(new[] { searched.ElseExpression }).ToArray());
+                case UnaryExpression unary:
+                    return IsCapturableExpression(unary.Expression, allowBranchExpression);
 
-                case SimpleCaseExpression simple:
-                    return Collect(
-                        found,
-                        simple.WhenClauses.Select(w => w.ThenExpression)
-                            .Concat(new[] { simple.ElseExpression }).ToArray());
+                case BinaryExpression binary:
+                    return IsCapturableExpression(binary.FirstExpression, allowBranchExpression)
+                           && IsCapturableExpression(binary.SecondExpression, allowBranchExpression);
+
+                case IIfCall iif when allowBranchExpression:
+                    return IsBranchResult(iif.ThenExpression) && IsBranchResult(iif.ElseExpression);
+
+                case SearchedCaseExpression searched when allowBranchExpression:
+                    return searched.ElseExpression != null
+                           && searched.WhenClauses.All(w => IsBranchResult(w.ThenExpression))
+                           && IsBranchResult(searched.ElseExpression);
+
+                case SimpleCaseExpression simple when allowBranchExpression:
+                    return simple.ElseExpression != null
+                           && simple.WhenClauses.All(w => IsBranchResult(w.ThenExpression))
+                           && IsBranchResult(simple.ElseExpression);
 
                 default:
                     return false;
             }
-        }
 
-        private static bool Collect(
-            List<ColumnReferenceExpression> found, params ScalarExpression?[] candidates)
-        {
-            foreach (var candidate in candidates)
-            {
-                if (candidate is not ColumnReferenceExpression column) return false;
-                if (column.ColumnType != ColumnType.Regular) return false;
-                found.Add(column);
-            }
-
-            return found.Count > 0;
+            // 분기 결과(THEN·ELSE) 하나. 재귀 허용이지만 분기식은 한 겹만 - 결과 안에
+            // 또 분기식이 오면 배제한다(중첩 CASE·IIF).
+            bool IsBranchResult(ScalarExpression? candidate)
+                => IsCapturableExpression(candidate, allowBranchExpression: false);
         }
 
         /// <summary>
