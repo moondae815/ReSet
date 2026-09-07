@@ -8855,6 +8855,13 @@ namespace ReSet.Core.Services
         /// 초기값 리터럴로 맞댄다. 자리별 실측은
         /// `docs/superpowers/specs/2026-09-07-지역변수-타입계약-강등금지-design.md` §2-4에 있다.
         ///
+        /// [한 겹 간접까지 본다 - 수정 라운드 1] 리터럴이 바인딩 값 자리에 **직접**
+        /// 오지 않고 의사코드 변수에 한 번 담겼다 넘어가도 타입 계약은 똑같이 드라이버가
+        /// 고른다. 초판은 직접 자리만 봐서 그 모양 하나를 **위음성**으로 놓쳤다(방출 SQL에
+        /// `DECLARE`가 없는데도 「보존한 자리」로 분류돼 있었다). 해석은
+        /// <see cref="ResolveSingleAssignmentAliases"/>가 하고 **딱 한 겹까지**다 -
+        /// 모호하면 침묵한다는 정책과 그 근거는 그쪽 주석에 있다.
+        ///
         /// [오라클] 원본 DDL(<paramref name="ddlByProcedure"/>). 명세서도 단계 본문도
         /// 아니라 **비순환**이다. 없으면 침묵한다 - 종전 동작 그대로다.
         ///
@@ -8876,6 +8883,7 @@ namespace ReSet.Core.Services
             var bindings = StepBindingExtractor.Extract(stepMarkdown);
             if (bindings.Count == 0) return;
 
+            var aliases = ResolveSingleAssignmentAliases(stepMarkdown);
             var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var source in step.LegacyProcedures)
@@ -8889,8 +8897,30 @@ namespace ReSet.Core.Services
                     if (!IsPrecisionBearingNumeric(fact.DataType)) continue;
                     if (IsZeroLiteral(fact.InitialValue)) continue;
 
-                    var leaked = bindings.FirstOrDefault(b =>
-                        string.Equals(b.Value, fact.InitialValue, StringComparison.OrdinalIgnoreCase));
+                    // 직접 자리가 있으면 그쪽을 쓴다 - 간접보다 읽기 쉽고, 한 변수에
+                    // 대해 오류는 어차피 하나만 낸다.
+                    StepBindingFact? leaked = null;
+                    var aliasNote = string.Empty;
+                    foreach (var candidate in bindings)
+                    {
+                        if (string.Equals(candidate.Value, fact.InitialValue, StringComparison.OrdinalIgnoreCase))
+                        {
+                            leaked = candidate;
+                            aliasNote = string.Empty;
+                            break;
+                        }
+
+                        if (aliasNote.Length == 0
+                            && aliases.TryGetValue(candidate.Value, out var assigned)
+                            && string.Equals(assigned, fact.InitialValue, StringComparison.OrdinalIgnoreCase))
+                        {
+                            leaked = candidate;
+                            aliasNote =
+                                $" 값 자리의 `{candidate.Value}`는 같은 단계의 의사코드에서 " +
+                                $"`{candidate.Value} = {assigned}`로 담긴 것이라 리터럴을 그대로 넘기는 것과 같습니다.";
+                        }
+                    }
+
                     if (leaked == null) continue;
 
                     if (!reported.Add(fact.Name)) continue;
@@ -8898,8 +8928,9 @@ namespace ReSet.Core.Services
                     result.Errors.Add(
                         $"{step.Code} 섹션이 `{fact.Name}`의 타입 계약 `{fact.DataType}`을(를) " +
                         $"드라이버 바인딩(`{leaked.CallName}({leaked.StatementName}, {{ {leaked.Key}: {leaked.Value} }})`)에 " +
-                        "맡깁니다 — 바인딩된 값에는 선언 타입이 없어 드라이버가 고릅니다. " +
-                        $"`{leaked.StatementName}` 블록 안에 `DECLARE {fact.Name} {fact.DataType} = {fact.InitialValue};`을(를) " +
+                        "맡깁니다 — 바인딩된 값에는 선언 타입이 없어 드라이버가 고릅니다." +
+                        aliasNote +
+                        $" `{leaked.StatementName}` 블록 안에 `DECLARE {fact.Name} {fact.DataType} = {fact.InitialValue};`을(를) " +
                         "두고 바인딩 목록에서 그 값을 빼십시오(규칙 5-1). 타입을 주석에 적는 것은 못박는 것이 아닙니다.");
                 }
             }
@@ -8945,6 +8976,89 @@ namespace ReSet.Core.Services
                    CultureInfo.InvariantCulture,
                    out var d)
                && d == 0m;
+
+        /// <summary>
+        /// 의사코드 펜스의 `이름 = 값` 한 줄. `==`·`>=`·`<=`·`!=`는 걸리지 않는다 -
+        /// 이름이 **줄머리**에 오고 그 뒤가 곧바로 `=`(뒤에 `=`이 안 붙는)여야 한다.
+        /// 바인딩 객체의 `키: 값`은 `=`이 없어 애초에 안 걸린다.
+        /// </summary>
+        private static readonly Regex PseudocodeAssignmentPattern = new(
+            @"^[ \t]*(?<name>[A-Za-z_][A-Za-z_0-9]*)[ \t]*=(?!=)[ \t]*(?<rhs>[^\r\n]+)$",
+            RegexOptions.Multiline);
+
+        /// <summary>
+        /// 펜스 하나. <see cref="StepBindingExtractor"/>의 같은 이름 패턴과 **같은 규약**이다
+        /// (빈 태그도 받는다). 거기 달린 한계 주석 - 알파벳 아닌 태그나 태그 뒤 공백이
+        /// 짝을 어긋내면 뒤따르는 펜스가 통째로 **사라진다** - 가 이 사전에도 그대로 걸린다.
+        /// 그쪽을 고치는 날 여기도 같이 고쳐야 한다.
+        /// </summary>
+        private static readonly Regex PseudocodeFencePattern = new(
+            @"```(?<lang>[a-zA-Z]*)\r?\n(?<body>.*?)```", RegexOptions.Singleline);
+
+        /// <summary>
+        /// 의사코드에서 **딱 한 번** 대입받은 이름 → 그 대입의 우변.
+        /// <see cref="CheckLocalVariableTypeContract"/>가 「값 자리의 식별자가 사실은
+        /// 리터럴이다」를 **한 겹만** 풀 때 쓴다.
+        ///
+        /// [왜 한 겹인가] `v = 1.1; bind v`는 리터럴을 그대로 넘기는 것과 같아 타입
+        /// 계약이 똑같이 드라이버로 간다. 반면 겹을 늘릴수록 「바인딩 시점의 값」을
+        /// 정적으로 단정하기 어려워져 오탐 표면만 넓어진다. 우변이 또 식별자면
+        /// 이 사전은 그 식별자를 그대로 담을 뿐 다시 풀지 않으므로, 호출부가
+        /// 리터럴과 맞대는 순간 두 겹은 저절로 떨어진다.
+        ///
+        /// [왜 「딱 한 번」인가 - 모호하면 침묵한다] 같은 이름이 두 번 이상 대입되면
+        /// 바인딩 시점의 값이 무엇인지 이 자로는 판정할 수 없다. 재대입이든 다른 값을
+        /// 함께 받든 사전에서 통째로 뺀다 - 「판정 못 하는 모양은 행을 내지 않는다」.
+        ///
+        /// [관할이 「같은 펜스」가 아니라 「단계의 비-sql 펜스 전체」인 이유]
+        /// 설계 문언은 같은 펜스를 말하지만, 바인딩 사실
+        /// (<see cref="StepBindingExtractor"/>)은 자기가 어느 펜스에서 나왔는지를 싣지
+        /// 않는다. 펜스 귀속을 얻으려면 호출·인자 정규식을 여기 복제해야 하는데, 그러면
+        /// 바인딩을 읽는 규칙이 두 곳에 생겨 미묘하게 갈린다(이 파일이 여러 곳에서
+        /// 경계하는 바로 그 함정이다). 대신 **단계 전체에서 한 번**이라는 더 좁은
+        /// 유일성을 요구한다 - 펜스가 둘인 단계에서 같은 이름이 갈라지면 펜스별
+        /// 규칙은 각자 풀지만 이 규칙은 **침묵한다.** 즉 어긋나는 방향이 발화가 아니라
+        /// 침묵이다. 실측(2026-09-07 코퍼스): 비-sql 펜스가 둘 이상인 단계는 있으나
+        /// 그런 이름이 실제로 갈린 자리는 없어 오늘 두 규칙의 결과가 같다.
+        ///
+        /// 펜스 열거는 <see cref="StepBindingExtractor"/>와 같은 규약이다 - `sql` 펜스는
+        /// 빼고 나머지는 다 본다. 방출 SQL 안의 `SET A = 1.1` 같은 줄을 의사코드 대입으로
+        /// 오독하지 않기 위해서다.
+        /// </summary>
+        private static IReadOnlyDictionary<string, string> ResolveSingleAssignmentAliases(string stepMarkdown)
+        {
+            var assignments = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+            foreach (Match fence in PseudocodeFencePattern.Matches(stepMarkdown))
+            {
+                if (string.Equals(fence.Groups["lang"].Value, "sql", StringComparison.OrdinalIgnoreCase)) continue;
+
+                foreach (Match assignment in PseudocodeAssignmentPattern.Matches(fence.Groups["body"].Value))
+                {
+                    var name = assignment.Groups["name"].Value;
+                    var rhs = assignment.Groups["rhs"].Value;
+
+                    // 줄 끝 주석을 뗀다 - 실물이 `v_valIncVat = 1.1   // 원본 지역 변수 …`
+                    // 모양이라 떼지 않으면 리터럴과 영영 안 맞는다.
+                    var comment = rhs.IndexOf("//", StringComparison.Ordinal);
+                    if (comment >= 0) rhs = rhs[..comment];
+
+                    if (!assignments.TryGetValue(name, out var values))
+                    {
+                        assignments[name] = values = new List<string>();
+                    }
+                    values.Add(rhs.Trim());
+                }
+            }
+
+            var resolved = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (name, values) in assignments)
+            {
+                if (values.Count == 1 && values[0].Length > 0) resolved[name] = values[0];
+            }
+
+            return resolved;
+        }
 
         /// <summary>
         /// 빠진 것으로 보이는 갱신 번호를 문장으로 만든다. 근거가 없으면 빈 문자열을

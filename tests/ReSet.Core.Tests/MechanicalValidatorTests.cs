@@ -10940,6 +10940,14 @@ UPDATE dbo.T SET A = @p_size;
         public void ValidateBatchStep_WithoutDdl_IsSilent()
         {
             // 오라클이 없으면 침묵한다 - 종전 동작 그대로다.
+            //
+            // [이 테스트가 무엇을 잠그고 무엇을 안 잠그는지 - 실측해서 적는다]
+            // 잠그는 것: 오라클이 없을 때 **다른 재료로 폴백하지 않는다.**
+            // 안 잠그는 것: `ddlByProcedure == null` 가드 자체다. 그 가드를 지우면
+            // 뒤따르는 `.Count`가 NRE를 내는데 호출부의 SafeCheck가 그것을 삼켜
+            // 로그 경고만 남기고 오류는 0건이라, 이 단언은 **그대로 통과한다**
+            // (뮤턴트를 실제로 돌려 확인했다). 가드에 이빨을 달려면 SafeCheck를
+            // 건드려야 해서 이 태스크 밖이다 - 사실만 남긴다.
             var section = @"### S05 수수료 갱신
 
 TSettleMst 를 갱신한다. 오류코드 -1.
@@ -10981,6 +10989,139 @@ UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_v_valIncVat AS INT);
                 ddlByProcedure: CommUpdDdlMap());
 
             Assert.Single(result.Errors, e => e.Contains("@v_valIncVat"));
+        }
+
+        // ── 한 겹 간접 (수정 라운드 1) ────────────────────────────────────────
+        // 리터럴을 의사코드 변수에 한 번 담았다가 그 변수를 바인딩해도 타입 계약은
+        // 여전히 드라이버가 고른다. Batch1/S05 가 그 모양인데 「보존한 자리」로
+        // 잘못 분류돼 있었다 - 방출 SQL 에 @p_valIncVat 선언이 없다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_BindsIdentifierHoldingTypedConstant_IsReported()
+        {
+            // Batch1/S05 실물 모양. :20 이 담고 :63 이 바인딩하며 방출 SQL 은 DECLARE 가 없다.
+            var section = @"### S05 수수료 갱신
+
+TSettleMst 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+v_valIncVat = 1.1   // 원본 지역 변수 @v_valIncVat, 값 그대로 유지
+execute(SQL_UPDATE5_CHUNK, { p_ymd: batchYmd, p_valIncVat: v_valIncVat })
+```
+```sql
+-- SQL_UPDATE5_CHUNK
+UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_valIncVat AS INT);
+```";
+
+            var result = _validator.ValidateBatchStep(
+                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: CommUpdDdlMap());
+
+            Assert.Contains(result.Errors, e => e.Contains("@v_valIncVat") && e.Contains("DECIMAL(2,1)"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_BindsIdentifierHoldingTypedConstant_MessageNamesTheAssignment()
+        {
+            // 값 자리가 식별자면 `{ p_valIncVat: v_valIncVat }` 만 찍어서는 무엇이
+            // 문제인지 안 읽힌다 - 그 식별자가 어디서 리터럴을 받았는지 함께 실어야 한다.
+            var section = @"### S05 수수료 갱신
+
+TSettleMst 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+v_valIncVat = 1.1
+execute(SQL_UPDATE5_CHUNK, { p_valIncVat: v_valIncVat })
+```
+```sql
+-- SQL_UPDATE5_CHUNK
+UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_valIncVat AS INT);
+```";
+
+            var result = _validator.ValidateBatchStep(
+                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: CommUpdDdlMap());
+
+            var error = Assert.Single(result.Errors, e => e.Contains("@v_valIncVat"));
+            Assert.Contains("v_valIncVat = 1.1", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_BindsIdentifierReassignedInFence_IsSilent()
+        {
+            // 같은 이름이 두 번 대입되면 바인딩 시점의 값이 무엇인지 이 검사로는
+            // 판정할 수 없다 - 모호하면 침묵한다.
+            var section = @"### S05 수수료 갱신
+
+TSettleMst 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+v_rate = 1.1
+v_rate = 2.2
+execute(SQL_UPDATE5_CHUNK, { p_valIncVat: v_rate })
+```
+```sql
+-- SQL_UPDATE5_CHUNK
+UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_valIncVat AS INT);
+```";
+
+            var result = _validator.ValidateBatchStep(
+                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: CommUpdDdlMap());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_valIncVat"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_BindsIdentifierTwoHopsFromTypedConstant_IsSilent()
+        {
+            // 해석은 한 겹까지다. `a = 1.1; b = a; bind b` 는 안 쫓는다 - 코퍼스 실측
+            // 두 겹 0 이라 쫓을 이유가 없고, 겹을 늘릴수록 오탐 표면만 넓어진다.
+            var section = @"### S05 수수료 갱신
+
+TSettleMst 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+v_a = 1.1
+v_b = v_a
+execute(SQL_UPDATE5_CHUNK, { p_valIncVat: v_b })
+```
+```sql
+-- SQL_UPDATE5_CHUNK
+UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_valIncVat AS INT);
+```";
+
+            var result = _validator.ValidateBatchStep(
+                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: CommUpdDdlMap());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_valIncVat"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_BindsUnassignedIdentifier_IsSilent()
+        {
+            // 값 자리의 식별자가 이 단계에서 아무것도 대입받지 않으면 해석할 근거가
+            // 없다 - 드라이버 파라미터를 그대로 넘기는 흔한 모양이라 여기서 발화하면
+            // 코퍼스 전역이 시끄러워진다.
+            var section = @"### S05 수수료 갱신
+
+TSettleMst 를 갱신한다. 오류코드 -1.
+
+```pseudocode
+execute(SQL_UPDATE5_CHUNK, { p_valIncVat: batchIncVat })
+```
+```sql
+-- SQL_UPDATE5_CHUNK
+UPDATE dbo.TSettleMst SET CLComm = CAST(CLComm / @p_valIncVat AS INT);
+```";
+
+            var result = _validator.ValidateBatchStep(
+                section, CommUpdPlan(), System.Array.Empty<string>(), NoConditions,
+                ddlByProcedure: CommUpdDdlMap());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("@v_valIncVat"));
         }
     }
 }
