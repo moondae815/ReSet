@@ -257,6 +257,41 @@ namespace ReSet.Core.Tests
             Assert.False(provider.TryGetProperty("order", out _));
         }
 
+        // Order·Quantizations·AllowFallbacks를 함께 채워 셋이 한 요청에 동시에
+        // 실리는지 본다. 위 두 검사는 각각 order 하나, quantizations 하나만
+        // 넣고 서로의 부재를 확인해 셋을 함께 채웠을 때 서로를 밀어내지 않는지는
+        // 보지 않는다. ByModel 병합(Order)과 Default 상속(Quantizations)이 겹치는
+        // 실제 운영 모양이 바로 이 조합이다.
+        [Fact]
+        public async Task ChatAsync_WithOrderAndQuantizations_ShouldSendBothTogether()
+        {
+            var spy = new OpenRouterRequestSpyHandler("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+            using var http = new HttpClient(spy);
+            var client = new OpenRouterClient(http, "sk-or-test", "", "z-ai/glm-5.3",
+                routing: new OpenRouterRoutingOptions
+                {
+                    Order = new[] { "gmicloud/fp8", "baseten/fp8" },
+                    Quantizations = new[] { "fp8" },
+                    AllowFallbacks = true
+                });
+
+            await client.ChatAsync("System", "User", 0.2f);
+
+            using var doc = JsonDocument.Parse(spy.LastRequestContent!);
+            var provider = doc.RootElement.GetProperty("provider");
+
+            var order = provider.GetProperty("order");
+            Assert.Equal(2, order.GetArrayLength());
+            Assert.Equal("gmicloud/fp8", order[0].GetString());
+            Assert.Equal("baseten/fp8", order[1].GetString());
+
+            var quantizations = provider.GetProperty("quantizations");
+            Assert.Equal(1, quantizations.GetArrayLength());
+            Assert.Equal("fp8", quantizations[0].GetString());
+
+            Assert.True(provider.GetProperty("allow_fallbacks").GetBoolean());
+        }
+
         // 지정하지 않았으면 키를 넣지 않아야 한다. 빈 배열을 보내면 OpenRouter가
         // "허용 양자화 없음"으로 읽어 후보가 0이 될 수 있다.
         [Fact]
