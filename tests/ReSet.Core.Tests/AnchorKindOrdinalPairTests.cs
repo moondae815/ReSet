@@ -57,6 +57,12 @@ namespace ReSet.Core.Tests
             var anchored = 0;
             var comparedSteps = 0;
 
+            // Job 별 내역 - 되돌림 조건 R2(「앵커 보유 문장 수가 줄면 되돌린다」)는 합계로는
+            // 못 잰다. 새 이름으로 Job 을 하나 더 돌리면 합계는 무조건 늘기 때문이다.
+            // 대조 대상 Job 마다 (단계 수 · 앵커 보유 문장 · 불일치) 를 따로 찍어 두면
+            // 재생성 전후를 같은 자로 맞댈 수 있다.
+            var perJob = new List<(string Job, int Steps, int Anchored, int Mismatches)>();
+
             foreach (var jobDir in Directory.EnumerateDirectories(jobsDir).OrderBy(d => d, StringComparer.Ordinal))
             {
                 var plan = Path.Combine(jobDir, "raw", "PlanStructure.md");
@@ -65,6 +71,10 @@ namespace ReSet.Core.Tests
 
                 var steps = BatchStepPlanParser.TryParse(File.ReadAllText(plan));
                 if (steps == null) continue;
+
+                var jobSteps = 0;
+                var jobAnchored = 0;
+                var jobMismatches = 0;
 
                 foreach (var step in steps)
                 {
@@ -83,23 +93,36 @@ namespace ReSet.Core.Tests
                     }
                     if (declared.Count == 0) continue;
                     comparedSteps++;
+                    jobSteps++;
 
                     foreach (var statement in StepSqlStatementReader.Read(File.ReadAllText(file), out _))
                     {
                         if (statement.Anchor == null) continue;
                         anchored++;
+                        jobAnchored++;
 
                         var pair = (statement.Kind.ToUpperInvariant(), statement.Anchor.Value);
                         if (declared.Contains(pair)) continue;
 
+                        jobMismatches++;
                         mismatches.Add(
                             $"{Path.GetFileName(jobDir)}/{step.Code} · {statement.Kind} 앵커 " +
                             $"{statement.Anchor} · 대상 {statement.TargetTable} — 명세서에 그 쌍이 없다");
                     }
                 }
+
+                if (jobSteps > 0)
+                {
+                    perJob.Add((Path.GetFileName(jobDir), jobSteps, jobAnchored, jobMismatches));
+                }
             }
 
             _output.WriteLine($"대조한 단계 {comparedSteps} · 앵커 보유 문장 {anchored} · 불일치 {mismatches.Count}");
+            foreach (var job in perJob)
+            {
+                _output.WriteLine(
+                    $"  [Job] {job.Job} · 단계 {job.Steps} · 앵커 보유 문장 {job.Anchored} · 불일치 {job.Mismatches}");
+            }
             foreach (var mismatch in mismatches) _output.WriteLine("  " + mismatch);
 
             // 재료가 0 이면 이 단언은 아무것도 안 지킨다 - 값 0 을 게이트 통과시키지 않는다.

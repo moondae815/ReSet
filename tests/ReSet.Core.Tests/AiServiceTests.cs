@@ -1622,6 +1622,11 @@ END",
         /// 담으라는 예시(`/* U13: 카드사 원가 반영 */`)도 함께 요구해야 한다.
         /// 규약 두 조항(CROSS/OUTER APPLY 치환 금지, 비집계 여러 문장의 집계 병합
         /// 금지)은 실측에서 금액·행 집합을 바꾼 치환이다.
+        ///
+        /// [2026-09-08] 조항이 "명세서의 갱신 번호"에서 "명세서 DML 범위 표의 그 문장
+        /// 표기"로 넓어졌다 - INSERT·DELETE 표기가 없어 모델이 회차마다 발명했기
+        /// 때문이다. <b>여기서는 앵커를 요구한다는 사실만</b> 잠근다. 표기 넷의 내용은
+        /// <see cref="StatementAnchorClauseTests"/> 가 두 경로 모두에 대해 잠근다.
         /// </summary>
         [Fact]
         public async Task GenerateBatchStepSectionAsync_DemandsAnchorCommentsAndForbidsSemanticSubstitutions()
@@ -1639,7 +1644,7 @@ END",
             var userPrompt = result.UserPrompt!;
 
             // 앵커 요구.
-            Assert.Contains("갱신 번호", userPrompt);
+            Assert.Contains("각 DML 문장 바로 앞에", userPrompt);
             // 앵커와 설명을 하나의 주석에 담으라는 지시와 그 예시.
             Assert.Contains("하나의 주석", userPrompt);
             Assert.Contains("/* U13: 카드사 원가 반영 */", userPrompt);

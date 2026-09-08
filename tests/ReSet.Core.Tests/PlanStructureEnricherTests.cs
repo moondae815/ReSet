@@ -78,12 +78,15 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
-        public void Enrich_ShouldUnionWithWhatThePlanAlreadyDeclared()
+        public void Enrich_ShouldReplaceWhatThePlanDeclaredWithTheSpecCodes()
         {
-            // 목차 선언이 먼저, 그다음 명세서 등장 순서. 결정론을 위해 순서를 고정한다.
+            // 순서는 명세서 등장 순서다 - 목차 선언은 더 이상 순서에 관여하지 않는다.
+            // 종전에는 합집합이었고 선언값이 앞에 왔다(`-9, -1, -10`). 교체로 바뀌면서
+            // 같은 집합이 추출 순서(`-1, -9, -10`)로 정렬된다 - 잃는 코드는 없고
+            // 선언값 `-9`도 추출집합에 들어 있다. 결정론은 그대로다.
             var enriched = PlanStructureEnricher.Enrich(Structure, Codes(), EmptyTables).Markdown;
 
-            Assert.Equal(new[] { "-9", "-1", "-10" }, Step(enriched, "S01").ErrorCodes);
+            Assert.Equal(new[] { "-1", "-9", "-10" }, Step(enriched, "S01").ErrorCodes);
         }
 
         [Fact]
@@ -130,6 +133,28 @@ namespace ReSet.Core.Tests
                 new Dictionary<string, SpecTargetTableExtractor.StepTableSets>());
 
             Assert.DoesNotContain("B100", result.Markdown);
+        }
+
+        [Fact]
+        public void Enrich_ShouldDropAFabricatedCodeDeclaredByALegacyBackedStep()
+        {
+            // [POQSettleBatch6 축 B 감사 5-1(가)] 승인 단계 목록 14행 중 14행이 `4000`을
+            // 실었는데 그중 12개 SP의 명세서에는 `4000`이 한 번도 안 나온다. 합집합이면
+            // 모델의 추정치가 살아남고, 단계는 그것을 "본 Step의 원본 오류 코드"라고
+            // 단언한다(S03·S04·S05·S07 실측). 바로 위 형제 테스트가 레거시 없는 갈래에
+            // 대해 같은 규칙을 이미 단언한다 - 그 주석이 밝히듯 레거시 갈래는 그 태스크의
+            // 범위 밖이었을 뿐, 합집합이 옳다고 방어된 적은 없다.
+            //
+            // 교체가 안전한 근거는 측정이다: 코퍼스 14쌍에서 명세서 쪽 추출집합이 원본
+            // DDL 쪽 추출집합의 상위집합이었다(손실 0). 명세서 쪽이 `-9`(IF EXISTS 가드)와
+            // `0`(성공)까지 더 잡는다.
+            var structure = Structure.Replace(
+                "\"TargetTables\": [\"dbo.TSettleMst\"],\n      \"ErrorCodes\": [],",
+                "\"TargetTables\": [\"dbo.TSettleMst\"],\n      \"ErrorCodes\": [\"-1\", \"-2\", \"4000\"],");
+
+            var enriched = PlanStructureEnricher.Enrich(structure, Codes(), EmptyTables).Markdown;
+
+            Assert.Equal(new[] { "-1", "-2" }, Step(enriched, "S02").ErrorCodes);
         }
 
         [Fact]
@@ -326,8 +351,9 @@ namespace ReSet.Core.Tests
         [Fact]
         public void Enrich_ShouldIgnoreNullItemsInErrorCodes()
         {
-            // JSON null은 JsonValue가 아니므로 같은 방어가 걸러야 한다. 나머지 선언값과
-            // 명세서 추출분은 정상적으로 합쳐져야 한다.
+            // JSON null은 JsonValue가 아니므로 같은 방어가 걸러야 한다. 선언 배열은 이제
+            // 합쳐지지 않고 "바뀐 것이 있는가" 비교에만 쓰이지만, 그 비교가 null에 걸려
+            // 던지면 Enrich가 통째로 원본 반환으로 떨어지므로 방어는 그대로 필요하다.
             const string mixed = @"# 목차
 
 ```json
@@ -348,7 +374,7 @@ namespace ReSet.Core.Tests
 
             var enriched = PlanStructureEnricher.Enrich(mixed, Codes(), EmptyTables).Markdown;
 
-            Assert.Equal(new[] { "-9", "-1", "-10" }, Step(enriched, "S01").ErrorCodes);
+            Assert.Equal(new[] { "-1", "-9", "-10" }, Step(enriched, "S01").ErrorCodes);
         }
 
         [Fact]

@@ -4605,6 +4605,15 @@ Consolidate the provided specifications into a single unified batch job named '{
         /// </summary>
         private static void AppendStatementAnchorRules(StringBuilder builder)
         {
+            // [INSERT·DELETE 표기를 왜 적어 주는가 - 2026-09-08]
+            // 「각 DML 문장」을 요구하면서 인정 표기가 U13·갱신 13·UPDATE 13 셋뿐이던 때,
+            // 모델이 INSERT·DELETE 표기를 회차마다 발명했다(실측 넷: `INSERT1` ·
+            // `U13-DELETE 1` · `U22`(원본 라인) · `U1`(자체 순번)). 서수가 틀리면 명세서에
+            // 그 (Kind,서수) 행이 없어 앵커 계열 검사 B·C·D가 대조할 행을 못 찾고 조용히
+            // 지나간다 - 발화도 오류도 없이 커버리지만 사라진다. 리더를 네 번 고쳐 뒤쫓았고
+            // 그때마다 새 표기가 나왔다. 고칠 자리는 리더가 아니라 계약이다.
+            // 잠금: StatementAnchorClauseTests · 설계: docs/superpowers/specs/2026-09-08-U앵커-계약-표기-설계.md
+            //
             // [축 B 감사가 요구하는 세 가지 - POQSettleBatch1 2026-08-24]
             // 앵커가 없으면 단계 검사가 문장을 명세서의 갱신 N에 붙일 수 없어 조인 키·술어
             // 컬럼 대조가 통째로 꺼진다. 규약 두 조항은 실측에서 금액·행 집합을 바꾼 치환이다.
@@ -4612,8 +4621,12 @@ Consolidate the provided specifications into a single unified batch job named '{
             // volatileSuffix에 실려 반드시 프롬프트 말미에 붙어야 한다(아래 참고).
             builder.AppendLine("### 문장 앵커와 의미 보존 (필수)");
             builder.AppendLine();
-            builder.AppendLine("- **각 DML 문장 바로 앞에 명세서의 갱신 번호를 주석으로 답니다.** " +
-                "`/* U13: 카드사 원가 반영 */` 형식입니다(`갱신 13`·`UPDATE 13`도 인정됩니다). " +
+            builder.AppendLine("- **각 DML 문장 바로 앞에 명세서 DML 범위 표의 그 문장 표기를 주석으로 답니다.** " +
+                "`UPDATE`는 `/* U13: 카드사 원가 반영 */` 형식이고(`갱신 13`·`UPDATE 13`도 인정됩니다), " +
+                "`INSERT`는 `/* INSERT 1: 정산 원장 적재 */`, `DELETE`는 `/* DELETE 1: 당일분 삭제 */` 형식입니다. " +
+                "**번호는 명세서 표의 서수를 그대로 씁니다** - 원본 라인 번호나 이 단계의 자체 순번을 쓰지 마십시오. " +
+                "**종류가 다르면 서수가 겹쳐도 됩니다**(`DELETE 1`과 `INSERT 1`은 서로 다른 문장입니다). " +
+                "**`U13-DELETE 1` 같은 복합 라벨은 쓰지 마십시오.** " +
                 "번호가 있어야 검증이 명세서 DML 범위 표의 조인 키·술어 컬럼과 문장 단위로 대조합니다. " +
                 "앵커와 설명은 **하나의 주석에** 담으십시오. 주석을 둘로 나누면(`/* U13 */`와 " +
                 "`/* 카드사 원가 반영 */`) 검증이 문장 바로 앞의 가장 가까운 주석 하나만 읽으므로 앵커를 놓칠 수 있습니다.");
