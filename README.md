@@ -597,18 +597,20 @@ dotnet run --project src/ReSet.Cli
   - **ReSet 정산 배치 소비 SP 12개를 4그룹 병렬 재생성**: 참조 UDF/SP 공유 관계와 최근 소요 시간(하위 UDF 캐시 히트 기준, 그룹당 중앙값 14~19분)을 기준으로 묶은 구성입니다. 연결 문자열은 `SP_ANALYZER_CONN_STR` 환경 변수로 두고 터미널 4개에서 한 줄씩 실행합니다.
     ```bash
     # G0 — 공용 UDF 선행 생성 (병렬 시작 전 단독 실행; 캐시 포맷 버전을 올린 회차에만 필요)
-    dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_INS_EXTRA
+    LoggingSettings__LogDirectory=./output/logs/G0 dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_INS_EXTRA
     # --- 아래 G1~G4를 터미널 4개에서 병렬 실행 ---
     # G1 — EXCEPTION_PROC + COMM_UPD (UF_GET_PGCommOption을 이 둘만 공유)
-    dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_EXCEPTION_PROC,dbo.UP_UTIL_SETTLE_COMM_UPD
+    LoggingSettings__LogDirectory=./output/logs/G1 dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_EXCEPTION_PROC,dbo.UP_UTIL_SETTLE_COMM_UPD
     # G2 — 배치 전반부 (CMRATE_INS·CANCEL_INS는 참조 객체 없음)
-    dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_INS,dbo.UP_UTIL_PG_CLIENT_CMRATE_INS,dbo.UP_UTIL_SETTLE_CANCEL_INS
+    LoggingSettings__LogDirectory=./output/logs/G2 dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_INS,dbo.UP_UTIL_PG_CLIENT_CMRATE_INS,dbo.UP_UTIL_SETTLE_CANCEL_INS
     # G3 — UIF_SettleYMD / UF_GET_WORKDAY2 사용자 묶음
-    dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_INS_EXTRA,dbo.UP_UTIL_SETTLE_EXPECT_PROC,dbo.UP_Util_Settle_Ins_Extra4PLCard
+    LoggingSettings__LogDirectory=./output/logs/G3 dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_INS_EXTRA,dbo.UP_UTIL_SETTLE_EXPECT_PROC,dbo.UP_Util_Settle_Ins_Extra4PLCard
     #   └ G0을 돌렸다면 INS_EXTRA를 빼고: --sp dbo.UP_UTIL_SETTLE_EXPECT_PROC,dbo.UP_Util_Settle_Ins_Extra4PLCard
     # G4 — 배치 후반부 (하위 SP SUMMARY_EXTRA / Summary_AcqManual은 이 그룹만 사용)
-    dotnet run --project src/ReSet.Cli -- --sp dbo.UP_Util_Settle_Summary,dbo.UP_Util_Settle_Summary_Etc,dbo.UP_Util_Settle_Proc_Etc,dbo.UP_Util_Stat_PGCollect_Ins
+    LoggingSettings__LogDirectory=./output/logs/G4 dotnet run --project src/ReSet.Cli -- --sp dbo.UP_Util_Settle_Summary,dbo.UP_Util_Settle_Summary_Etc,dbo.UP_Util_Settle_Proc_Etc,dbo.UP_Util_Stat_PGCollect_Ins
     ```
+    **터미널마다 로그 디렉터리를 가릅니다.** 로그 파일명이 `reset-<날짜>.log`로 고정돼 있어, 안 가르면 그룹 4개가 같은 파일을 잡고 일부 프로세스의 기록이 통째로 사라집니다 — 객체별 시도 수·L1/L2 발화·총 API 호출 수를 전수로 잴 수 없게 됩니다. 증상은 짝이 되는 「분석 시작」 없이 「응답 수신 완료」만 끼어 있는 줄입니다. `appsettings.local.json`으로는 갈리지 않습니다(워크트리들이 심링크로 공유합니다) — 환경변수가 프로세스마다 다른 값을 주는 유일한 창구입니다.
+
     **G0(공용 UDF 선행 생성)이 필요한 때**: `UF_GET_INCVTAXRATE`·`UF_GET_ROUND4VAT`는 G1~G3에 걸쳐 쓰이므로, 캐시 포맷 버전을 올려 UDF까지 재생성되는 상황이면 네 공용 UDF(`INCVTAXRATE`, `ROUND4VAT`, `WORKDAY2`, `UIF_SettleYMD`)를 모두 참조하는 `dbo.UP_UTIL_SETTLE_INS_EXTRA`를 G0으로 먼저 단독 실행해 캐시를 채운 뒤(그 회차의 G3에서는 `INS_EXTRA`를 제외) 나머지를 병렬로 실행합니다. UDF 캐시가 그대로인 회차라면 G0을 건너뛰고 G1~G4만 돌립니다.
 
 > [!NOTE]
