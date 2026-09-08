@@ -8283,6 +8283,89 @@ END";
         // 앵커가 하나도 없는 단계(S13 계열)에서도 돈다.
         // ─────────────────────────────────────────────────────────────────────
 
+        // ─────────────────────────────────────────────────────────────────────
+        // 미정의 SQL 블록 호출 — POQSettleBatch6 축 B 감사 S15 🟠
+        //
+        // 단계가 `queryScalar(SQL_VALIDATE_EXPECTED_TOTAL, …)` 로 호출해 놓고 그 이름의
+        // 블록을 어디에도 정의하지 않았다. 최종 정합성 게이트가 문자 그대로 구현 불가였고,
+        // 그 게이트가 통과하면 BatchRun 이 Succeeded 로 발행된다.
+        //
+        // [판별자를 왜 이렇게 잡았는가] 정의 표기가 Job 마다 갈린다 — 코퍼스 실측에서
+        // `-- SQL_X` 한 줄, `-- SQL_A / SQL_B / SQL_C_* (…)` 묶음 한 줄, SQL 안 블록 주석
+        // `/* … (SQL_X) */` 셋이 모두 정의로 쓰인다. 그래서 "정의 표기"를 모양으로 좁히지
+        // 않고 **호출부가 아닌 줄에 그 이름이 나오는가**로 본다. 별표 접두사(SQL_C_*)는
+        // 그 접두사로 시작하는 이름 전부를 덮는 것으로 인정한다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void ValidateBatchStep_CallsASqlBlockItNeverDefines_IsReported()
+        {
+            // 실물 모양이다(POQSettleBatch6/S15). 호출은 execute 가 아니라 queryScalar 다.
+            var markdown = "### S15 단계\n\n" +
+                "expected = queryScalar(SQL_VALIDATE_EXPECTED_TOTAL, { p_runId: runId })\n" +
+                "actual = queryScalar(SQL_VALIDATE_ACTUAL_TOTAL, { p_runId: runId })\n\n" +
+                "```sql\n-- SQL_UPDATE_RUN\nUPDATE batch.BatchRun SET RunStatus = N'Succeeded';\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S15"), new[] { "batch.BatchRun" },
+                new Dictionary<string, SpecConditions>());
+
+            var error = Assert.Single(result.Errors, e => e.Contains("정의돼 있지 않습니다"));
+            Assert.Contains("SQL_VALIDATE_EXPECTED_TOTAL", error);
+            Assert.Contains("SQL_VALIDATE_ACTUAL_TOTAL", error);
+            // 정의된 이름은 지목하지 않는다.
+            Assert.DoesNotContain("SQL_UPDATE_RUN", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_SqlBlockDefinedByAComment_StaysSilent()
+        {
+            // 음성 ①: 평범한 한 줄 정의. 이것을 못 읽으면 정상 단계가 통째로 고발된다.
+            var markdown = "### S02 단계\n\n" +
+                "execute(SQL_DELETE_1, { p_ymd: batchYmd })\n\n" +
+                "```sql\n-- SQL_DELETE_1\nDELETE FROM dbo.TSettleMst WHERE YMD = @p_ymd;\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S02"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("정의돼 있지 않습니다"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_SqlBlockCoveredByAWildcardPrefix_StaysSilent()
+        {
+            // 음성 ②: 실물(POQSettleBatch6/S14:97)이 제어 테이블 블록을 별표 접두사로 묶어
+            // 정의한다. 이것을 못 읽으면 그 단계 하나에서 두 건이 거짓으로 난다.
+            var markdown = "### S14 단계\n\n" +
+                "execute(SQL_CHECKPOINT_START, { p_runId: runId })\n" +
+                "execute(SQL_CHECKPOINT_SUCCESS, { p_runId: runId })\n\n" +
+                "```sql\n-- SQL_JOURNAL_START / SQL_JOURNAL_SUCCESS / SQL_CHECKPOINT_* (제어 테이블 계약 준수)\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S14"), Array.Empty<string>(),
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("정의돼 있지 않습니다"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_SqlBlockNamedOnlyInsideABlockComment_StaysSilent()
+        {
+            // 음성 ③: 실물(POQSettleBatch6/S14:193)이 SQL 안 블록 주석으로 이름을 단다.
+            // 「호출부가 아닌 줄」이 판별자인 이유가 이것이다 - 정의 표기를 모양으로
+            // 좁히면 이 자리가 거짓 양성이 된다.
+            var markdown = "### S14 단계\n\n" +
+                "execute(SQL_INSERT_MISS, { p_ID: id })\n\n" +
+                "```sql\n/* U1: 후취정산 신규 등록 (SQL_INSERT_MISS) */\nINSERT INTO dbo.TSettleMiss (ID) VALUES (@p_ID);\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S14"), new[] { "dbo.TSettleMiss" },
+                new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("정의돼 있지 않습니다"));
+        }
+
         [Fact]
         public void ValidateBatchStep_ChunkUpperBoundUsesMinOverLowerBoundedSet_IsReported()
         {
