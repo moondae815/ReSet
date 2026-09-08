@@ -546,6 +546,10 @@ namespace ReSet.Core.Services
 
                 if (facts.Count > 0)
                 {
+                    // [이전 면제 - 커서 그룹] 원본 DDL 과 명세서 표를 함께 봐야 하므로
+                    // namedFacts 가 살아 있는 이 자리에서 만든다.
+                    var cursorExemptions = BuildCursorGroupExemptions(namedFacts, ddlByProcedure);
+
                     // lostStatementCount는 검사 A(개수 대조)에만 넘긴다 - 검사 B·C·D는
                     // statements 목록을 그대로 받아 스스로 앵커 유무로 판단하므로 이
                     // 신호로 동작을 바꾸지 않는다. Task 16 C2의
@@ -580,8 +584,10 @@ namespace ReSet.Core.Services
                     // 검사 하나가 던져도 나머지가 죽지 않는다.
                     SafeCheck(() => CheckStatementCountAgainstSpec(
                         countCheckFacts, statements, lostStatementCount, step, result));
-                    SafeCheck(() => CheckAnchoredStatementFacts(facts, statements, step, result));
-                    SafeCheck(() => CheckAnchoredStatementExtras(facts, statements, step, result));
+                    SafeCheck(() => CheckAnchoredStatementFacts(
+                        facts, statements, step, cursorExemptions, result));
+                    SafeCheck(() => CheckAnchoredStatementExtras(
+                        facts, statements, step, cursorExemptions, result));
                     SafeCheck(() => CheckAnchoredStatementJoinPairs(
                         facts, statements, step, ddlByProcedure, result));
                     SafeCheck(() => CheckSpecLocalVariablesDeclared(facts, stepMarkdown, step, result));
@@ -8681,10 +8687,112 @@ namespace ReSet.Core.Services
         /// YMD만·조각2엔 PGNAME만 있어 합치면 요구를 전부 충족하는데도 조각 단위로는
         /// 둘 다 부족해 보여 이중으로 오검출한다.
         /// </summary>
+        /// <param name="CursorKeys">커서가 순회하던 그룹 키. 검사 B 의 소실 대조에서 면제한다.</param>
+        /// <param name="SourcePredicates">그 그룹을 내던 <c>SELECT</c> 의 술어 컬럼.
+        /// 검사 C 의 「원본에 없는 조건」 대조에서 면제한다 - 원본이 그 필터를 그 SELECT 에서 걸었다.</param>
+        private sealed record CursorGroupExemption(
+            IReadOnlyCollection<string> CursorKeys,
+            IReadOnlyCollection<string> SourcePredicates);
+
+        /// <summary>
+        /// 원본이 <b>커서로 집계 그룹을 순회</b>하던 자리를 찾아, 이행이 그것을 집합 연산으로
+        /// 치환하며 잃은 술어를 면제 대상으로 낸다 (「이전 면제」).
+        ///
+        /// [왜 기존 <c>relocated</c> 로는 안 되는가]
+        /// 그 집합은 「하위 스코프로 <b>옮겨간</b> 컬럼」이다. 커서 변수는 옮겨간 것이 아니라
+        /// <b>개념이 사라진다</b> - 커서가 없어지면 「현재 그룹」이라는 것 자체가 없다.
+        /// 그래서 원리적으로 안 걸린다.
+        ///
+        /// [서명 - 명세서의 기계 확정 표에 통째로 있다]
+        /// <code>
+        /// SELECT 1 · 술어[EDIReqYmd, AcqType, OutState] · GROUP BY[OutYMD, ClientID, PGName]
+        /// DELETE 1 · 술어[OutYMD, ClientID, PGName]      ← 커서 변수
+        /// INSERT 1 · 술어[OUTYMD, CLIENTID, PGNAME]      ← 커서 변수
+        /// </code>
+        /// 쓰기 문장의 최상위 술어가 어떤 <c>SELECT</c> 의 <c>GROUP BY</c> 와 <b>정확히 같다</b>.
+        /// 실물은 <c>UP_Util_Settle_Summary_AcqManual</c> 이다.
+        ///
+        /// [정밀도 - 실측 2026-09-08]
+        /// 술어를 가진 쓰기 문장 <b>19 중 2</b>, 커서 보유 프로시저 <b>3 중 1</b> 만 고른다.
+        /// 갈리는 이유에 의미가 있다 - <c>AcqManual</c> 의 커서는 <b>집계 그룹</b>을 순회하고
+        /// (그 <c>SELECT</c> 이 <c>GROUP BY</c> 를 갖는다), <c>SUMMARY_ETC</c> 의 커서는 <b>행</b>을
+        /// 순회한다(<c>GROUP BY</c> 가 없고 술어가 행 전체 키다). <b>전자만 집합 치환에서 술어가
+        /// 정당하게 사라진다. 후자는 술어가 사라지면 진짜 결함이다.</b>
+        ///
+        /// [왜 커서 조건까지 요구하는가 - 오늘 발화를 안 바꾸는데도]
+        /// 실측상 <c>GROUP BY</c> 일치 2 건이 이미 커서 SP 안이라 이 조건은 오늘 아무것도 안 거른다.
+        /// 그래도 넣는 이유는 <b>이것이 침묵시키는 변경</b>이기 때문이다 - 침묵은 좁은 쪽이 안전한
+        /// 방향이고, 커서가 없는 SP 에서 「술어 == 어떤 SELECT 의 GROUP BY」는 관용구가 아니라
+        /// <b>우연</b>이다. 「오늘 값을 하지 않는 변경은 하지 않는다」의 의도된 예외다.
+        ///
+        /// [모호하면 침묵한다] 같은 술어 집합을 <c>GROUP BY</c> 로 갖는 <c>SELECT</c> 이 둘 이상이면
+        /// 어느 것이 원천인지 정할 수 없다 - 면제하지 않는다(작성 계약 7).
+        /// </summary>
+        private static IReadOnlyDictionary<SpecDmlRow, CursorGroupExemption> BuildCursorGroupExemptions(
+            IReadOnlyList<(string Name, SpecStatementFacts Facts)> namedFacts,
+            IReadOnlyDictionary<string, string>? ddlByProcedure)
+        {
+            var map = new Dictionary<SpecDmlRow, CursorGroupExemption>(ReferenceEqualityComparer.Instance);
+            if (namedFacts == null || ddlByProcedure == null || ddlByProcedure.Count == 0) return map;
+
+            foreach (var (name, facts) in namedFacts)
+            {
+                if (!ddlByProcedure.TryGetValue(BareObjectName(name), out var ddl) ||
+                    string.IsNullOrWhiteSpace(ddl) ||
+                    !CursorDeclarationPattern.IsMatch(ddl))
+                {
+                    continue;
+                }
+
+                var selects = facts.DmlRows
+                    .Where(r => r.Kind.Equals("SELECT", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (selects.Count == 0) continue;
+
+                foreach (var write in facts.DmlRows.Where(r =>
+                             !r.Kind.Equals("SELECT", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var predicates = NonEmptyColumnSet(write.PredicateColumns);
+                    if (predicates.Count == 0) continue;
+
+                    var sources = selects
+                        .Where(sel =>
+                        {
+                            var groupBy = NonEmptyColumnSet(sel.GroupBy);
+                            return groupBy.Count > 0 && groupBy.SetEquals(predicates);
+                        })
+                        .ToList();
+
+                    // 둘 이상이면 귀속이 모호하다 - 면제하지 않는다.
+                    if (sources.Count != 1) continue;
+
+                    map[write] = new CursorGroupExemption(
+                        predicates,
+                        NonEmptyColumnSet(sources[0].PredicateColumns));
+                }
+            }
+
+            return map;
+        }
+
+        /// <summary>
+        /// 명세서 표의 칸은 비었을 때 <c>—</c>·<c>(없음)</c> 로 인쇄된다 - 그 둘을 컬럼 이름으로
+        /// 세면 「비지 않은 집합」 판정이 통째로 틀어진다.
+        /// </summary>
+        private static HashSet<string> NonEmptyColumnSet(IEnumerable<string>? columns) =>
+            new((columns ?? Array.Empty<string>())
+                    .Select(c => c?.Trim() ?? string.Empty)
+                    .Where(c => c.Length > 0 && c != "—" && c != "(없음)"),
+                StringComparer.OrdinalIgnoreCase);
+
+        private static readonly Regex CursorDeclarationPattern =
+            new(@"\bDECLARE\s+\w+\s+CURSOR\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         private static void CheckAnchoredStatementFacts(
             IReadOnlyList<SpecStatementFacts> facts,
             IReadOnlyList<StepSqlStatement> statements,
             BatchStepPlan step,
+            IReadOnlyDictionary<SpecDmlRow, CursorGroupExemption> cursorExemptions,
             StepValidationResult result)
         {
             var rows = facts.SelectMany(f => f.DmlRows).ToList();
@@ -8818,6 +8926,15 @@ namespace ReSet.Core.Services
                         .Concat(StagingSources(a.Statement, specTargets)
                             .SelectMany(l => l.Columns))),
                     StringComparer.OrdinalIgnoreCase);
+
+                // [이전 면제 - 커서 그룹] 원본이 커서로 집계 그룹을 순회하던 자리라면
+                // 그 그룹 키는 커서 변수다. 이행이 커서를 없애면 옮겨간 것이 아니라
+                // 개념이 사라지므로 위 relocated 로는 원리적으로 안 걸린다.
+                // 컬럼 단위로 합류시켜 「하나는 이전이고 하나는 진짜 소실」이 유지된다.
+                if (cursorExemptions.TryGetValue(row, out var cursorExemption))
+                {
+                    foreach (var key in cursorExemption.CursorKeys) relocated.Add(key);
+                }
 
                 ReportMissing("최상위 WHERE 술어 컬럼", row.PredicateColumns, predicatePresent);
 
@@ -8997,6 +9114,7 @@ namespace ReSet.Core.Services
             IReadOnlyList<SpecStatementFacts> facts,
             IReadOnlyList<StepSqlStatement> statements,
             BatchStepPlan step,
+            IReadOnlyDictionary<SpecDmlRow, CursorGroupExemption> cursorExemptions,
             StepValidationResult result)
         {
             var rows = facts.SelectMany(f => f.DmlRows).ToList();
@@ -9041,6 +9159,14 @@ namespace ReSet.Core.Services
                 var known = new HashSet<string>(
                     row.PredicateColumns.Concat(row.JoinKeys).Concat(row.OrderBy),
                     StringComparer.OrdinalIgnoreCase);
+
+                // [이전 면제 - 커서 그룹] 커서를 집합으로 치환하면 원본이 원천 SELECT 에
+                // 걸던 필터가 이 문장의 WHERE 로 올라온다. 원본이 그 필터를 걸었다는
+                // 사실이 명세서 표에 있으므로 「원본에 없는 조건」이 아니다.
+                if (cursorExemptions.TryGetValue(row, out var cursorExtras))
+                {
+                    foreach (var column in cursorExtras.SourcePredicates) known.Add(column);
+                }
 
                 // [단계 내부 스테이징 - 대조할 원천이 아니다]
                 // 게시문이 자기 실행이 적재한 스테이징 행만 되읽으려고 거는 술어는
