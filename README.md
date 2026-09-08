@@ -283,37 +283,14 @@ ReSet/
         "ApiKey": "",              // https://openrouter.ai/settings/keys 에서 발급 (필수)
         "Endpoint": "https://openrouter.ai/api/v1",
         "NumCtx": null,            // 지정하면 max_tokens로 전달. 비우면 모델 기본값
-        // [중요] Routing은 재현성뿐 아니라 프롬프트 캐싱의 전제 조건입니다. OpenRouter는
-        // 같은 모델을 여러 백엔드가 서빙하고 호출마다 그중 하나로 보내므로, 고정하지
-        // 않으면 1회차에 캐시를 쓴 백엔드와 2회차가 가는 백엔드가 달라 읽지 못합니다
-        // (실측 z-ai/glm-5.2, 접두사 10,220토큰: 미고정 적중 0에 $0.00776,
-        //  고정 시 적중 10,112에 $0.00171 — 76% 절감). 단가와 양자화(fp8/fp4)도 갈립니다.
-        // [주의] Routing은 provider 단위 구획이라 Actor/Critic/Consolidator가 이 구획
-        // 하나를 공유합니다. 그런데 어느 백엔드가 그 모델을 서빙하는지도 캐시 읽기
-        // 단가도 모델마다 달라, ByModel이 모델 ID마다 목록을 가릅니다. 조회 순서는
-        // ByModel:<모델ID>(대소문자 무시) → Default이고, ByModel 항목은 Default를 항목
-        // 단위로 덮습니다(Order만 적으면 AllowFallbacks는 Default 것이 그대로 남습니다).
-        // ModelName을 ByModel에 없는 모델로 바꾸면 Default로 도는데, Default의 백엔드가
-        // 그 모델을 서빙하지 않으면 404 "No endpoints found"로 즉시 실패합니다.
-        // 후보와 단가 조회(인증 불필요):
-        //   curl https://openrouter.ai/api/v1/models/<author>/<slug>/endpoints
-        "Routing": {                 // [선택] 백엔드 라우팅 선호. 구획을 지우면 OpenRouter 기본 라우팅
-          "Default": {               // ByModel에 항목이 없는 모델이 쓰는 공용 목록
-            "Order": [ "streamlake", "novita" ],
-            "AllowFallbacks": false, // 목록 밖으로 넘어가지 않습니다(true면 fp4 백엔드로 샐 수 있음)
-            "RequireParameters": null // 요청 파라미터를 모두 지원하는 제공자로만 라우팅할지 여부
+        // 라우팅의 근거와 후보 조회법: docs/architecture/4.5-multi-llm-provider.md
+        "Routing": {
+          "Default": {
+            "Quantizations": [ "fp8" ],  // 품질 하한. fp4·unknown을 원천 배제합니다
+            "AllowFallbacks": true       // 미등록 모델도 죽지 않습니다(밖이 이미 fp8뿐)
           },
-          "ByModel": {               // 모델 ID별 목록. Order만 적어 위 두 플래그는 물려받습니다
-            "z-ai/glm-5.2": { "Order": [ "sail-research", "novita" ] },
-            "z-ai/glm-5.3": { "Order": [ "z-ai" ] },  // 서빙하는 곳이 본사 하나뿐입니다
-            "deepseek/deepseek-v4-pro-0813": { "Order": [ "gmicloud", "deepseek" ] },
-            "z-ai/glm-5.3-flash": { "Order": [ "novita", "z-ai" ] },
-            "deepseek/deepseek-v4-flash-0731": { "Order": [ "streamlake", "deepinfra" ] },
-            // 서빙하는 곳이 Tencent 하나뿐입니다(실측 2026-09-06, /endpoints 응답 1건:
-            // fp8 · ctx 1,048,576 · 입력 $0.834/M · 출력 $2.501/M · 캐시읽기 $0.042/M ·
-            // 30분 가동률 100%). input_cache_write 단가가 없어 명시적 캐시 쓰기는
-            // 걸리지 않으므로, 이 항목이 사는 것은 캐시가 아니라 404 회피와 양자화 고정입니다.
-            "tencent/hy4-preview": { "Order": [ "tencent" ] }
+          "ByModel": {                   // 캐시 고착성 전용. 백엔드가 여럿인 모델에만
+            "z-ai/glm-5.3": { "Order": [ "gmicloud/fp8", "baseten/fp8" ] }
           }
         }
       },
