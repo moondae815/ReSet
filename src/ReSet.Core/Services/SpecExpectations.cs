@@ -47,6 +47,17 @@ namespace ReSet.Core.Services
         /// <summary>원본에 Linked Server(4부) 참조가 있는가.</summary>
         public bool HasLinkedServerReference { get; init; }
 
+        /// <summary>
+        /// 3부 식별자로 참조되지만 <b>이 객체와 같은 DB</b>에 있는 객체들
+        /// (<c>SETTLE_POQ_DB.dbo.THoliday</c> 류). 3부 표기일 뿐 크로스 DB가 아니다.
+        ///
+        /// [왜 - 2026-09-08 축 A 감사 🟠] `UF_GET_COLLECTYMD`의 산문이 `실행 의미` 표의
+        /// `DB 배치` 확정("참조 객체는 전부 `SETTLE_POQ_DB` 로컬입니다")을 되짚어
+        /// `SETTLE_POQ_DB.dbo.THoliday`를 크로스 DB로 불렀다. 이행이 그 분류를 따라
+        /// 별도 연결을 배선하면 조회 원천이 갈린다.
+        /// </summary>
+        public IReadOnlyList<string> LocalThreePartReferences { get; init; } = Array.Empty<string>();
+
         /// <summary>명세서가 옮겨야 할 원본 주석. 앵커가 있는 항목만 L1이 대조한다.</summary>
         public IReadOnlyList<SourceCommentBlock> SourceComments { get; init; }
             = Array.Empty<SourceCommentBlock>();
@@ -242,6 +253,15 @@ namespace ReSet.Core.Services
 
             var analysis = spDef.StaticAnalysis;
             var hasThreePartReference = analysis.ThreePartObjectReferences.Count > 0;
+            // 소속 DB는 ObjectKey에 있다 - 최상위에 DatabaseName 같은 필드는 없다
+            // (2026-09-08 실측: 그 자리를 잘못 짚어 코퍼스 발화가 0으로 나왔다).
+            var homeDatabase = spDef.ObjectKey?.Database ?? string.Empty;
+            var localThreePartReferences = homeDatabase.Length == 0
+                ? Array.Empty<string>()
+                : analysis.ThreePartObjectReferences
+                    .Where(r => string.Equals(
+                        r.Split('.')[0], homeDatabase, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
             var hasLinkedServerReference = analysis.LinkedServerReferences.Count > 0;
             var sourceComments = SourceCommentExtractor.Extract(spDef.DdlText);
             var roundingCalls = RoundingSemanticsExtractor.Extract(spDef.DdlText);
@@ -480,7 +500,10 @@ namespace ReSet.Core.Services
                 // 올 수 있다 - 항을 잇지 않으면 그 경우 CheckParameterColumnClaims가 한 번도 돌지
                 // 않는다(authoring-contract §1). knownTableNames는 StaticAnalysis에서만 오므로
                 // 따로 잇지 않아도 위 항들이 덮지만, 검사는 둘 다 비면 스스로 침묵한다.
-                && parameterColumnBindings.Count == 0)
+                && parameterColumnBindings.Count == 0
+                // [작성 계약 1] 새 재료의 항을 잇지 않으면 그 재료만 있는 명세서에서
+                // 검사가 한 번도 안 돌고 스위트는 초록으로 남는다.
+                && localThreePartReferences.Length == 0)
             {
                 return null;
             }
@@ -489,6 +512,7 @@ namespace ReSet.Core.Services
                 updateColumns, promptSchemaColumns, columnlessDependencyTables, inputDefects)
             {
                 HasThreePartReference = hasThreePartReference,
+                LocalThreePartReferences = localThreePartReferences,
                 HasLinkedServerReference = hasLinkedServerReference,
                 SourceComments = sourceComments,
                 RoundingCalls = roundingCalls,

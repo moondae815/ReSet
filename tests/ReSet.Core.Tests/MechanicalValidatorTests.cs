@@ -1308,6 +1308,176 @@ A[""시작""] --> B[""끝""]
             return SpecExpectations.From(sp)!;
         }
 
+        // [매핑 설명 칸이 다른 문장의 술어를 옮겨 적음 - 2026-09-08 축 A 감사 🟠]
+        // SUMMARY_EXTRA:194 실측. INSERT 4(대상 TSettleByOUT)의 설명 칸이
+        // `OUTYMD >= @v_strReqYMD` 를 WHERE 조건으로 실었는데 그 술어는 DELETE 4 에만
+        // 있다. 원본의 「삭제는 좁고 삽입은 넓다」 비대칭이 지워진다.
+        [Fact]
+        public void Validate_WhenMappingDescriptionCitesAPredicateAbsentFromThatStatement_ShouldFail()
+        {
+            var expectations = MappingPredicateExpectations();
+
+            var markdown = WrapSpec(string.Join("\n", new[]
+            {
+                "### INSERT 대상 테이블: SETTLE_POQ_DB.dbo.TSettleByOUT",
+                "",
+                "| 테이블명 | 컬럼명 | 원천 데이터 (Mapping) | 설명 |",
+                "| :--- | :--- | :--- | :--- |",
+                "| TSettleByOUT | OUTYMD | TSettleMst.OUTYMD | OUTYMD 원천 컬럼이며 "
+                + "`ISNULL(OUTYMD,'') <> ''` 및 `OUTYMD >= @v_strReqYMD` WHERE 조건입니다. |"
+            }));
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            var error = Assert.Single(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.MappingDescriptionPredicateNotInStatement);
+            Assert.Contains("OUTYMD >= @v_strReqYMD", error.Message);
+        }
+
+        // 그 문장에 실재하는 술어는 통과해야 한다 - 코퍼스에서 이쪽이 압도적이라
+        // (귀속 가능한 264행이 전부 정상) 이 자리가 새면 전 객체가 무너진다.
+        [Fact]
+        public void Validate_WhenMappingDescriptionCitesAPredicateThatStatementHas_ShouldPass()
+        {
+            var expectations = MappingPredicateExpectations();
+
+            var markdown = WrapSpec(string.Join("\n", new[]
+            {
+                "### INSERT 대상 테이블: SETTLE_POQ_DB.dbo.TSettleByOUT",
+                "",
+                "| 테이블명 | 컬럼명 | 원천 데이터 (Mapping) | 설명 |",
+                "| :--- | :--- | :--- | :--- |",
+                "| TSettleByOUT | YMD | TSettleMst.YMD | `YMD >= @v_strReqYMD` WHERE 조건입니다. |"
+            }));
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.MappingDescriptionPredicateNotInStatement);
+        }
+
+        // 같은 대상 테이블로 가는 INSERT 가 둘이면 어느 문장의 술어인지 말할 수 없다 -
+        // 작성 계약 7: 귀속이 불가능하면 침묵한다.
+        [Fact]
+        public void Validate_WhenTwoStatementsShareTheTargetTable_ShouldStaySilent()
+        {
+            var facts = new[]
+            {
+                new DmlScopeFact("INSERT", 210, "SETTLE_POQ_DB.dbo.TSettleByOUT",
+                    Array.Empty<string>(), false, Array.Empty<string>(), Array.Empty<string>()),
+                new DmlScopeFact("INSERT", 260, "SETTLE_POQ_DB.dbo.TSettleByOUT",
+                    Array.Empty<string>(), false, Array.Empty<string>(), Array.Empty<string>())
+            };
+            var expectations = new SpecExpectations(
+                Array.Empty<UpdateColumnExpectation>(),
+                new Dictionary<string, IReadOnlySet<string>>(),
+                new HashSet<string>(),
+                Array.Empty<string>())
+            {
+                DmlScopeFacts = facts,
+                SetPredicates = new[]
+                {
+                    new SetPredicateFact("INSERT", 223, "YMD", false, Array.Empty<string>(),
+                        1, ">=", "최상위", "YMD >= @v_strReqYMD")
+                }
+            };
+
+            var markdown = WrapSpec(string.Join("\n", new[]
+            {
+                "### INSERT 대상 테이블: SETTLE_POQ_DB.dbo.TSettleByOUT",
+                "",
+                "| 테이블명 | 컬럼명 | 원천 데이터 (Mapping) | 설명 |",
+                "| :--- | :--- | :--- | :--- |",
+                "| TSettleByOUT | OUTYMD | TSettleMst.OUTYMD | `OUTYMD >= @v_strReqYMD` 조건입니다. |"
+            }));
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.MappingDescriptionPredicateNotInStatement);
+        }
+
+        private static SpecExpectations MappingPredicateExpectations()
+        {
+            return new SpecExpectations(
+                Array.Empty<UpdateColumnExpectation>(),
+                new Dictionary<string, IReadOnlySet<string>>(),
+                new HashSet<string>(),
+                Array.Empty<string>())
+            {
+                DmlScopeFacts = new[]
+                {
+                    new DmlScopeFact("INSERT", 210, "SETTLE_POQ_DB.dbo.TSettleByOUT",
+                        Array.Empty<string>(), false, Array.Empty<string>(), Array.Empty<string>())
+                },
+                SetPredicates = new[]
+                {
+                    new SetPredicateFact("INSERT", 223, "YMD", false, Array.Empty<string>(),
+                        1, ">=", "최상위", "YMD >= @v_strReqYMD")
+                }
+            };
+        }
+
+        // [DB 배치 산문 되짚기 - 2026-09-08 축 A 감사 🟠] UF_GET_COLLECTYMD:85 실측 모양.
+        // 기계 확정 `DB 배치` 행은 THoliday 를 소속 DB 안으로 확정했는데 산문이
+        // 그것을 크로스 DB 라 되짚었다. 이행이 그 분류를 따라 별도 연결을 배선하면
+        // 휴일 조회 원천이 갈린다.
+        [Fact]
+        public void Validate_WhenProseCallsALocalThreePartReferenceCrossDatabase_ShouldFail()
+        {
+            var expectations = new SpecExpectations(
+                Array.Empty<UpdateColumnExpectation>(),
+                new Dictionary<string, IReadOnlySet<string>>(),
+                new HashSet<string>(),
+                Array.Empty<string>())
+            {
+                LocalThreePartReferences = new[] { "SETTLE_POQ_DB.dbo.THoliday" }
+            };
+
+            var markdown = WrapSpec(
+                "- Linked Server: 원격 Linked Server 참조는 없습니다. `MASTER..SPT_VALUES` 및 "
+                + "`SETTLE_POQ_DB.dbo.THoliday`는 3부 식별자로 참조되었으나, 이는 Linked Server가 "
+                + "아닌 동일 서버 인스턴스 내 크로스 데이터베이스(Cross-Database) 참조입니다.");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.False(result.IsValid);
+            var error = Assert.Single(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DatabasePlacementProseContradiction);
+            Assert.Contains("SETTLE_POQ_DB.dbo.THoliday", error.Message);
+            // [작성 계약 9] 귀속 어휘는 고정 문구가 아니라 발화가 있던 원문 줄이어야 한다.
+            Assert.Equal(new[] { error.RawContext }, error.Lexemes);
+        }
+
+        // 소속 DB *밖* 객체를 크로스 DB 라 부르는 것은 정상이다 - 코퍼스에서 이 어휘의
+        // 쓰임은 이쪽이 훨씬 많아, 이 자리가 새면 전 객체에 거짓 양성이 난다.
+        [Fact]
+        public void Validate_WhenProseCallsAForeignReferenceCrossDatabase_ShouldPass()
+        {
+            var expectations = new SpecExpectations(
+                Array.Empty<UpdateColumnExpectation>(),
+                new Dictionary<string, IReadOnlySet<string>>(),
+                new HashSet<string>(),
+                Array.Empty<string>())
+            {
+                LocalThreePartReferences = new[] { "SETTLE_POQ_DB.dbo.THoliday" }
+            };
+
+            var markdown = WrapSpec(
+                "- Linked Server: `SETTLE_CARD_DB.dbo.TExtraTxMst`는 3부 식별자로 참조되었으나 "
+                + "동일 서버 인스턴스 내 크로스 데이터베이스(Cross-Database) 참조입니다.");
+
+            var result = new MechanicalValidator().Validate(markdown, expectations);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors,
+                e => e.Type == ErrorType.DatabasePlacementProseContradiction);
+        }
+
         private static string WrapSpec(string crudBody)
         {
             return string.Join("\n", new[]
