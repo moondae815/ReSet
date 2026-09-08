@@ -682,7 +682,35 @@ grep -rn "PinnedBackendsPerModel\|sail-research\|deepseek-v4-pro-0813\|deepseek-
   README.md docs/architecture/ src/ tests/ --include="*.md" --include="*.cs" --include="*.json" \
   | grep -v "/obj/\|/bin/"
 ```
-기댓값: 출력 없음. `docs/known-defects.md`와 `src/ReSet.Core/Services/LocalVariableDeclarationExtractor.cs`의 `deepseek-v4-pro-0813` 언급은 **라우팅이 아니라 과거 모델 교체 서사**이므로 위 경로에 포함하지 않았고 손대지 않는다.
+**이 게이트는 실행 중에 고쳐졌다(2026-09-08). 아래를 읽고 쓰라.**
+
+원래 「출력 없음」을 기댓값으로 적었으나 **그 자가 무딘 것이었다.** 이 grep은
+「지금 존재한다고 말하는 문장」과 「없어졌다고 말하는 문장」을 구별하지 못한다.
+「`PinnedBackendsPerModel`은 폐기했습니다」는 죽은 참조가 아니라 이력이고,
+「이 다섯 모델에서 쟀습니다」는 측정 대상의 명시다. 그 둘을 지우면 문서가 근거를 잃는다.
+실제로 이 게이트를 문자 그대로 맞추려다 문서에 부정확한 문장이 하나 들어갔다
+(「그 시점 로스터의 5개 모델」 — 측정 시점 로스터는 6항목이었다).
+
+**허용되는 히트** (죽은 참조가 아님):
+
+| 자리 | 이유 |
+|---|---|
+| `docs/architecture/4.5-…md`의 `PinnedBackendsPerModel` | 폐기 **사실**의 서술 |
+| 같은 문서의 모델 이름 다섯 | 실측 **대상**의 명시. 이 주장의 적용 범위를 정한다 |
+| `tests/…/CliProviderSettingsTests.cs`의 `sail-research`·`deepseek-v4-pro-0813` | `ReadOpenRouterRouting` 단위 검사의 **인메모리 픽스처**. 임의 이름이어도 되는 자리이고 설정 파일을 읽지 않는다 |
+| `docs/known-defects.md` · `src/…/LocalVariableDeclarationExtractor.cs` | 과거 모델 교체 **서사**. 라우팅과 무관 |
+
+**남아서는 안 되는 것은 하나다**: 지금 설정과 다른 값을 **지금 설정인 것처럼** 말하는 문장.
+그래서 실제 게이트는 이것이다 —
+
+```bash
+grep -n "streamlake\|novita\|sail-research\|deepinfra\|Default.*Order" README.md
+```
+기댓값: 출력 없음. `Default`가 `Order`를 갖는다고 말하거나 지금 없는 백엔드를 현재 설정으로
+제시하는 줄이 없어야 한다.
+
+그리고 **`4.5` 문서는 사람이 처음부터 끝까지 읽고** 지금 코드·설정과 어긋나는 문장이 있는지
+판단한다. 자동 grep보다 이쪽이 진짜 합격 조건이다.
 
 - [ ] **Step 4: 게이트를 다시 돌린다**
 
@@ -743,7 +771,19 @@ curl -sS https://openrouter.ai/api/v1/chat/completions \
                    "order":["gmicloud/fp8","baseten/fp8"]}}' \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print('provider=',d.get('provider'))"
 ```
-기댓값: `provider= GMICloud`. 다른 곳이면 `Order`의 슬러그 형식(`tag` 대 base)을 의심하고 사양서 10절의 되돌림 조건을 따른다.
+**기댓값(2026-09-09 실측으로 완화)**: 응답 `provider`가 **`Order` 목록 안**이면 통과다.
+`GMICloud`(1순위)를 기대하되 `BaseTen`(2순위)도 정상이다 — `AllowFallbacks: true`라
+1순위가 그 순간 못 받으면 2순위가 받는 것이 설계다.
+
+**목록 밖 공급자가 나오거나 404면** 그때 슬러그 형식(`tag` 대 base)을 의심하고
+사양서 10절의 되돌림 조건을 따른다.
+
+실측 기록: 첫 호출이 `BaseTen`으로 갔고, 가설을 이렇게 갈랐다 —
+`order: ["gmicloud/fp8"]` + `allow_fallbacks: false` → **200 `GMICloud`**
+(슬러그가 먹는다는 뜻이므로 형식 문제가 아니다). 이어서 실제 설정으로 5회 더 부르니
+`GMICloud` 5/5였다. 그 시점 `gmicloud/fp8`의 30분 가동률이 96.44%였다.
+base 슬러그(`"gmicloud"`)도 200 `GMICloud`로 동작함을 함께 확인했다 —
+둘 다 유효하고, `tag` 형식을 쓰는 이유는 어느 변형인지 눈에 보이기 때문이다.
 
 - [ ] **Step 3: 미등록 모델이 죽지 않는지 본다 — 이것이 이 변경의 핵심 증거다**
 

@@ -72,7 +72,7 @@ namespace ReSet.Validator.Cli
             return OpenRouterRoutingOptions.Merge(defaults, perModel);
         }
 
-        /// <summary>라우팅 항목 세 개를 한 구획에서 읽는다. 구획이 없으면 null.</summary>
+        /// <summary>라우팅 항목 네 개를 한 구획에서 읽는다. 구획이 없으면 null.</summary>
         private static OpenRouterRoutingOptions? ParseRoutingBlock(IConfigurationSection? section)
         {
             if (section is null || !section.Exists())
@@ -84,8 +84,12 @@ namespace ReSet.Validator.Cli
                 .Select(child => child.Value ?? string.Empty)
                 .ToArray();
 
+            var quantizations = section.GetSection("Quantizations").GetChildren()
+                .Select(child => child.Value ?? string.Empty)
+                .ToArray();
+
             return OpenRouterRoutingOptions.Parse(
-                order, section["AllowFallbacks"], section["RequireParameters"]);
+                order, section["AllowFallbacks"], section["RequireParameters"], quantizations);
         }
 
         /// <summary>

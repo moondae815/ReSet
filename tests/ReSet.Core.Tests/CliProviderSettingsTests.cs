@@ -60,118 +60,83 @@ namespace ReSet.Core.Tests
             Assert.Equal(string.Empty, configuration["AiSettings:Providers:OpenRouter:ApiKey"]);
         }
 
-        // 저장소 기본값은 백엔드를 고정한다. 고정하지 않으면 회차마다 다른 백엔드로
-        // 가서 1회차에 쓴 프롬프트 캐시를 2회차가 읽지 못한다(실측 z-ai/glm-5.2,
-        // 접두사 10,220토큰: 미고정 적중 0에 $0.00776, 고정 시 적중 10,112에 $0.00171).
-        // 순서까지 고정하는 것은 1순위가 막혔을 때 fp4 양자화 백엔드로 조용히
-        // 떨어지지 않게 하기 위해서다.
-        //
-        // 모델마다 목록이 갈리는 이유는 어느 백엔드가 그 모델을 서빙하는지가 다르기
-        // 때문이다. 공유 목록이던 시절 실제로 난 사고: glm 캐시읽기 최저가인
-        // sail-research는 deepseek를 서빙하지 않아, 그 이름을 1순위로 올리면
-        // AllowFallbacks=false와 맞물려 Critic이 404 "No endpoints found"로 죽었다.
-        // 아래 표에서 그 이름이 glm의 1순위로 올라가 있는 것이 ByModel이 이 충돌을
-        // 없앴다는 증거다 - 이 항목은 glm 호출에만 적용되어 Critic에 닿지 않는다.
+        // 품질 하한은 이름이 아니라 성질로 지킨다. 이 선언이 사라지면 fp4·unknown
+        // 백엔드가 말없이 후보에 들어오고, 명세서 품질이 조용히 갈린다.
+        // Default가 Order를 가지면 안 되는 이유는 따로다 - 그것은 "다른 모델의
+        // 목록"을 남의 모델에 물려주는 자리이고, 그렇게 물려받은 백엔드가 그 모델을
+        // 서빙하지 않으면 404 "No endpoints found"로 즉시 죽는다.
         [Theory]
         [InlineData("src/ReSet.Cli/appsettings.json")]
         [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
-        public void AppSettings_PinOpenRouterBackendsPerModel(string relativePath)
+        public void AppSettings_OpenRouterDefault_DeclaresQuantizationFloorWithoutOrder(string relativePath)
         {
             var configuration = Load(relativePath);
+            var routing = ReSet.Cli.Program.ReadOpenRouterRouting(configuration, "OpenRouter");
 
-            foreach (var (model, expected) in PinnedBackendsPerModel)
-            {
-                var routing = ReSet.Cli.Program.ReadOpenRouterRouting(configuration, "OpenRouter", model);
-
-                Assert.NotNull(routing);
-                Assert.Equal(expected, routing!.Order);
-            }
+            Assert.NotNull(routing);
+            Assert.Equal(new[] { "fp8" }, routing!.Quantizations);
+            Assert.True(routing.AllowFallbacks, "미등록 모델이 404로 죽지 않으려면 폴백이 열려 있어야 합니다");
+            Assert.Null(routing.Order);
         }
 
-        // 설정 파일이 고정하는 모델별 백엔드 순서. 근거(양자화·컨텍스트·캐시읽기
-        // 단가·가동률)는 appsettings.json의 ByModel 주석에 실측값으로 적혀 있다.
-        //
-        // glm-5.3-flash에 streamlake가 없는 것은 빠뜨린 게 아니다 - 그 백엔드는
-        // 이 모델을 서빙하지 않는다. 목록이 모델마다 갈리는 이유가 이것이다.
-        //
-        // glm-5.3의 목록이 한 줄인 것도 빠뜨린 게 아니다 - 이 모델을 서빙하는 곳이
-        // Z.AI 본사 하나뿐이라 2순위로 적을 대상이 없다. 그래도 항목이 있어야 하는
-        // 것은, 없으면 Default(streamlake·novita)로 도는데 그 둘이 서빙하지 않아
-        // AllowFallbacks=false와 맞물려 404로 즉시 죽기 때문이다.
-        public static readonly (string Model, string[] Order)[] PinnedBackendsPerModel =
-        {
-            ("z-ai/glm-5.2", new[] { "sail-research", "novita" }),
-            ("z-ai/glm-5.3", new[] { "z-ai" }),
-            ("deepseek/deepseek-v4-pro-0813", new[] { "gmicloud", "deepseek" }),
-            ("z-ai/glm-5.3-flash", new[] { "novita", "z-ai" }),
-            ("deepseek/deepseek-v4-flash-0731", new[] { "streamlake", "deepinfra" }),
-            // tencent/hy4-preview의 근거는 다른 항목과 성질이 다르다 - 백엔드 넷을
-            // 비교해 순서를 정한 것이 아니라, **한 곳만 확인됐다**. 2026-09-06 실측
-            // (POQSettleBatch4 재생성, OpenRouter 요청 35건 전량): 요청이
-            // order:["tencent"]·allow_fallbacks:false로 나갔고 응답 공급자가 Tencent
-            // 33건, 라우팅 실패 0. 2순위가 비어 있는 것은 빠뜨린 것이 아니라 적을
-            // 대상이 없어서다 - 같은 날 /endpoints 조회 응답이 1건이다
-            // (Tencent · fp8 · ctx 1,048,576 · 캐시읽기 0.042 · 30분 가동률 100%).
-            ("tencent/hy4-preview", new[] { "tencent" })
-        };
-
-        // 모델별 항목은 Order만 적고 AllowFallbacks는 Default에 한 번만 적는다.
-        // 설정 파일에서도 그 상속이 실제로 성립하는지 본다 - 성립하지 않으면 모델별
-        // 호출에서만 목록 밖 이동이 조용히 열린다.
+        // ByModel 키는 네임스페이스가 붙은 OpenRouter 모델 ID여야 한다. 네임스페이스를
+        // 빼면 어느 벤더로 풀릴지가 OpenRouter의 판단에 달려 재현성이 없다.
+        // 낡은 항목의 자동 탐지는 이 저장소에서 불가능하다 - OpenRouter 모델은
+        // gitignore된 appsettings.local.json에만 살아, 커밋된 설정과 대조할 수 없다.
+        // 표가 한 줄이라 사람이 지우는 것으로 감당한다.
         [Theory]
         [InlineData("src/ReSet.Cli/appsettings.json")]
         [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
-        public void AppSettings_PerModelRouting_KeepsFallbacksClosed(string relativePath)
-        {
-            var configuration = Load(relativePath);
-
-            foreach (var (model, _) in PinnedBackendsPerModel)
-            {
-                var routing = ReSet.Cli.Program.ReadOpenRouterRouting(configuration, "OpenRouter", model);
-
-                Assert.NotNull(routing);
-                Assert.False(routing!.AllowFallbacks, $"{model}의 AllowFallbacks가 닫혀 있지 않습니다");
-                Assert.Null(routing.RequireParameters);
-            }
-        }
-
-        // 위 두 검사는 표에 적힌 모델을 설정에서 찾는 한 방향이다. 그래서 설정에만
-        // ByModel 항목을 더하면 어느 검사에도 걸리지 않고 그대로 지나간다 - 근거를
-        // 남기지 않고 고른 백엔드가 조용히 실행에 실린다는 뜻이고, 그 항목은 순서도
-        // AllowFallbacks 상속도 검사받지 않는다. 반대 방향을 여기서 막는다.
-        //
-        // 두 설정 파일이 서로 어긋나는 것도 이 검사와 위 표 검사가 함께 막는다 -
-        // 양쪽 모두 같은 표의 부분집합이면서 상위집합이어야 하므로 집합이 같아진다.
-        [Theory]
-        [InlineData("src/ReSet.Cli/appsettings.json")]
-        [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
-        public void AppSettings_PerModelRouting_DeclaresNothingBeyondPinnedTable(string relativePath)
+        public void AppSettings_ByModelEntries_AreNamespacedWithNonEmptyOrder(string relativePath)
         {
             var byModel = Load(relativePath)
                 .GetSection("AiSettings:Providers:OpenRouter:Routing:ByModel");
 
             Assert.True(byModel.Exists(), $"{relativePath}에 ByModel 구획이 없습니다");
 
-            // 조회가 대소문자를 무시하므로 대조도 무시한다 - 그러지 않으면 표기만
-            // 다른 같은 모델이 "표에 없는 항목"으로 잘못 잡힌다.
-            var pinned = new HashSet<string>(
-                PinnedBackendsPerModel.Select(entry => entry.Model),
-                StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in byModel.GetChildren())
+            {
+                Assert.Contains("/", entry.Key);
 
-            var unpinned = byModel.GetChildren()
-                .Select(child => child.Key)
-                .Where(key => !pinned.Contains(key))
-                .ToArray();
+                var order = entry.GetSection("Order").GetChildren()
+                    .Select(child => child.Value)
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .ToArray();
 
-            Assert.True(
-                unpinned.Length == 0,
-                $"{relativePath}에 표에 없는 ByModel 항목이 있습니다: {string.Join(", ", unpinned)} - " +
-                "PinnedBackendsPerModel에 실측 근거와 함께 행을 더하십시오");
+                Assert.True(
+                    order.Length > 0,
+                    $"{relativePath}의 ByModel:{entry.Key}에 Order가 없습니다 - " +
+                    "Order를 적지 않을 항목이면 항목째 지우십시오(Default가 그 일을 합니다)");
+            }
+        }
+
+        // 모델별 항목은 Order만 적는다. 설정 파일에서도 그 상속이 실제로 성립하는지
+        // 본다 - 성립하지 않으면 그 모델 호출에서만 양자화 하한이 조용히 사라진다.
+        [Theory]
+        [InlineData("src/ReSet.Cli/appsettings.json")]
+        [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
+        public void AppSettings_PerModelRouting_InheritsQuantizationFloor(string relativePath)
+        {
+            var routing = ReSet.Cli.Program.ReadOpenRouterRouting(
+                Load(relativePath), "OpenRouter", "z-ai/glm-5.3");
+
+            Assert.NotNull(routing);
+            Assert.Equal(new[] { "gmicloud/fp8", "baseten/fp8" }, routing!.Order);
+            Assert.Equal(new[] { "fp8" }, routing.Quantizations);
+            Assert.True(routing.AllowFallbacks);
         }
 
         // AllowFallbacks=false는 "이 목록 밖으로 넘어가지 말라"는 뜻이므로 목록이 비어
         // 있으면 갈 곳을 말하지 않고 길만 막는 요청이 된다. 두 설정 파일 어느 쪽에서든
         // Order를 지우면서 이 값을 false로 남겨 두는 조합을 막는다.
+        //
+        // 조건문이 아니라 총함수 단언(AllowFallbacks가 true거나, false면 Order가
+        // 비지 않아야 한다)으로 적는다 - 예전에는 이 명제를 if로 쪼개 조건부 본문에
+        // 넣었는데, AppSettings_OpenRouterDefault_DeclaresQuantizationFloorWithoutOrder가
+        // 두 파일 모두에서 AllowFallbacks==true를 이미 못박고 있어 그 if 본문은 이
+        // 검사 파일 안에서 도달 불가였다(데이터를 바꿔도 깨어나지 않고, 그 못박기
+        // 자체를 지워야 하는데 그 변경은 형제 검사가 먼저 잡는다). 총함수 형태는
+        // 죽은 가지 없이 같은 명제를 매 실행마다 실제로 평가한다.
         [Theory]
         [InlineData("src/ReSet.Cli/appsettings.json")]
         [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
@@ -179,10 +144,62 @@ namespace ReSet.Core.Tests
         {
             var routing = ReSet.Cli.Program.ReadOpenRouterRouting(Load(relativePath), "OpenRouter");
 
-            if (routing?.AllowFallbacks == false)
+            Assert.NotNull(routing);
+            Assert.True(
+                routing!.AllowFallbacks == true || routing.Order?.Count > 0,
+                "AllowFallbacks가 false인데 Order가 비어 있습니다 - 갈 곳 없이 길만 막습니다");
+        }
+
+        // 두 설정 파일이 ByModel 항목 집합에서 서로 갈라지는 것을 잡는다. 옛
+        // PinnedBackendsPerModel 표는 두 파일이 같은 표의 부분집합이자 상위집합이어야
+        // 한다는 사실로 이 어긋남을 간접적으로 막았다 - 표를 폐기하면서 그 부수
+        // 효과도 함께 없어졌다. 한쪽에만 새 ByModel 항목이 구조적으로 유효하게
+        // (네임스페이스 있고 Order 비지 않게) 추가되면, 다른 개별 검사는 그 항목의
+        // 존재 자체를 요구하지 않으므로 아무것도 잡지 못한다. 이 검사가 그 자리를
+        // 직접 막는다.
+        [Fact]
+        public void AppSettings_BothCliConfigs_DeclareIdenticalOpenRouterRouting()
+        {
+            var cli = Load("src/ReSet.Cli/appsettings.json")
+                .GetSection("AiSettings:Providers:OpenRouter:Routing");
+            var validator = Load("src/ReSet.Validator.Cli/appsettings.json")
+                .GetSection("AiSettings:Providers:OpenRouter:Routing");
+
+            AssertRoutingSectionsAreIdentical(cli, validator);
+        }
+
+        // 잎 노드 (경로, 값) 쌍을 재귀로 모아 두 구획을 통째로 비교한다. 이러면
+        // Order·Quantizations·AllowFallbacks·RequireParameters처럼 이름을 아는
+        // 필드뿐 아니라, 나중에 추가되는 키도 이 검사가 따라간다 - 개별 필드를
+        // 하나씩 나열하는 방식은 새 키가 한쪽에만 추가돼도 조용히 통과시킨다.
+        private static void AssertRoutingSectionsAreIdentical(IConfigurationSection cli, IConfigurationSection validator)
+        {
+            var cliLeaves = CollectLeaves(cli);
+            var validatorLeaves = CollectLeaves(validator);
+
+            Assert.Equal(cliLeaves, validatorLeaves);
+        }
+
+        private static Dictionary<string, string> CollectLeaves(IConfigurationSection section)
+        {
+            var leaves = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            CollectLeaves(section, leaves);
+            return leaves;
+        }
+
+        private static void CollectLeaves(IConfigurationSection section, Dictionary<string, string> leaves)
+        {
+            var children = section.GetChildren().ToArray();
+
+            if (children.Length == 0)
             {
-                Assert.NotNull(routing.Order);
-                Assert.NotEmpty(routing.Order!);
+                leaves[section.Path] = section.Value ?? string.Empty;
+                return;
+            }
+
+            foreach (var child in children)
+            {
+                CollectLeaves(child, leaves);
             }
         }
 
@@ -207,6 +224,52 @@ namespace ReSet.Core.Tests
             Assert.True(routing.RequireParameters);
         }
 
+        // 설정의 Quantizations가 실제로 읽히는지 본다. 읽히지 않으면 설정 파일만
+        // 바뀌고 요청은 그대로다.
+        [Fact]
+        public void ReadOpenRouterRouting_WithConfiguredQuantizations_ReadsThem()
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["AiSettings:Providers:OpenRouter:Routing:Default:Quantizations:0"] = "fp8",
+                    ["AiSettings:Providers:OpenRouter:Routing:Default:AllowFallbacks"] = "true",
+                    ["AiSettings:Providers:OpenRouter:Routing:ByModel:z-ai/glm-5.3:Order:0"] = "gmicloud/fp8"
+                })
+                .Build();
+
+            var routing = ReSet.Cli.Program.ReadOpenRouterRouting(
+                configuration, "OpenRouter", "z-ai/glm-5.3");
+
+            Assert.NotNull(routing);
+            Assert.Equal(new[] { "gmicloud/fp8" }, routing!.Order);
+            Assert.Equal(new[] { "fp8" }, routing.Quantizations);
+            Assert.True(routing.AllowFallbacks);
+        }
+
+        // 검증기 CLI는 같은 로직의 복사본을 갖는다. 한쪽만 고치면 검증기 호출에서만
+        // 양자화 하한이 사라져, fp4 백엔드가 L2 리뷰를 조용히 맡게 된다.
+        [Fact]
+        public void ValidatorCli_ReadOpenRouterRouting_ReadsQuantizationsLikeAnalyzerCli()
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["AiSettings:Providers:OpenRouter:Routing:Default:Quantizations:0"] = "fp8",
+                    ["AiSettings:Providers:OpenRouter:Routing:Default:AllowFallbacks"] = "true",
+                    ["AiSettings:Providers:OpenRouter:Routing:ByModel:z-ai/glm-5.3:Order:0"] = "gmicloud/fp8"
+                })
+                .Build();
+
+            var routing = ReSet.Validator.Cli.Program.ReadOpenRouterRouting(
+                configuration, "OpenRouter", "z-ai/glm-5.3");
+
+            Assert.NotNull(routing);
+            Assert.Equal(new[] { "gmicloud/fp8" }, routing!.Order);
+            Assert.Equal(new[] { "fp8" }, routing!.Quantizations);
+            Assert.True(routing.AllowFallbacks);
+        }
+
         // 다른 provider에는 이 구획이 없다. 없는 구획을 읽어도 조용히 null이어야 한다.
         [Fact]
         public void ReadOpenRouterRouting_WithoutRoutingSection_ReturnsNull()
@@ -219,22 +282,6 @@ namespace ReSet.Core.Tests
                 .Build();
 
             Assert.Null(ReSet.Cli.Program.ReadOpenRouterRouting(configuration, "Claude"));
-        }
-
-        // 검증기 CLI는 같은 로직의 복사본을 갖는다. 한쪽만 모델별 형식을 알면,
-        // 새 형식 설정에서 검증기는 Routing 구획을 보고도 평면 Order를 찾지 못해
-        // null을 돌려준다 - 라우팅이 오류 없이 사라지고 백엔드가 다시 흔들린다.
-        [Fact]
-        public void ValidatorCli_ReadOpenRouterRouting_ResolvesByModelLikeAnalyzerCli()
-        {
-            var configuration = Load("src/ReSet.Validator.Cli/appsettings.json");
-
-            var routing = ReSet.Validator.Cli.Program.ReadOpenRouterRouting(
-                configuration, "OpenRouter", "deepseek/deepseek-v4-pro-0813");
-
-            Assert.NotNull(routing);
-            Assert.Equal(new[] { "gmicloud", "deepseek" }, routing!.Order);
-            Assert.False(routing.AllowFallbacks);
         }
 
         // ── 모델별 라우팅 ────────────────────────────────────────────────────
