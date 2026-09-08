@@ -55,5 +55,27 @@ namespace ReSet.Core.Tests
             Assert.Equal(new[] { "fp8" }, merged.Quantizations);
             Assert.True(merged.AllowFallbacks);
         }
+
+        // Default와 모델별 항목이 둘 다 양자화를 적으면 모델별 값이 이겨야 한다.
+        // ??가 피연산자 순서를 반대로 짜도(baseOptions ?? overrideOptions) 앞의
+        // 테스트는 한쪽이 항상 null이라 못 잡는다 - 이 테스트는 둘 다 값을 채워
+        // 어느 쪽이 실제로 이기는지를 가른다.
+        [Fact]
+        public void Merge_PerModelAndDefaultBothSpecifyQuantizations_OverrideWins()
+        {
+            var defaults = new OpenRouterRoutingOptions
+            {
+                Quantizations = new[] { "fp8" }
+            };
+            var perModel = new OpenRouterRoutingOptions
+            {
+                Quantizations = new[] { "fp16" }
+            };
+
+            var merged = OpenRouterRoutingOptions.Merge(defaults, perModel);
+
+            Assert.NotNull(merged);
+            Assert.Equal(new[] { "fp16" }, merged!.Quantizations);
+        }
     }
 }
