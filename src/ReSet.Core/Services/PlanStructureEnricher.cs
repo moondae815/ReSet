@@ -244,9 +244,27 @@ namespace ReSet.Core.Services
                     : new[] { issued };
             }
 
-            var merged = new List<string>(declared);
-            var seen = new HashSet<string>(declared, StringComparer.Ordinal);
-            var changed = false;
+            // 레거시 갈래도 합집합이 아니라 교체다 - 위 예약 발급 갈래와 같은 이유이고,
+            // 그 갈래의 주석("모델이 지어낸 코드를 남기면 등장 검사가 계속 그것을
+            // 인증한다")이 여기에도 그대로 든다. 예전에는 합집합이었다. 그것이 옳다고
+            // 방어된 적은 없고, 교체를 도입한 태스크가 레거시 갈래를 범위 밖으로 둔
+            // 것이었다(PlanStructureEnricherTests의 그 테스트 주석이 밝힌다).
+            //
+            // [왜 지금 바뀌었나] SpecReturnCodeExtractor는 "목차의 ErrorCodes를 AI가
+            // 채우는데 실측 26개 단계 중 25개가 빈 배열"이라는 전제로 채우러 만들어졌다.
+            // 그 전제가 무너졌다 - 지금 모델은 배열을 비우지 않고 `-1, -2, 4000` 같은
+            // 일반 추정치를 채운다. 합집합이면 그 추정치가 그대로 살아남아
+            // [Approved Step List]에 실리고, 단계가 그것을 "본 Step의 원본 오류 코드"라고
+            // 단언한다(POQSettleBatch6 축 B 감사: 14행 중 14행이 4000을 실었고 그중
+            // 12개 SP의 명세서에는 4000이 한 번도 안 나온다).
+            //
+            // [교체가 안전한 근거 - 측정] 코퍼스 14쌍에서 명세서 쪽 추출집합이 원본 DDL
+            // 쪽 추출집합(DmlScopeExtractor.ExtractErrorCodes)의 상위집합이었다. 손실 0이고,
+            // 명세서 쪽이 오히려 -9(IF EXISTS 가드)와 0(성공)까지 더 잡는다. 모델은 명세서
+            // 말고 더 나은 출처를 갖고 있지 않으므로 선언값이 추가로 아는 것은 없다.
+            var merged = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var anyMaterial = false;
 
             foreach (var procedure in procedures)
             {
@@ -255,17 +273,43 @@ namespace ReSet.Core.Services
                     continue;
                 }
 
+                anyMaterial = true;
                 foreach (var code in codes)
                 {
                     if (seen.Add(code))
                     {
                         merged.Add(code);
-                        changed = true;
                     }
                 }
             }
 
-            return changed ? merged.ToArray() : null;
+            // 재료가 하나도 없으면 선언값을 지우지 않는다. 추출 실패와 "원본에 코드가
+            // 없다"가 구분되지 않는 자리이고, 비우면 하한 검사가 빈 배열을 0회 반복으로
+            // 통과한다(SpecReturnCodeExtractor가 애초에 막으려던 그 실패다).
+            if (!anyMaterial)
+            {
+                return null;
+            }
+
+            if (merged.Count == declared.Count)
+            {
+                var identical = true;
+                for (var i = 0; i < merged.Count; i++)
+                {
+                    if (!string.Equals(merged[i], declared[i], StringComparison.Ordinal))
+                    {
+                        identical = false;
+                        break;
+                    }
+                }
+
+                if (identical)
+                {
+                    return null;
+                }
+            }
+
+            return merged.ToArray();
         }
 
         /// <summary>
