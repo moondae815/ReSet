@@ -332,7 +332,26 @@ namespace ReSet.Core.Services
         //     전부 「새 재료가 아직 명세서에 없다」이고 재생성으로 닫힌다. 거짓 양성 0.
         //     21 로 올리지 않는 이유: 19 가 아직 어떤 산출물에도 적용되지 않았다
         //     (공유 캐시 인덱스 31 건 전량 19, 재생성 전) - 20 한 판이 둘을 함께 나른다.
-        private const int CurrentCacheFormatVersion = 20;
+        // v21 (2026-09-08) - 3부 참조 목록을 **소속 DB 안/밖으로 갈라** 프롬프트에 싣는다.
+        //     [왜 20 을 재활용하지 않는가] 20 이 이미 산출물 셋에 적용됐다
+        //     (G0 이 INCVTAXRATE·ROUND4VAT·WORKDAY2 를 v20 으로 올린 뒤 중단됐다).
+        //     프롬프트가 바뀐 지금 20 을 그대로 두면 그 셋만 옛 계약으로 만들어진 채
+        //     캐시 적중으로 남아 **같은 번호 아래 두 계약**이 생긴다 - 나중에
+        //     「왜 이 셋만 다른가」를 못 가른다. 그래서 21 로 올려 31 건을 한 계약으로 맞춘다.
+        //
+        //     [사고 경위] v20 재생성을 돌리자 `UIF_SettleYMD` 가 L1
+        //     (DatabasePlacementProseContradiction)에 걸려 재시도를 소진하기 시작했다.
+        //     원인은 검사가 아니라 프롬프트다 - 「3부 식별자면 크로스 데이터베이스 참조」
+        //     라고만 지시하고 목록에서 소속 DB 안 객체를 갈라 주지 않아, 모델이 자기 DB
+        //     객체(`SETTLE_POQ_DB.dbo.THoliday`)까지 크로스 DB 라 불렀다. **재료를 안 주고
+        //     L1 으로 벌만 주면 루프가 스스로 닫히지 않는다** - 6 회 소진 뒤 검증 못 통과한
+        //     판이 배너를 달고 배송된다. 코퍼스 실측으로 같은 자리에 걸릴 객체가 7 개였다
+        //     (COLLECTYMD·UIF_SettleYMD·CANCEL_INS·EXCEPTION_PROC·EXPECT_PROC·
+        //     INS_EXTRA4PLCARD·Summary_AcqManual).
+        //
+        //     갈래의 근거는 DatabasePlacementExtractor 가 `실행 의미` 표의 `DB 배치` 행에
+        //     쓰는 것과 같다 - 프롬프트와 표가 갈리면 안 된다.
+        private const int CurrentCacheFormatVersion = 21;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",

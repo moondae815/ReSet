@@ -1045,6 +1045,48 @@ END"
             Assert.Contains("SETTLE_POQ_DB.dbo.TSettleMst", body);
         }
 
+        // [소속 DB 안/밖 갈래 - 2026-09-08 재생성 사고] 갈라 주지 않으면 모델이 3부 표기
+        // 전부를 크로스 데이터베이스라 부르고, L1(DatabasePlacementProseContradiction)이
+        // 그것을 잡아 재시도 6회를 소진한다. UIF_SettleYMD 가 실물로 그렇게 걸렸다 -
+        // 재료를 안 주고 벌만 주면 루프가 스스로 닫히지 않는다.
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithMixedThreePartReferences_ShouldSplitByHomeDatabase()
+        {
+            var (service, handler) = CreateProbe();
+            var spDef = ProbeInsertOnlySpDef(
+                "SETTLE_POQ_DB.dbo.THoliday", "PaymentDB.dbo.TExtraSettleIn");
+            spDef.ObjectKey = CodeObjectKey.Create(
+                "SETTLE_POQ_DB", "dbo", "UP_UTIL_STAT_PGCOLLECT_INS", CodeObjectType.Procedure);
+
+            await service.GenerateSpecificationAsync(spDef, "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("소속 DB(`SETTLE_POQ_DB`) 안", body);
+            Assert.Contains("크로스 데이터베이스(Cross-Database) 참조라고 부르지 마십시오", body);
+            Assert.Contains("소속 DB 밖", body);
+            // 갈래가 실제로 갈렸는지 - 두 이름이 서로 다른 줄에 있어야 한다.
+            var inHomeLine = body.Split('\n').Single(l => l.Contains("소속 DB(`SETTLE_POQ_DB`) 안"));
+            Assert.Contains("THoliday", inHomeLine);
+            Assert.DoesNotContain("PaymentDB", inHomeLine);
+        }
+
+        // 3부 참조가 전부 소속 DB 안이면 「크로스 데이터베이스라 부를 대상이 없다」를
+        // 명시해야 한다 - 목록만 주면 모델이 그중 하나를 골라 그렇게 부른다.
+        [Fact]
+        public async Task GenerateSpecificationAsync_WhenEveryThreePartReferenceIsLocal_ShouldSayNoneAreCrossDatabase()
+        {
+            var (service, handler) = CreateProbe();
+            var spDef = ProbeInsertOnlySpDef("SETTLE_POQ_DB.dbo.THoliday");
+            spDef.ObjectKey = CodeObjectKey.Create(
+                "SETTLE_POQ_DB", "dbo", "UP_UTIL_STAT_PGCOLLECT_INS", CodeObjectType.Procedure);
+
+            await service.GenerateSpecificationAsync(spDef, "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("소속 DB 밖 참조는 없습니다", body);
+            Assert.Contains("크로스 데이터베이스 참조라고 부를 대상이 하나도 없습니다", body);
+        }
+
         /// <summary>
         /// EXCEPTION_PROC 실행순서 18의 실측 형태 - YMD 파라미터가 EXISTS 서브쿼리
         /// 안에만 있고 바깥 UPDATE 대상에는 걸리지 않는다. 이 DDL 조각과 파라미터

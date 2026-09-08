@@ -255,7 +255,7 @@ namespace ReSet.Core.Services
                     }
                     else
                     {
-                        staticAnalysisText.AppendLine("- 식별된 Linked Server 원격 참조 목록: 없음 (프로시저 내부에서 Linked Server 원격 참조를 사용하지 않습니다. 만약 다른 데이터베이스의 테이블을 3부 식별자(Database.Schema.Table) 형식으로 참조한다면, 이는 Linked Server가 아닌 동일 서버 인스턴스 내 크로스 데이터베이스(Cross-Database) 참조이므로 CRUD 분석 표 및 개요에 Linked Server가 아님을 사실 기반으로 정확하게 구분하여 설명하십시오.)");
+                        staticAnalysisText.AppendLine("- 식별된 Linked Server 원격 참조 목록: 없음 (이 객체는 Linked Server 원격 참조를 사용하지 않습니다. 3부 식별자(Database.Schema.Table) 참조가 있다면 Linked Server가 아님을 CRUD 분석 표 및 개요에 사실 기반으로 구분해 설명하십시오. **어느 것을 크로스 데이터베이스라 부를지는 아래 3부 참조 목록이 소속 DB 안/밖으로 갈라 줍니다 - 그 갈래를 그대로 따르십시오.**)");
                     }
 
                     // UPDATE 헤딩 원문 병기(위)만으로는 UPDATE 문이 없는 SP(예: INSERT 전용)에
@@ -264,7 +264,38 @@ namespace ReSet.Core.Services
                     // <sp-source-ddl>만 근거로 삼으라)이 실제로 기댈 근거를 만든다.
                     if (spDef.StaticAnalysis.ThreePartObjectReferences.Count > 0)
                     {
+                        // [소속 DB 안/밖을 갈라 준다 - 2026-09-08 재생성 사고]
+                        // 갈라 주지 않으면 모델이 3부 표기 전부를 크로스 데이터베이스라
+                        // 부른다. 실측: 코퍼스 31개 중 7개가 자기 DB 객체를 3부로 참조하고
+                        // (COLLECTYMD·UIF_SettleYMD·CANCEL_INS·EXCEPTION_PROC·EXPECT_PROC·
+                        // INS_EXTRA4PLCARD·Summary_AcqManual), 그 자리가 축 A 감사에서 🟠로
+                        // 잡혔다. 재료를 안 주고 L1으로 벌만 주면 재시도 6회를 소진하고
+                        // 검증 못 통과한 판이 배너를 달고 배송된다(UIF_SettleYMD 실측).
+                        // 갈래의 근거는 DatabasePlacementExtractor가 `실행 의미` 표의
+                        // `DB 배치` 행에 쓰는 것과 같다 - 두 자리가 갈리면 안 된다.
+                        var homeDatabase = spDef.ObjectKey?.Database ?? string.Empty;
+                        var inHome = spDef.StaticAnalysis.ThreePartObjectReferences
+                            .Where(r => homeDatabase.Length > 0
+                                        && string.Equals(r.Split('.')[0], homeDatabase, StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+                        var outsideHome = spDef.StaticAnalysis.ThreePartObjectReferences
+                            .Where(r => !inHome.Contains(r))
+                            .ToList();
+
                         staticAnalysisText.AppendLine($"- 원본이 3부 이상으로 표기한 오브젝트 참조(테이블/함수) 원문 목록: {string.Join(", ", spDef.StaticAnalysis.ThreePartObjectReferences)}");
+
+                        if (inHome.Count > 0)
+                        {
+                            staticAnalysisText.AppendLine(
+                                $"  - 그중 **소속 DB(`{homeDatabase}`) 안**: {string.Join(", ", inHome)} "
+                                + "→ 3부로 적혀 있을 뿐 이 객체와 같은 DB의 로컬 객체입니다. "
+                                + "**크로스 데이터베이스(Cross-Database) 참조라고 부르지 마십시오.**");
+                        }
+
+                        staticAnalysisText.AppendLine(outsideHome.Count > 0
+                            ? $"  - 그중 **소속 DB 밖**: {string.Join(", ", outsideHome)} "
+                              + "→ 이것만 동일 서버 인스턴스 내 크로스 데이터베이스(Cross-Database) 참조입니다."
+                            : "  - 소속 DB 밖 참조는 없습니다 → 크로스 데이터베이스 참조라고 부를 대상이 하나도 없습니다.");
                     }
                     else
                     {
