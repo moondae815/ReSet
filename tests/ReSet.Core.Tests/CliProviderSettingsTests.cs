@@ -171,41 +171,40 @@ namespace ReSet.Core.Tests
             AssertRoutingSectionsAreIdentical(cli, validator);
         }
 
+        // 잎 노드 (경로, 값) 쌍을 재귀로 모아 두 구획을 통째로 비교한다. 이러면
+        // Order·Quantizations·AllowFallbacks·RequireParameters처럼 이름을 아는
+        // 필드뿐 아니라, 나중에 추가되는 키도 이 검사가 따라간다 - 개별 필드를
+        // 하나씩 나열하는 방식은 새 키가 한쪽에만 추가돼도 조용히 통과시킨다.
         private static void AssertRoutingSectionsAreIdentical(IConfigurationSection cli, IConfigurationSection validator)
         {
-            var cliDefault = cli.GetSection("Default");
-            var validatorDefault = validator.GetSection("Default");
+            var cliLeaves = CollectLeaves(cli);
+            var validatorLeaves = CollectLeaves(validator);
 
-            Assert.Equal(
-                ReadArray(cliDefault, "Quantizations"),
-                ReadArray(validatorDefault, "Quantizations"));
-            Assert.Equal(cliDefault["AllowFallbacks"], validatorDefault["AllowFallbacks"]);
-            Assert.Equal(
-                ReadArray(cliDefault, "Order"),
-                ReadArray(validatorDefault, "Order"));
-
-            var cliByModel = cli.GetSection("ByModel");
-            var validatorByModel = validator.GetSection("ByModel");
-
-            var cliKeys = cliByModel.GetChildren().Select(c => c.Key).OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToArray();
-            var validatorKeys = validatorByModel.GetChildren().Select(c => c.Key).OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToArray();
-
-            Assert.Equal(
-                cliKeys,
-                validatorKeys);
-
-            foreach (var key in cliKeys)
-            {
-                Assert.Equal(
-                    ReadArray(cliByModel.GetSection(key), "Order"),
-                    ReadArray(validatorByModel.GetSection(key), "Order"));
-            }
+            Assert.Equal(cliLeaves, validatorLeaves);
         }
 
-        private static string[] ReadArray(IConfigurationSection section, string key) =>
-            section.GetSection(key).GetChildren()
-                .Select(child => child.Value ?? string.Empty)
-                .ToArray();
+        private static Dictionary<string, string> CollectLeaves(IConfigurationSection section)
+        {
+            var leaves = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            CollectLeaves(section, leaves);
+            return leaves;
+        }
+
+        private static void CollectLeaves(IConfigurationSection section, Dictionary<string, string> leaves)
+        {
+            var children = section.GetChildren().ToArray();
+
+            if (children.Length == 0)
+            {
+                leaves[section.Path] = section.Value ?? string.Empty;
+                return;
+            }
+
+            foreach (var child in children)
+            {
+                CollectLeaves(child, leaves);
+            }
+        }
 
         [Fact]
         public void ReadOpenRouterRouting_WithConfiguredOrder_ReadsArrayAndFlags()
@@ -260,7 +259,8 @@ namespace ReSet.Core.Tests
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["AiSettings:Providers:OpenRouter:Routing:Default:Quantizations:0"] = "fp8",
-                    ["AiSettings:Providers:OpenRouter:Routing:Default:AllowFallbacks"] = "true"
+                    ["AiSettings:Providers:OpenRouter:Routing:Default:AllowFallbacks"] = "true",
+                    ["AiSettings:Providers:OpenRouter:Routing:ByModel:z-ai/glm-5.3:Order:0"] = "gmicloud/fp8"
                 })
                 .Build();
 
@@ -268,6 +268,7 @@ namespace ReSet.Core.Tests
                 configuration, "OpenRouter", "z-ai/glm-5.3");
 
             Assert.NotNull(routing);
+            Assert.Equal(new[] { "gmicloud/fp8" }, routing!.Order);
             Assert.Equal(new[] { "fp8" }, routing!.Quantizations);
             Assert.True(routing.AllowFallbacks);
         }
