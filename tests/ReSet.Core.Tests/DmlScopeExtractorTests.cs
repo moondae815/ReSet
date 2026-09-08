@@ -1312,6 +1312,78 @@ END";
             Assert.Equal("=", fact.Operator);
         }
 
+        // [외부 조인 종류 - 2026-09-08 축 A 감사 🟠] INS_EXTRA:205 실측.
+        // `LEFT OUTER JOIN TPGProperty Y ON X.PGName = Y.PGName` 의 **조인 종류**가
+        // 명세서 어디에도 없었다. 종류 라벨은 집합 술어 표의 범위 칸에만 얹혀 나가는데
+        // (`LEFT OUTER 조인 ON Y`), 이 ON 은 조인 키 등식뿐이라 그 행이 설계상 필터로
+        // 빠지고 라벨이 탈 자리가 사라진다. INNER 로 이행하면 TPGProperty 에 짝이 없는
+        // PGName 의 정산 행이 INSERT 에서 통째로 빠진다.
+        [Fact]
+        public void ExtractDmlScope_OuterJoinWithOnlyKeyEqualities_ShouldStillCarryTheJoinType()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TSettleMst (PGName, Amt)
+    SELECT X.PGName, X.Amt
+    FROM dbo.TStage X
+    LEFT OUTER JOIN dbo.TPGProperty Y WITH(NOLOCK) ON X.PGName = Y.PGName
+END";
+
+            var fact = Assert.Single(
+                DmlScopeExtractor.Extract(ddl, "@pi_strYMD"), f => f.Operation == "INSERT");
+
+            Assert.Contains("Y(LEFT OUTER)", fact.OuterJoins);
+            // 조인 키 칸이 종류를 함께 싣는다 - 이 칸은 축자 정확 일치로 대조되므로
+            // 렌더와 기대값이 같은 자리(JoinKeysCell)에서 나와야 한다.
+            Assert.Equal("PGName · 외부 조인 Y(LEFT OUTER)", fact.JoinKeysCell);
+        }
+
+        // 파생 테이블 안의 외부 조인은 별칭을 앞세운다 - 층위를 뭉개면 파생 안의
+        // 조인이 최상위 조인처럼 읽힌다. INS_EXTRA:193-205 실측 모양이다
+        // (B·C·E 는 파생 X 안, Y 만 최상위).
+        [Fact]
+        public void ExtractDmlScope_OuterJoinInsideADerivedTable_ShouldBePrefixedWithItsAlias()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TSettleMst (PGName, Amt)
+    SELECT X.PGName, X.Amt
+    FROM (SELECT A.PGName, A.Amt
+          FROM dbo.TExtraSettleIn A WITH(NOLOCK)
+          LEFT OUTER JOIN dbo.TPGSettleRate4Extra B WITH(NOLOCK) ON A.OrgYMD = B.OrgYMD) X
+    LEFT OUTER JOIN dbo.TPGProperty Y WITH(NOLOCK) ON X.PGName = Y.PGName
+END";
+
+            var fact = Assert.Single(
+                DmlScopeExtractor.Extract(ddl, "@pi_strYMD"), f => f.Operation == "INSERT");
+
+            Assert.Contains("Y(LEFT OUTER)", fact.OuterJoins);
+            Assert.Contains("파생 테이블 X · B(LEFT OUTER)", fact.OuterJoins);
+        }
+
+        // INNER 조인만 있으면 칸이 종전 그대로여야 한다 - 코퍼스 대부분이 이쪽이라
+        // 이 자리가 새면 전 객체에 거짓 양성이 난다.
+        [Fact]
+        public void ExtractDmlScope_InnerJoinOnly_ShouldLeaveTheJoinKeysCellUnchanged()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TSettleMst (PGName, Amt)
+    SELECT X.PGName, X.Amt
+    FROM dbo.TStage X
+    INNER JOIN dbo.TPGProperty Y ON X.PGName = Y.PGName
+END";
+
+            var fact = Assert.Single(
+                DmlScopeExtractor.Extract(ddl, "@pi_strYMD"), f => f.Operation == "INSERT");
+
+            Assert.Empty(fact.OuterJoins);
+            Assert.Equal("PGName", fact.JoinKeysCell);
+        }
+
         // [HAVING - 2026-09-08 축 A 감사 🟠] COMM_UPD:248 실측. UPDATE 7 파생 K 의
         // `HAVING SUM(TxAmt) = 0` 이 어느 기계 확정 표에도 실리지 않아 명세서에서
         // 통째로 사라졌고, 단계·계획서까지 그대로 전파됐다(원본 1 · 명세서 0 ·

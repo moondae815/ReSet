@@ -162,6 +162,39 @@ namespace ReSet.Core.Services
         bool DateParameterInNestedQuery = false)
     {
         /// <summary>
+        /// 이 문장의 <b>외부 조인</b>을 <c>{오른쪽 이름}({종류})</c>로 적은 목록.
+        /// 예: <c>Y(LEFT OUTER)</c>. INNER 조인은 담지 않는다.
+        ///
+        /// [왜 - 2026-09-08 축 A 감사 🟠] <c>INS_EXTRA:205</c>의
+        /// <c>LEFT OUTER JOIN TPGProperty Y ON X.PGName = Y.PGName</c>의 <b>조인 종류</b>가
+        /// 명세서 어디에도 없었다. 종류 라벨은 집합 술어 표의 범위 칸에만 얹혀 나가는데
+        /// (<c>LEFT OUTER 조인 ON Y</c>), 이 ON은 조인 키 등식뿐이라 그 행이 설계상
+        /// 필터로 빠지고(<c>skipJoinKeyEqualities</c>) <b>라벨이 탈 자리가 사라진다.</b>
+        /// 종류를 잃으면 이행이 INNER로 옮겨 짝 없는 행이 통째로 빠질 수 있다.
+        ///
+        /// [왜 조인 키 칸인가] 조인 정보가 이미 사는 자리다. 집합 술어 표의 필터를
+        /// 되돌리면(조인 키 등식만 있는 ON에도 행을 내면) 2026-08-23에 일부러 세운
+        /// 경계가 무너지고 노이즈가 는다.
+        /// </summary>
+        public IReadOnlyList<string> OuterJoins { get; init; } = Array.Empty<string>();
+
+        /// <summary>
+        /// 표의 <c>조인 키</c> 칸에 렌더되는 문자열. <b>렌더(AiService)와 기대값
+        /// (MechanicalValidator)이 반드시 같은 자리에서 나와야 한다</b> - 이 칸은
+        /// 축자 정확 일치로 대조되므로 두 곳이 갈리면 전 객체가 거짓 양성이 된다.
+        /// </summary>
+        public string JoinKeysCell
+        {
+            get
+            {
+                var keys = JoinKeys.Count == 0 ? "(없음)" : string.Join(", ", JoinKeys);
+                return OuterJoins.Count == 0
+                    ? keys
+                    : $"{keys} · 외부 조인 {string.Join(", ", OuterJoins)}";
+            }
+        }
+
+        /// <summary>
         /// <see cref="JoinKeys"/>와 같은 등식을 <c>테이블.컬럼=테이블.컬럼</c>으로
         /// 정규화한 것. 두 변은 대소문자를 무시해 정렬하므로 방향이 없다.
         ///
@@ -1660,6 +1693,7 @@ namespace ReSet.Core.Services
             {
                 var predicateColumns = new List<string>();
                 var joinKeys = new List<string>();
+                var outerJoins = new List<string>();
                 var groupByPerBranch = new List<IReadOnlyList<string>>();
 
                 foreach (var spec in QuerySpecificationsOf(node.QueryExpression))
@@ -1691,6 +1725,10 @@ namespace ReSet.Core.Services
                         {
                             if (!joinKeys.Contains(k, StringComparer.OrdinalIgnoreCase)) joinKeys.Add(k);
                         }
+                        foreach (var oj in joins.OuterJoins)
+                        {
+                            if (!outerJoins.Contains(oj, StringComparer.OrdinalIgnoreCase)) outerJoins.Add(oj);
+                        }
                     }
 
                     // UNION 갈래마다 모아 뒀다가 ResolveGroupByColumns로 합친다 -
@@ -1706,7 +1744,10 @@ namespace ReSet.Core.Services
                     false,
                     joinKeys,
                     OrderByExpressionsOf(node.QueryExpression),
-                    ResolveGroupByColumns(groupByPerBranch)));
+                    ResolveGroupByColumns(groupByPerBranch))
+                {
+                    OuterJoins = outerJoins,
+                });
             }
 
             /// <summary>
@@ -1730,6 +1771,7 @@ namespace ReSet.Core.Services
             {
                 var predicateColumns = new List<string>();
                 var joinKeys = new List<string>();
+                var outerJoins = new List<string>();
                 var dateApplied = false;
                 var groupByPerBranch = new List<IReadOnlyList<string>>();
 
@@ -1759,6 +1801,10 @@ namespace ReSet.Core.Services
                         {
                             if (!joinKeys.Contains(k, StringComparer.OrdinalIgnoreCase)) joinKeys.Add(k);
                         }
+                        foreach (var oj in joins.OuterJoins)
+                        {
+                            if (!outerJoins.Contains(oj, StringComparer.OrdinalIgnoreCase)) outerJoins.Add(oj);
+                        }
                     }
 
                     // 이 QuerySpecification 자신의 GroupByClause만 본다 - 파생 테이블
@@ -1773,7 +1819,10 @@ namespace ReSet.Core.Services
                     "INSERT", node.StartLine, TextOf(node.Target),
                     predicateColumns, dateApplied, joinKeys, OrderByExpressionsOf(node.InsertSource),
                     ResolveGroupByColumns(groupByPerBranch),
-                    DateParameterAppearsInNestedQuery(node)));
+                    DateParameterAppearsInNestedQuery(node))
+                {
+                    OuterJoins = outerJoins,
+                });
 
                 RecordErrorCode("INSERT", node);
             }
@@ -1927,6 +1976,7 @@ namespace ReSet.Core.Services
                 var predicateColumns = new List<string>();
                 var dateApplied = false;
                 var joinKeys = new List<string>();
+                var outerJoins = new List<string>();
 
                 // [N5] 조인 짝의 재료. WHERE(콤마 조인)와 ON 양쪽에서 모은다.
                 var joinReferences =
@@ -1965,6 +2015,13 @@ namespace ReSet.Core.Services
                 {
                     var joins = new JoinConditionCollector();
                     from.Accept(joins);
+                    foreach (var oj in joins.OuterJoins)
+                    {
+                        if (!outerJoins.Contains(oj, StringComparer.OrdinalIgnoreCase))
+                        {
+                            outerJoins.Add(oj);
+                        }
+                    }
                     foreach (var key in joins.Columns)
                     {
                         if (!joinKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
@@ -1993,6 +2050,7 @@ namespace ReSet.Core.Services
                 {
                     JoinPairs = BuildJoinPairs(from, joinReferences),
                     ResolvedTargetTable = ResolveTargetTableName(from, TextOf(target)),
+                    OuterJoins = outerJoins,
                 });
 
                 RecordErrorCode(operation, statement);
@@ -3172,12 +3230,76 @@ namespace ReSet.Core.Services
         {
             public List<string> Columns { get; } = new();
 
+            /// <inheritdoc cref="DmlScopeFact.OuterJoins"/>
+            public List<string> OuterJoins { get; } = new();
+
+            /// <summary>
+            /// 파생 테이블 별칭 스택. 층위를 뭉개면 파생 안의 조인이 최상위 조인처럼
+            /// 읽힌다 - INS_EXTRA 실측: B·C·E 는 파생 X 안(194-196)이고 Y 만 최상위(205)다.
+            /// JoinOnCollector 의 범위 표기와 같은 규약을 쓴다.
+            /// </summary>
+            private readonly Stack<string> _derivedAliases = new();
+
+            public override void ExplicitVisit(QueryDerivedTable node)
+            {
+                var alias = node.Alias?.Value;
+                if (string.IsNullOrWhiteSpace(alias))
+                {
+                    // 가리킬 이름이 없으면 범위를 쓸 수 없다 - 형제 수집기와 같은 판단.
+                    return;
+                }
+
+                _derivedAliases.Push(alias!);
+                base.ExplicitVisit(node);
+                _derivedAliases.Pop();
+            }
+
+            /// <summary>
+            /// 오른쪽 테이블 참조의 이름 - 별칭이 있으면 별칭, 없으면 기본 식별자.
+            /// <c>JoinOnCollector.NameOf</c>와 같은 규약이다(그쪽은 다른 클래스의
+            /// private 이라 여기 같은 판정을 둔다 - 두 자리가 갈리면 같은 조인이
+            /// 집합 술어 표와 조인 키 칸에서 다른 이름으로 불린다).
+            /// </summary>
+            private static string? NameOfTableReference(TableReference reference)
+            {
+                return reference switch
+                {
+                    TableReferenceWithAlias { Alias.Value: { Length: > 0 } alias } => alias,
+                    NamedTableReference named => named.SchemaObject?.BaseIdentifier?.Value,
+                    _ => null
+                };
+            }
+
             /// <inheritdoc cref="TopLevelPredicateCollector.JoinKeyReferences"/>
             public List<(string? LeftQualifier, string? LeftColumn, string? RightQualifier, string? RightColumn)>
                 JoinKeyReferences { get; } = new();
 
             public override void Visit(QualifiedJoin node)
             {
+                // 종류는 ON 유무와 무관하게 먼저 담는다 - ON이 조인 키 등식뿐이라
+                // 집합 술어 행이 안 생기는 자리가 바로 이 칸이 필요한 이유다.
+                var kind = node.QualifiedJoinType switch
+                {
+                    QualifiedJoinType.LeftOuter => "LEFT OUTER",
+                    QualifiedJoinType.RightOuter => "RIGHT OUTER",
+                    QualifiedJoinType.FullOuter => "FULL OUTER",
+                    _ => null
+                };
+                if (kind != null)
+                {
+                    var name = NameOfTableReference(node.SecondTableReference);
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        var entry = _derivedAliases.Count > 0
+                            ? $"파생 테이블 {_derivedAliases.Peek()} · {name}({kind})"
+                            : $"{name}({kind})";
+                        if (!OuterJoins.Contains(entry, StringComparer.OrdinalIgnoreCase))
+                        {
+                            OuterJoins.Add(entry);
+                        }
+                    }
+                }
+
                 if (node.SearchCondition == null) return;
 
                 var collector = new TopLevelPredicateCollector();

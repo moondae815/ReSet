@@ -890,8 +890,9 @@ Based on the structured reference context above, reverse engineer the stored pro
 
                 var predicates = fact.PredicateColumns.Count == 0
                     ? "(없음)" : string.Join(", ", fact.PredicateColumns);
-                var joinKeys = fact.JoinKeys.Count == 0
-                    ? "(없음)" : string.Join(", ", fact.JoinKeys);
+                // 렌더와 L1 기대값이 반드시 같은 자리에서 나와야 한다 - 이 칸은
+                // 축자 정확 일치로 대조된다(DmlScopeFact.JoinKeysCell).
+                var joinKeys = fact.JoinKeysCell;
                 // 파라미터 자체가 없으면(dateParameter가 빈 문자열) 전부 false로만
                 // 나오는 칸이 "적용 안 됨"이라는 거짓 신호로 읽힐 수 있다. 그래서
                 // 이 경우엔 판정 자체가 없었다는 것을 명시한다.

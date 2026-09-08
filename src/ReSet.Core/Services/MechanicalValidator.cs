@@ -3787,8 +3787,12 @@ namespace ReSet.Core.Services
                     ("조인 키", fact.JoinKeys)
                 })
                 {
-                    if (columns.Count == 0) continue;
-                    var expectedCell = string.Join(", ", columns);
+                    if (columns.Count == 0 && !(label == "조인 키" && fact.OuterJoins.Count > 0)) continue;
+                    // 조인 키 칸은 외부 조인 종류를 함께 싣는다 - 렌더와 같은 자리에서
+                    // 문자열을 얻어야 두 곳이 갈리지 않는다(DmlScopeFact.JoinKeysCell).
+                    var expectedCell = label == "조인 키"
+                        ? fact.JoinKeysCell
+                        : string.Join(", ", columns);
                     var present = matchingRows.Any(
                         row => MarkdownTableCellCodec.SplitRow(row).Any(cell => cell == expectedCell));
                     if (present) continue;
