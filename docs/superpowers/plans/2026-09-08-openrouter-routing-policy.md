@@ -771,7 +771,19 @@ curl -sS https://openrouter.ai/api/v1/chat/completions \
                    "order":["gmicloud/fp8","baseten/fp8"]}}' \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print('provider=',d.get('provider'))"
 ```
-기댓값: `provider= GMICloud`. 다른 곳이면 `Order`의 슬러그 형식(`tag` 대 base)을 의심하고 사양서 10절의 되돌림 조건을 따른다.
+**기댓값(2026-09-09 실측으로 완화)**: 응답 `provider`가 **`Order` 목록 안**이면 통과다.
+`GMICloud`(1순위)를 기대하되 `BaseTen`(2순위)도 정상이다 — `AllowFallbacks: true`라
+1순위가 그 순간 못 받으면 2순위가 받는 것이 설계다.
+
+**목록 밖 공급자가 나오거나 404면** 그때 슬러그 형식(`tag` 대 base)을 의심하고
+사양서 10절의 되돌림 조건을 따른다.
+
+실측 기록: 첫 호출이 `BaseTen`으로 갔고, 가설을 이렇게 갈랐다 —
+`order: ["gmicloud/fp8"]` + `allow_fallbacks: false` → **200 `GMICloud`**
+(슬러그가 먹는다는 뜻이므로 형식 문제가 아니다). 이어서 실제 설정으로 5회 더 부르니
+`GMICloud` 5/5였다. 그 시점 `gmicloud/fp8`의 30분 가동률이 96.44%였다.
+base 슬러그(`"gmicloud"`)도 200 `GMICloud`로 동작함을 함께 확인했다 —
+둘 다 유효하고, `tag` 형식을 쓰는 이유는 어느 변형인지 눈에 보이기 때문이다.
 
 - [ ] **Step 3: 미등록 모델이 죽지 않는지 본다 — 이것이 이 변경의 핵심 증거다**
 
