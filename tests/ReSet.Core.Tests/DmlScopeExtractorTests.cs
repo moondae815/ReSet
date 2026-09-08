@@ -1312,6 +1312,74 @@ END";
             Assert.Equal("=", fact.Operator);
         }
 
+        // [HAVING - 2026-09-08 축 A 감사 🟠] COMM_UPD:248 실측. UPDATE 7 파생 K 의
+        // `HAVING SUM(TxAmt) = 0` 이 어느 기계 확정 표에도 실리지 않아 명세서에서
+        // 통째로 사라졌고, 단계·계획서까지 그대로 전파됐다(원본 1 · 명세서 0 ·
+        // steps/S05.md 0 · 계획서 0). 이 술어는 「부분취소 합이 승인금액과 상계된
+        // PLTID 만 대상」이라는 한정이라, 빠지면 UPDATE 7 의 대상 행 집합이 넓어지고
+        // 그 행들의 CLComm·CLVT·PGComm·PGVT 가 달라진다.
+        [Fact]
+        public void ExtractSetPredicates_HavingInsideADerivedTable_ShouldBeCapturedWithItsAlias()
+        {
+            // 픽스처는 COMM_UPD:238-248 의 모양 그대로다 - 파생 안에 파생이 있고,
+            // HAVING 의 좌변이 집계 함수라 컬럼으로 분해되지 않는다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE X SET X.CLCOMM = K.Amt
+    FROM dbo.TSettleMst X
+    INNER JOIN (SELECT C.PLTID, MAX(C.Amt) AS Amt
+                FROM dbo.TSettleMst C
+                INNER JOIN (SELECT PLTID, SUM(TxAmt) AS TxAmt FROM dbo.TTxMst
+                            WHERE CommissionCancelFlag = 1 GROUP BY PLTID) D
+                    ON C.PLTID = D.PLTID
+                GROUP BY C.PLTID
+                HAVING  SUM(TxAmt) = 0) K
+        ON X.PLTID = K.PLTID
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            var having = Assert.Single(facts, f => f.Scope == "파생 테이블 K · HAVING");
+            Assert.Equal("SUM(TxAmt) = 0", having.PredicateText);
+        }
+
+        // 파생 테이블 밖 - 문장 자신의 HAVING 은 접두사 없이 실린다.
+        [Fact]
+        public void ExtractSetPredicates_HavingAtStatementLevel_ShouldBeCapturedWithoutAPrefix()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    INSERT INTO dbo.TStat (PLTID, Cnt)
+    SELECT PLTID, COUNT(*) FROM dbo.TSettleMst
+    WHERE UseState = 0
+    GROUP BY PLTID
+    HAVING COUNT(*) > 1
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            var having = Assert.Single(facts, f => f.Scope == "HAVING");
+            Assert.Equal("COUNT(*) > 1", having.PredicateText);
+        }
+
+        // HAVING 이 없는 문장에 행이 생기면 안 된다 - 코퍼스 31 개 중 HAVING 을 가진
+        // 객체는 COMM_UPD 하나뿐이라, 이 자리가 새면 나머지 30 개에 거짓 양성이 난다.
+        [Fact]
+        public void ExtractSetPredicates_WithoutHaving_ShouldNotYieldAHavingScope()
+        {
+            const string ddl = @"
+CREATE PROCEDURE dbo.P AS
+BEGIN
+    UPDATE dbo.TSettleMst SET CLCOMM = 0 WHERE UseState = 0
+END";
+
+            var facts = DmlScopeExtractor.ExtractSetPredicates(ddl);
+
+            Assert.DoesNotContain(facts, f => f.Scope.Contains("HAVING"));
+        }
+
         // 같은 컬럼이 최상위와 파생 테이블에 각각 걸리면 사실이 둘이어야 한다.
         // 하나로 합치면 L1이 한쪽만 대조하고 다른 쪽 누락을 통과시킨다.
         [Fact]
@@ -3381,7 +3449,7 @@ END";
         }
 
         [SkippableFact]
-        public void ExtractSetPredicates_OverTheCorpus_ShouldBe583FactsWithNoDuplicates()
+        public void ExtractSetPredicates_OverTheCorpus_ShouldBe584FactsWithNoDuplicates()
         {
             var root = UncoveredCorpusRoot();
             Skip.If(root == null, CorpusSkip.Reason);
@@ -3411,8 +3479,12 @@ END";
             // (등식이지만 양변이 컬럼 참조가 아니라 식이라 조인 키가 아니다 - 원문 행).
             // 다른 객체의 ON 절은 전부 컬럼 등식이라 행이 늘지 않았다. `derived`는
             // "최상위가 아닌 범위"를 세므로 조인 ON 행도 여기 든다.
-            Assert.Equal(583, total);
-            Assert.Equal(91, derived);
+            // [583 → 584 · 비최상위 91 → 92 - 2026-09-08 HAVING 수집] 축 A 감사 🟠 로
+            // COMM_UPD:248 의 `HAVING SUM(TxAmt) = 0` 이 어느 표에도 없다는 것이 드러났다.
+            // 코퍼스 31 개 중 HAVING 을 가진 객체는 COMM_UPD **하나뿐**이라(전수 grep)
+            // 더해진 행도 정확히 하나다 - 파생 K 안이므로 비최상위로 센다.
+            Assert.Equal(584, total);
+            Assert.Equal(92, derived);
             Assert.Equal(0, duplicates);
         }
     }

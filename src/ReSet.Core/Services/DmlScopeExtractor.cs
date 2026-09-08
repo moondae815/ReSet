@@ -2122,6 +2122,7 @@ namespace ReSet.Core.Services
                 }
                 CollectDerivedTables("INSERT", node, ordinal);
                 CollectJoinOnTerms("INSERT", node, ordinal);
+                CollectHavingTerms("INSERT", node, ordinal);
             }
 
             /// <summary>
@@ -2181,6 +2182,7 @@ namespace ReSet.Core.Services
                     // 파생 훑기는 문장당 한 번(Visit(InsertSpecification)의 같은 날짜 주석).
                     CollectDerivedTables("SELECT", node, ordinal);
                     CollectJoinOnTerms("SELECT", node, ordinal);
+                    CollectHavingTerms("SELECT", node, ordinal);
                 }
 
                 base.ExplicitVisit(node);
@@ -2210,6 +2212,7 @@ namespace ReSet.Core.Services
                 CollectTopLevel(operation, where, ordinal);
                 CollectDerivedTables(operation, statement, ordinal);
                 CollectJoinOnTerms(operation, statement, ordinal);
+                CollectHavingTerms(operation, statement, ordinal);
             }
 
             /// <summary>
@@ -2246,6 +2249,87 @@ namespace ReSet.Core.Services
                 foreach (var (scope, searchCondition) in joins.Joins)
                 {
                     CollectFrom(operation, searchCondition, ordinal, scope, skipJoinKeyEqualities: true);
+                }
+            }
+
+            /// <summary>
+            /// 문장 안 <c>HAVING</c> 절의 항을 사실로 옮긴다.
+            ///
+            /// [왜 - 2026-09-08 축 A 감사 🟠] <c>COMM_UPD:248</c> 실측. UPDATE 7 파생 K 의
+            /// <c>HAVING SUM(TxAmt) = 0</c> 이 <b>어느 기계 확정 표에도 실리지 않아</b>
+            /// 명세서에서 통째로 사라졌다. 이 표의 관할이 최상위 WHERE · 파생 테이블 WHERE ·
+            /// 조인 ON 셋뿐이었고 HAVING 은 그 밖이었다. 사라진 뒤 단계와 계획서까지 그대로
+            /// 전파돼(원본 1 · 명세서 0 · steps/S05.md 0 · 계획서 0) 코딩 에이전트의 입력에
+            /// 실렸다. 두 축 어느 단위도 못 잡는 자리였다 - 축 A 는 명세서까지만 보고,
+            /// 축 B 는 오라클이 명세서라 거기 없는 술어를 요구할 수 없다.
+            ///
+            /// [무엇을 좁히는가] HAVING 은 <b>그룹</b>을 좁힌다. WHERE 가 행을 거른 뒤
+            /// 그룹으로 묶인 결과를 다시 거르므로, 빠지면 대상 행 집합이 넓어진다 -
+            /// 위 실측에서 「부분취소 합이 승인금액과 상계된 PLTID 만 대상」이라는 한정이
+            /// 사라져 상계되지 않은 건까지 갱신 대상이 된다.
+            ///
+            /// [조인 키 등식을 걸러내지 않는다] <c>skipJoinKeyEqualities</c> 는 조인 ON 전용
+            /// 규약이다. HAVING 에는 조인 키가 올 수 없으므로 그대로 싣는다.
+            ///
+            /// [분해되지 않는 것이 보통이다] 좌변이 집계 함수 호출(<c>SUM(TxAmt)</c>)이라
+            /// 컬럼·연산·원소로 갈리지 않는다. 그때 표의 칸들이 <c>—</c> 가 되고 술어
+            /// 원문이 유일한 기록이 되는 것은 WHERE 의 분해 불가 항과 같은 취급이다.
+            ///
+            /// [범위 표기] 문장 자신의 HAVING 은 <c>HAVING</c>, 파생 테이블 K 안이면
+            /// <c>파생 테이블 K · HAVING</c> - 조인 ON 표기와 같은 모양이다.
+            ///
+            /// [경계] 스칼라 하위 질의 안의 HAVING 은 이 표의 경계 밖이다 -
+            /// TopLevelPredicateCollector · DerivedTableCollector · JoinOnCollector 와 같은 경계.
+            /// </summary>
+            private void CollectHavingTerms(string operation, TSqlFragment statement, int ordinal)
+            {
+                var havings = new HavingCollector();
+                statement.Accept(havings);
+
+                foreach (var (scope, searchCondition) in havings.Havings)
+                {
+                    CollectFrom(operation, searchCondition, ordinal, scope);
+                }
+            }
+
+            /// <summary>
+            /// 문장 안의 QuerySpecification 에서 HAVING 절을 찾아 범위 표기와 함께 낸다.
+            /// 파생 테이블 안쪽이면 그 별칭을 범위에 앞세운다 - JoinOnCollector 와 같은 규약.
+            /// </summary>
+            private sealed class HavingCollector : TSqlFragmentVisitor
+            {
+                private readonly Stack<string> _derivedAliases = new();
+
+                public List<(string Scope, BooleanExpression? Having)> Havings { get; } = new();
+
+                public override void ExplicitVisit(ScalarSubquery node) { }
+
+                public override void ExplicitVisit(QueryDerivedTable node)
+                {
+                    var alias = node.Alias?.Value;
+                    if (string.IsNullOrWhiteSpace(alias))
+                    {
+                        // 가리킬 이름이 없으면 범위를 쓸 수 없다 - 안쪽도 훑지 않는다
+                        // (DerivedTableCollector·JoinOnCollector 와 같은 판단).
+                        return;
+                    }
+
+                    _derivedAliases.Push(alias!);
+                    base.ExplicitVisit(node);
+                    _derivedAliases.Pop();
+                }
+
+                public override void ExplicitVisit(QuerySpecification node)
+                {
+                    if (node.HavingClause?.SearchCondition != null)
+                    {
+                        var scope = _derivedAliases.Count > 0
+                            ? $"파생 테이블 {_derivedAliases.Peek()} · HAVING"
+                            : "HAVING";
+                        Havings.Add((scope, node.HavingClause.SearchCondition));
+                    }
+
+                    base.ExplicitVisit(node);
                 }
             }
 

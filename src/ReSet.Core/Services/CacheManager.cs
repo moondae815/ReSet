@@ -303,7 +303,20 @@ namespace ReSet.Core.Services
         //     프롬프트·출력 형식은 바뀌지 않아(추출기 내부 판정만 재구성했을 뿐
         //     담김/침묵의 경계는 그대로다) **캐시 형식 버전은 20으로 올리지 않는다**.
         //     설계는 위와 같은 문서 §12에 있다.
-        private const int CurrentCacheFormatVersion = 19;
+        // v20 (2026-09-08) - 집합 술어 표가 `HAVING` 절의 항을 싣는다.
+        //     축 A 감사 🟠: `COMM_UPD:248`의 `HAVING SUM(TxAmt) = 0`이 **어느 기계 확정
+        //     표에도 없어** 명세서에서 통째로 사라졌고, 단계·계획서까지 전파됐다
+        //     (원본 1 · 명세서 0 · steps/S05.md 0 · 계획서 0 - 코딩 에이전트의 입력에
+        //     이미 실려 있었다). 이 표의 관할이 최상위 WHERE · 파생 테이블 WHERE ·
+        //     조인 ON 셋뿐이고 HAVING이 그 밖이었다. HAVING은 그룹을 좁히므로 빠지면
+        //     대상 행 집합이 넓어진다 - 위 실측에서 「부분취소 합이 승인금액과 상계된
+        //     PLTID만 대상」이라는 한정이 사라져 상계 안 된 건까지 갱신 대상이 된다.
+        //     **프롬프트에 실리는 재료가 늘었으므로 인상한다** - 안 올리면 COMM_UPD가
+        //     캐시 적중으로 건너뛰어져 새 행이 영영 안 실리고 L1도 안 돈다.
+        //     코퍼스 31개 중 HAVING을 가진 객체는 COMM_UPD 하나뿐이라(전수 grep)
+        //     영향 객체는 1이다. 스윕 차분: BASE 0 → 신규 1(그 진짜 양성), 거짓 양성 0,
+        //     다른 검사 카운트 불변. 집합 술어 대장은 583 → 584(비최상위 91 → 92).
+        private const int CurrentCacheFormatVersion = 20;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
