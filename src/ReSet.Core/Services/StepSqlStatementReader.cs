@@ -194,7 +194,22 @@ namespace ReSet.Core.Services
         // 1라운드 리뷰 실측: `갱신` 앞에도 형제 대안들과 같은 `\b`가 있어야 한다 -
         // 없으면 "재갱신4" 같은 합성어의 "갱신4"가 앵커 4로 오검출된다.
         private static readonly Regex AnchorPattern = new(
-            @"(?:\bU|\b갱신\s*|\bUPDATE\s+|\bINSERT\s+|\bDELETE\s+)(?<ordinal>\d{1,2})\b",
+            // [2026-09-08 완화] 세 키워드도 공백 없이 받는다 - `\bU` 와 `\b갱신\s*` 은
+            // 이미 그랬고 이 셋만 `\s+` 를 요구해 일관성이 없었다. 실물
+            // POQSettleBatch1/S15 가 `-- DELETE1:`·`-- INSERT1:` 로 적어 못 읽히고 있었다.
+            //
+            // [한 번 기각됐다가 다시 연 변경이다] 2026-09-06 판독 §9 가 완화를 실측으로
+            // 기각했다(Batch1 87 → 84). 그 판정은 옳았고 원인이 패턴이 아니었다 -
+            // 손실의 기제는 ReadAnchor 의 유일성 규칙이었고, 그것을 일치로 바꾼 뒤에는
+            // 완화가 앵커 260 → 262 이고 **잃는 문장이 0** 이다.
+            // 근거: docs/audit-reports/2026-09-08-패턴완화-사전선언.md
+            //
+            // [알려진 한계 - 이 완화가 넓힌다] 비캡처 대안이라 **서수만 잡고 종류를
+            // 버린다.** `/* INSERT1: … */` 가 DELETE 문장 앞에 있으면 그 DELETE 가 서수
+            // 1 을 받는다. 실측(2026-09-08): 명세서에 없는 (Kind, 서수) 쌍이 완화 전후
+            // **둘 다 2** 다 - 이 완화가 만든 것이 아니고, 그 2 는 POQSettleBatch5/S13
+            // 의 별건이다(판독 §4).
+            @"(?:\bU|\b갱신\s*|\bUPDATE\s*|\bINSERT\s*|\bDELETE\s*)(?<ordinal>\d{1,2})\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static IReadOnlyList<StepSqlStatement> Read(string? stepMarkdown) =>

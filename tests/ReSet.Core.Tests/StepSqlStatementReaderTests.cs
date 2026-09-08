@@ -1565,4 +1565,48 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
         Assert.Equal(1, Assert.Single(statements).Anchor);
     }
 
+
+    // ── 공백 없는 표기도 읽는다 (2026-09-08, ③) ──────────────────────────────
+    //
+    // 사전 선언: docs/audit-reports/2026-09-08-패턴완화-사전선언.md
+    // `\bU` 와 `\b갱신\s*` 은 이미 공백 없이도 받았다 - UPDATE·INSERT·DELETE 셋만
+    // `\s+` 를 요구해 일관성이 없었다. 실물 POQSettleBatch1/S15 가 그 표기를 쓴다.
+
+    [Theory]
+    [InlineData("-- DELETE1: 기준 정산일의 기존 PG 회수 통계 삭제", "DELETE FROM dbo.TStatPGCollect WHERE INYMD = @p;")]
+    [InlineData("-- INSERT1: 3원천 UNION ALL 집계 재적재", "INSERT INTO dbo.TStatPGCollect (INYMD) SELECT INYMD FROM dbo.TSettleMst;")]
+    [InlineData("-- UPDATE1: 갱신", "UPDATE dbo.TStatPGCollect SET INYMD = @p WHERE INYMD = @q;")]
+    public void ReadsAnchorWrittenWithoutASpaceAfterTheKeyword(string comment, string sql)
+    {
+        var statements = StepSqlStatementReader.Read(Fence(comment + "\n" + sql));
+
+        Assert.Equal(1, Assert.Single(statements).Anchor);
+    }
+
+    [Fact]
+    public void StillReadsTheSpacedSpelling()
+    {
+        // 완화가 기존 표기를 깨지 않는다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "-- SQL_DELETE_GROUP (DELETE 1, 원본 라인 44~50)\n" +
+            "DELETE FROM dbo.TSettleByOUT WHERE OutYMD = @o;"));
+
+        Assert.Equal(1, Assert.Single(statements).Anchor);
+    }
+
+    [Fact]
+    public void AnchorPatternStillIgnoresTheStatementKind()
+    {
+        // [알려진 한계 - 고치지 않는다] AnchorPattern 은 비캡처 대안이라 **서수만 잡고
+        // 종류를 버린다.** `INSERT1` 주석이 DELETE 문장 앞에 있으면 그 DELETE 가 서수
+        // 1 을 받는다. 완화가 이 성질을 **넓히므로** 여기 고정해 둔다 - 오늘 코퍼스에서
+        // 안 물리는 이유는 U-앵커의 (Kind, 서수) 쌍이 명세서에 없는 경우가 0 이기
+        // 때문이지 검사가 막아서가 아니다(2026-09-05 판독 §9).
+        var statements = StepSqlStatementReader.Read(Fence(
+            "-- INSERT1: 종류가 어긋난 주석\n" +
+            "DELETE FROM dbo.TStatPGCollect WHERE INYMD = @p;"));
+
+        Assert.Equal(1, Assert.Single(statements).Anchor);
+    }
+
 }
