@@ -21,8 +21,19 @@ namespace ReSet.Core.Services.Clients
         /// <summary>요청에 실린 파라미터를 모두 지원하는 제공자로만 라우팅할지 여부.</summary>
         public bool? RequireParameters { get; init; }
 
+        /// <summary>
+        /// 허용할 양자화(예: <c>fp8</c>). 이름이 아니라 성질로 후보를 좁히므로
+        /// 백엔드 목록을 손으로 적지 않아도 품질 하한이 지켜진다. OpenRouter의
+        /// 필터 순서가 <c>Quantization → … → Fallback</c>이라(실측 2026-09-08:
+        /// fp8 지정 시 29→13), 이 값이 있으면 <c>AllowFallbacks</c>를 열어도
+        /// 목록 밖 fp4·unknown 백엔드로 넘어가지 않는다.
+        /// </summary>
+        public IReadOnlyList<string>? Quantizations { get; init; }
+
         public bool IsEmpty =>
-            (Order is null || Order.Count == 0) && !AllowFallbacks.HasValue && !RequireParameters.HasValue;
+            (Order is null || Order.Count == 0)
+            && (Quantizations is null || Quantizations.Count == 0)
+            && !AllowFallbacks.HasValue && !RequireParameters.HasValue;
 
         /// <summary>
         /// 설정 값에서 라우팅 선호를 읽는다. 아무것도 지정되지 않았으면 <c>null</c>을
@@ -36,16 +47,23 @@ namespace ReSet.Core.Services.Clients
         public static OpenRouterRoutingOptions? Parse(
             IEnumerable<string>? order,
             string? allowFallbacks,
-            string? requireParameters)
+            string? requireParameters,
+            IEnumerable<string>? quantizations = null)
         {
             var cleanedOrder = order?
                 .Where(o => !string.IsNullOrWhiteSpace(o))
                 .Select(o => o.Trim())
                 .ToArray();
 
+            var cleanedQuantizations = quantizations?
+                .Where(q => !string.IsNullOrWhiteSpace(q))
+                .Select(q => q.Trim())
+                .ToArray();
+
             var options = new OpenRouterRoutingOptions
             {
                 Order = cleanedOrder is { Length: > 0 } ? cleanedOrder : null,
+                Quantizations = cleanedQuantizations is { Length: > 0 } ? cleanedQuantizations : null,
                 AllowFallbacks = bool.TryParse(allowFallbacks, out var af) ? af : null,
                 RequireParameters = bool.TryParse(requireParameters, out var rp) ? rp : null
             };
@@ -78,6 +96,7 @@ namespace ReSet.Core.Services.Clients
             var merged = new OpenRouterRoutingOptions
             {
                 Order = overrideOptions.Order ?? baseOptions.Order,
+                Quantizations = overrideOptions.Quantizations ?? baseOptions.Quantizations,
                 AllowFallbacks = overrideOptions.AllowFallbacks ?? baseOptions.AllowFallbacks,
                 RequireParameters = overrideOptions.RequireParameters ?? baseOptions.RequireParameters
             };
