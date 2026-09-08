@@ -209,7 +209,20 @@ namespace ReSet.Core.Services
             // 1 을 받는다. 실측(2026-09-08): 명세서에 없는 (Kind, 서수) 쌍이 완화 전후
             // **둘 다 2** 다 - 이 완화가 만든 것이 아니고, 그 2 는 POQSettleBatch5/S13
             // 의 별건이다(판독 §4).
-            @"(?:\bU|\b갱신\s*|\bUPDATE\s*|\bINSERT\s*|\bDELETE\s*)(?<ordinal>\d{1,2})\b",
+            // [2026-09-08] `U<n>-` 는 복합 라벨이지 앵커가 아니다. 실물
+            // POQSettleBatch5/S13 이 `/* U13-DELETE 1: … */` 로 적는데, 정규식은 **가장
+            // 왼쪽 매치**를 잡으므로 `\bU` 가 `U13` 에 먼저 맞아 서수 13 을 집었다.
+            // 진짜 서수는 1 이고, 명세서에 `(DELETE,13)` 행이 없어 앵커 계열 검사가
+            // **대조할 행을 못 찾고 조용히 지나갔다** - 앵커가 없어 검사가 꺼진 것과
+            // 같은 모양의 커버리지 손실이다.
+            //
+            // [대안 순서로는 못 고친다] 키워드 대안을 앞에 놓아도 `U` 자리에서 `\bU` 가
+            // 성립하는 한 그것이 이긴다. 그래서 `\bU` 쪽에 부정 예측을 단다.
+            //
+            // [`-` 하나만 배제한다] `U13_DELETE`·`U13 DELETE` 같은 다른 복합 표기는
+            // 코퍼스에 0 건이다. 없는 것을 상대로 넓히면 판별력만 잃는다.
+            // 근거: docs/audit-reports/2026-09-08-U접두-오귀속-사전선언.md
+            @"(?:\bU(?!\d{1,2}-)|\b갱신\s*|\bUPDATE\s*|\bINSERT\s*|\bDELETE\s*)(?<ordinal>\d{1,2})\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static IReadOnlyList<StepSqlStatement> Read(string? stepMarkdown) =>

@@ -1609,4 +1609,36 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
         Assert.Equal(1, Assert.Single(statements).Anchor);
     }
 
+
+    // ── `U<n>-` 복합 라벨은 앵커가 아니다 (2026-09-08) ────────────────────────
+    //
+    // 사전 선언: docs/audit-reports/2026-09-08-U접두-오귀속-사전선언.md
+    // 실물 POQSettleBatch5/S13 이 `/* U13-DELETE 1: … */` 로 적는데, 정규식은 가장
+    // 왼쪽 매치를 잡으므로 `\bU` 가 `U13` 에 먼저 맞아 **서수 13** 을 집었다.
+    // 진짜 서수는 1 이고, 명세서에 (DELETE,13) 행이 없어 앵커 계열 검사가 조용히
+    // 지나갔다 - 앵커가 없어 검사가 꺼진 것과 같은 모양의 커버리지 손실이다.
+
+    [Theory]
+    [InlineData("/* U13-DELETE 1: 기타 정산 요약 - 기존 집계행 삭제 */",
+                "DELETE FROM dbo.TSettleByOUT WHERE OutYMD = @o;")]
+    [InlineData("/* U13-INSERT 1: 기타 정산 요약 - 재집계 결과 등록 */",
+                "INSERT INTO dbo.TSettleByOUT (OutYMD) SELECT OutYMD FROM dbo.TSettleMst;")]
+    public void ReadsTheOrdinalFromTheKeywordNotTheCompoundPrefix(string comment, string sql)
+    {
+        var statements = StepSqlStatementReader.Read(Fence(comment + "\n" + sql));
+
+        Assert.Equal(1, Assert.Single(statements).Anchor);
+    }
+
+    [Fact]
+    public void StillReadsAPlainUAnchor()
+    {
+        // 정상 표기는 숫자 뒤가 콜론이라 영향이 없다 - 이 처방이 좁히는 것은 `-` 뿐이다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "/* U13: 카드사 원가 반영 */\n" +
+            "UPDATE dbo.TSettleMst SET CLCOMM = 1 WHERE YMD = @p;"));
+
+        Assert.Equal(13, Assert.Single(statements).Anchor);
+    }
+
 }
