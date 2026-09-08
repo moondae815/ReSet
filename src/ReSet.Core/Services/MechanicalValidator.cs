@@ -523,6 +523,10 @@ namespace ReSet.Core.Services
             // [T36] 본문이 쓰는 대상 표가 목차에 없는가. 신설 단계에도 돌아야 하므로
             // facts 블록 밖에 둔다 - 실물(S16)이 레거시 출신이 없는 단계다.
             SafeCheck(() => CheckUndeclaredWriteTargets(stepMarkdown, step, result));
+            // 이름 있는 SQL 블록을 호출해 놓고 정의하지 않았는가. 재료가 stepMarkdown
+            // 하나뿐이므로 facts 블록 밖에 둔다 - 명세서 사실이 없는 신설 단계에서도
+            // 돌아야 한다(실물 S15가 레거시 출신이 없는 단계다).
+            SafeCheck(() => CheckUndefinedSqlBlockReference(stepMarkdown, step, result));
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
@@ -1228,6 +1232,19 @@ namespace ReSet.Core.Services
 
             return false;
         }
+
+        /// <summary>
+        /// 이름 있는 SQL 블록의 호출부. 동사 목록은 코퍼스 4개 Job 전수에서 얻었다
+        /// (<see cref="CheckUndefinedSqlBlockReference"/>의 근거 참고).
+        /// </summary>
+        private static readonly Regex SqlBlockCallRegex = new(
+            @"\b(?:execute|queryScalar|queryRow|queryList|queryAll|query|chunkRange|rowsAffected)\s*\(\s*(?<name>SQL_[A-Za-z0-9_]+)",
+            RegexOptions.Compiled);
+
+        /// <summary>별표 접두사 정의(`SQL_CHECKPOINT_*`)에서 접두사를 뽑는다.</summary>
+        private static readonly Regex SqlBlockWildcardRegex = new(
+            @"SQL_(?<prefix>[A-Za-z0-9_]+?)_\*",
+            RegexOptions.Compiled);
 
         /// <summary>
         /// stepMarkdown 안의 ```sql 펜스들을 훑어, 각 펜스 내용을
@@ -9555,6 +9572,93 @@ namespace ReSet.Core.Services
                     "명세서를 다시 생성하거나, 이 SP 가 정말 지역 변수를 갖지 않게 되었다면 " +
                     "`SpecsThatMustDeclareLocalVariables` 에서 빼십시오.");
             }
+        }
+
+        /// <summary>
+        /// 이름 있는 SQL 블록을 호출해 놓고 그 블록을 정의하지 않았는지 본다.
+        ///
+        /// [POQSettleBatch6 축 B 감사 S15 🟠]
+        /// 단계가 `queryScalar(SQL_VALIDATE_EXPECTED_TOTAL, …)`·`queryScalar(SQL_VALIDATE_ACTUAL_TOTAL, …)`
+        /// 로 최종 정합성 게이트를 부르는데 그 이름의 블록이 Job 어디에도 없다. 게이트가
+        /// 문자 그대로 구현 불가이고, 구현자가 비교식을 지어내면 그 게이트를 통과한 원장이
+        /// batch.BatchRun에 Succeeded로 발행된다.
+        ///
+        /// [왜 "정의 표기"를 모양으로 좁히지 않는가]
+        /// 코퍼스 실측에서 정의 표기가 셋으로 갈린다 - `-- SQL_X` 한 줄, 여러 이름을 묶은
+        /// `-- SQL_A / SQL_B / SQL_C_* (…)` 한 줄, 그리고 SQL 안 블록 주석 `/* … (SQL_X) */`.
+        /// 모양으로 좁히면 뒤 둘이 통째로 거짓 양성이 된다(S14 하나에서만 두 건). 그래서
+        /// 판별자는 <b>호출부가 아닌 줄에 그 이름이 나오는가</b> 하나다. 별표 접두사
+        /// (`SQL_CHECKPOINT_*`)는 그 접두사로 시작하는 이름 전부를 덮는 것으로 인정한다.
+        ///
+        /// [왜 호출 동사를 열거하는가]
+        /// 코퍼스 4개 Job의 호출부를 전수로 뽑아 얻은 목록이다(execute 539 · queryScalar 90 ·
+        /// queryRow 22 · query 8 · chunkRange 7 · queryList 3 · queryAll 1 · rowsAffected 1).
+        /// execute만 보면 S15의 실물(queryScalar)을 놓친다.
+        ///
+        /// [왜 단계당 한 건으로 접는가]
+        /// 한 단계가 열아홉 개를 미정의로 부르는 실물이 있다(POQSettleBatch1/S08). 이름마다
+        /// 오류를 내면 재생성 프롬프트가 같은 지적으로 채워지고, 금액 결함이 그 아래 묻힌다.
+        /// </summary>
+        private static void CheckUndefinedSqlBlockReference(
+            string stepMarkdown,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            if (string.IsNullOrWhiteSpace(stepMarkdown)) return;
+
+            var used = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Match call in SqlBlockCallRegex.Matches(stepMarkdown))
+            {
+                var name = call.Groups["name"].Value;
+                if (seen.Add(name)) used.Add(name);
+            }
+
+            if (used.Count == 0) return;
+
+            var wildcardPrefixes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Match wild in SqlBlockWildcardRegex.Matches(stepMarkdown))
+            {
+                wildcardPrefixes.Add("SQL_" + wild.Groups["prefix"].Value + "_");
+            }
+
+            var lines = stepMarkdown.Split('\n');
+            var undefined = new List<string>();
+            foreach (var name in used)
+            {
+                if (wildcardPrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                var defined = false;
+                foreach (var line in lines)
+                {
+                    if (line.IndexOf(name, StringComparison.Ordinal) < 0) continue;
+
+                    // 호출부만 있는 줄은 정의가 아니다. 호출을 지운 뒤에도 이름이 남아야
+                    // 정의로 센다 - 같은 줄에 호출과 언급이 함께 있는 경우까지 받는다.
+                    var withoutCalls = SqlBlockCallRegex.Replace(line, string.Empty);
+                    if (withoutCalls.IndexOf(name, StringComparison.Ordinal) >= 0)
+                    {
+                        defined = true;
+                        break;
+                    }
+                }
+
+                if (!defined) undefined.Add(name);
+            }
+
+            if (undefined.Count == 0) return;
+
+            // 백틱 토큰은 실제로 지목한 식별자다 - 작성 계약 9의 기본 경로(메시지의 백틱
+            // 스캔)가 그대로 옳게 동작한다. 처방 문구에는 백틱을 쓰지 않는다.
+            var named = string.Join(", ", undefined.Select(n => "`" + n + "`"));
+            result.Errors.Add(
+                $"{step.Code} 섹션이 이름 있는 SQL 블록을 호출하는데 그 블록이 이 절에 " +
+                $"정의돼 있지 않습니다: {named}. 호출한 이름마다 두 붙임표로 시작하는 주석 " +
+                "줄로 블록을 열어 같은 절에 실으십시오. 한 줄에 여러 이름을 묶어 적은 표기와 " +
+                "별표를 붙인 접두사 표기도 정의로 인정합니다.");
         }
 
         /// <summary>
