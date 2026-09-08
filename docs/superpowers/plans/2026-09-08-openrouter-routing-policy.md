@@ -682,7 +682,35 @@ grep -rn "PinnedBackendsPerModel\|sail-research\|deepseek-v4-pro-0813\|deepseek-
   README.md docs/architecture/ src/ tests/ --include="*.md" --include="*.cs" --include="*.json" \
   | grep -v "/obj/\|/bin/"
 ```
-기댓값: 출력 없음. `docs/known-defects.md`와 `src/ReSet.Core/Services/LocalVariableDeclarationExtractor.cs`의 `deepseek-v4-pro-0813` 언급은 **라우팅이 아니라 과거 모델 교체 서사**이므로 위 경로에 포함하지 않았고 손대지 않는다.
+**이 게이트는 실행 중에 고쳐졌다(2026-09-08). 아래를 읽고 쓰라.**
+
+원래 「출력 없음」을 기댓값으로 적었으나 **그 자가 무딘 것이었다.** 이 grep은
+「지금 존재한다고 말하는 문장」과 「없어졌다고 말하는 문장」을 구별하지 못한다.
+「`PinnedBackendsPerModel`은 폐기했습니다」는 죽은 참조가 아니라 이력이고,
+「이 다섯 모델에서 쟀습니다」는 측정 대상의 명시다. 그 둘을 지우면 문서가 근거를 잃는다.
+실제로 이 게이트를 문자 그대로 맞추려다 문서에 부정확한 문장이 하나 들어갔다
+(「그 시점 로스터의 5개 모델」 — 측정 시점 로스터는 6항목이었다).
+
+**허용되는 히트** (죽은 참조가 아님):
+
+| 자리 | 이유 |
+|---|---|
+| `docs/architecture/4.5-…md`의 `PinnedBackendsPerModel` | 폐기 **사실**의 서술 |
+| 같은 문서의 모델 이름 다섯 | 실측 **대상**의 명시. 이 주장의 적용 범위를 정한다 |
+| `tests/…/CliProviderSettingsTests.cs`의 `sail-research`·`deepseek-v4-pro-0813` | `ReadOpenRouterRouting` 단위 검사의 **인메모리 픽스처**. 임의 이름이어도 되는 자리이고 설정 파일을 읽지 않는다 |
+| `docs/known-defects.md` · `src/…/LocalVariableDeclarationExtractor.cs` | 과거 모델 교체 **서사**. 라우팅과 무관 |
+
+**남아서는 안 되는 것은 하나다**: 지금 설정과 다른 값을 **지금 설정인 것처럼** 말하는 문장.
+그래서 실제 게이트는 이것이다 —
+
+```bash
+grep -n "streamlake\|novita\|sail-research\|deepinfra\|Default.*Order" README.md
+```
+기댓값: 출력 없음. `Default`가 `Order`를 갖는다고 말하거나 지금 없는 백엔드를 현재 설정으로
+제시하는 줄이 없어야 한다.
+
+그리고 **`4.5` 문서는 사람이 처음부터 끝까지 읽고** 지금 코드·설정과 어긋나는 문장이 있는지
+판단한다. 자동 grep보다 이쪽이 진짜 합격 조건이다.
 
 - [ ] **Step 4: 게이트를 다시 돌린다**
 
