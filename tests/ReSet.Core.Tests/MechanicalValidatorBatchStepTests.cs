@@ -193,9 +193,18 @@ namespace ReSet.Core.Tests
         {
             // batch.*는 카탈로그에 없는 것이 정상이다. 이것을 결함으로 들면
             // 모든 단계가 전부 오탐으로 걸린다.
+            //
+            // [2026-09-08 픽스처 보강 - T36] 이 단언은 "이 이름을 담은 오류가 하나도
+            // 없다"라 축을 안 가린다. T36 검사(본문이 쓰는 대상 표가 목차에 없다)가
+            // 들어오면서 목차에 batch.POQSettleCheckpoint를 안 적은 이 픽스처가 그
+            // 검사에 걸렸다 - 그것은 오탐이 아니라 **픽스처가 새 축에 대해 부족했던
+            // 것**이다(실물이라면 그 표에 권한이 없어 실행이 실패한다). 단언을 좁히는
+            // 대신 목차에 그 표를 더한다 - 이 시험의 본래 의도("카탈로그에 없어도
+            // 받아들인다")는 Catalog가 여전히 그 이름을 모르므로 그대로 검증된다.
             var markdown = Section("INSERT INTO batch.POQSettleCheckpoint SELECT * FROM dbo.TSettleMst;");
 
-            var result = new MechanicalValidator().ValidateBatchStep(markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst", "batch.POQSettleCheckpoint"), Catalog, NoConditions);
 
             Assert.DoesNotContain(result.Errors, e => e.Contains("POQSettleCheckpoint", StringComparison.Ordinal));
         }
