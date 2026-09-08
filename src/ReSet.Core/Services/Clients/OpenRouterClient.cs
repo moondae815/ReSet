@@ -140,6 +140,10 @@ namespace ReSet.Core.Services.Clients
                 {
                     preferences.Add("order", _routing.Order);
                 }
+                if (_routing.Quantizations is { Count: > 0 })
+                {
+                    preferences.Add("quantizations", _routing.Quantizations);
+                }
                 if (_routing.AllowFallbacks.HasValue)
                 {
                     preferences.Add("allow_fallbacks", _routing.AllowFallbacks.Value);

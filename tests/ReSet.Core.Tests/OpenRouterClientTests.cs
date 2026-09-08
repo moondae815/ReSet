@@ -232,6 +232,47 @@ namespace ReSet.Core.Tests
             Assert.True(doc.RootElement.GetProperty("provider").GetProperty("require_parameters").GetBoolean());
         }
 
+        // 양자화 하한이 요청에 실제로 실리는지 본다. 실리지 않으면 설정만 바뀌고
+        // 라우팅은 그대로여서, fp4 백엔드로 가는 것이 조용히 계속된다.
+        [Fact]
+        public async Task ChatAsync_WithQuantizations_ShouldSendQuantizations()
+        {
+            var spy = new OpenRouterRequestSpyHandler("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+            using var http = new HttpClient(spy);
+            var client = new OpenRouterClient(http, "sk-or-test", "", "z-ai/glm-5.3",
+                routing: new OpenRouterRoutingOptions
+                {
+                    Quantizations = new[] { "fp8" },
+                    AllowFallbacks = true
+                });
+
+            await client.ChatAsync("System", "User", 0.2f);
+
+            using var doc = JsonDocument.Parse(spy.LastRequestContent!);
+            var provider = doc.RootElement.GetProperty("provider");
+            var quantizations = provider.GetProperty("quantizations");
+            Assert.Equal(1, quantizations.GetArrayLength());
+            Assert.Equal("fp8", quantizations[0].GetString());
+            Assert.True(provider.GetProperty("allow_fallbacks").GetBoolean());
+            Assert.False(provider.TryGetProperty("order", out _));
+        }
+
+        // 지정하지 않았으면 키를 넣지 않아야 한다. 빈 배열을 보내면 OpenRouter가
+        // "허용 양자화 없음"으로 읽어 후보가 0이 될 수 있다.
+        [Fact]
+        public async Task ChatAsync_WithoutQuantizations_ShouldOmitTheKey()
+        {
+            var spy = new OpenRouterRequestSpyHandler("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}");
+            using var http = new HttpClient(spy);
+            var client = new OpenRouterClient(http, "sk-or-test", "", "z-ai/glm-5.3",
+                routing: new OpenRouterRoutingOptions { Order = new[] { "gmicloud/fp8" } });
+
+            await client.ChatAsync("System", "User", 0.2f);
+
+            using var doc = JsonDocument.Parse(spy.LastRequestContent!);
+            Assert.False(doc.RootElement.GetProperty("provider").TryGetProperty("quantizations", out _));
+        }
+
         [Fact]
         public async Task ChatAsync_WithHttpError_ShouldThrowWithResponseBody()
         {
