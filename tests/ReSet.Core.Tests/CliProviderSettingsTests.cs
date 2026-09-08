@@ -207,6 +207,50 @@ namespace ReSet.Core.Tests
             Assert.True(routing.RequireParameters);
         }
 
+        // 설정의 Quantizations가 실제로 읽히는지 본다. 읽히지 않으면 설정 파일만
+        // 바뀌고 요청은 그대로다.
+        [Fact]
+        public void ReadOpenRouterRouting_WithConfiguredQuantizations_ReadsThem()
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["AiSettings:Providers:OpenRouter:Routing:Default:Quantizations:0"] = "fp8",
+                    ["AiSettings:Providers:OpenRouter:Routing:Default:AllowFallbacks"] = "true",
+                    ["AiSettings:Providers:OpenRouter:Routing:ByModel:z-ai/glm-5.3:Order:0"] = "gmicloud/fp8"
+                })
+                .Build();
+
+            var routing = ReSet.Cli.Program.ReadOpenRouterRouting(
+                configuration, "OpenRouter", "z-ai/glm-5.3");
+
+            Assert.NotNull(routing);
+            Assert.Equal(new[] { "gmicloud/fp8" }, routing!.Order);
+            Assert.Equal(new[] { "fp8" }, routing.Quantizations);
+            Assert.True(routing.AllowFallbacks);
+        }
+
+        // 검증기 CLI는 같은 로직의 복사본을 갖는다. 한쪽만 고치면 검증기 호출에서만
+        // 양자화 하한이 사라져, fp4 백엔드가 L2 리뷰를 조용히 맡게 된다.
+        [Fact]
+        public void ValidatorCli_ReadOpenRouterRouting_ReadsQuantizationsLikeAnalyzerCli()
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["AiSettings:Providers:OpenRouter:Routing:Default:Quantizations:0"] = "fp8",
+                    ["AiSettings:Providers:OpenRouter:Routing:Default:AllowFallbacks"] = "true"
+                })
+                .Build();
+
+            var routing = ReSet.Validator.Cli.Program.ReadOpenRouterRouting(
+                configuration, "OpenRouter", "z-ai/glm-5.3");
+
+            Assert.NotNull(routing);
+            Assert.Equal(new[] { "fp8" }, routing!.Quantizations);
+            Assert.True(routing.AllowFallbacks);
+        }
+
         // 다른 provider에는 이 구획이 없다. 없는 구획을 읽어도 조용히 null이어야 한다.
         [Fact]
         public void ReadOpenRouterRouting_WithoutRoutingSection_ReturnsNull()

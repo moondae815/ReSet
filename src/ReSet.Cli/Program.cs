@@ -60,7 +60,7 @@ namespace ReSet.Cli
         }
 
         /// <summary>
-        /// 라우팅 항목 세 개를 한 구획에서 읽는다. 구획이 없으면 null.
+        /// 라우팅 항목 네 개를 한 구획에서 읽는다. 구획이 없으면 null.
         /// </summary>
         private static ReSet.Core.Services.Clients.OpenRouterRoutingOptions? ParseRoutingBlock(
             IConfigurationSection? section)
@@ -74,8 +74,12 @@ namespace ReSet.Cli
                 .Select(child => child.Value ?? string.Empty)
                 .ToArray();
 
+            var quantizations = section.GetSection("Quantizations").GetChildren()
+                .Select(child => child.Value ?? string.Empty)
+                .ToArray();
+
             return ReSet.Core.Services.Clients.OpenRouterRoutingOptions.Parse(
-                order, section["AllowFallbacks"], section["RequireParameters"]);
+                order, section["AllowFallbacks"], section["RequireParameters"], quantizations);
         }
 
         /// <summary>
