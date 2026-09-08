@@ -596,16 +596,20 @@ dotnet run --project src/ReSet.Cli
     ```
   - **ReSet 정산 배치 소비 SP 12개를 4그룹 병렬 재생성**: 참조 UDF/SP 공유 관계와 최근 소요 시간(하위 UDF 캐시 히트 기준, 그룹당 중앙값 14~19분)을 기준으로 묶은 구성입니다. 연결 문자열은 `SP_ANALYZER_CONN_STR` 환경 변수로 두고 터미널 4개에서 한 줄씩 실행합니다.
     ```bash
+    # G0 — 공용 UDF 선행 생성 (병렬 시작 전 단독 실행; 캐시 포맷 버전을 올린 회차에만 필요)
+    dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_INS_EXTRA
+    # --- 아래 G1~G4를 터미널 4개에서 병렬 실행 ---
     # G1 — EXCEPTION_PROC + COMM_UPD (UF_GET_PGCommOption을 이 둘만 공유)
     dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_EXCEPTION_PROC,dbo.UP_UTIL_SETTLE_COMM_UPD
     # G2 — 배치 전반부 (CMRATE_INS·CANCEL_INS는 참조 객체 없음)
     dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_INS,dbo.UP_UTIL_PG_CLIENT_CMRATE_INS,dbo.UP_UTIL_SETTLE_CANCEL_INS
     # G3 — UIF_SettleYMD / UF_GET_WORKDAY2 사용자 묶음
     dotnet run --project src/ReSet.Cli -- --sp dbo.UP_UTIL_SETTLE_INS_EXTRA,dbo.UP_UTIL_SETTLE_EXPECT_PROC,dbo.UP_Util_Settle_Ins_Extra4PLCard
+    #   └ G0을 돌렸다면 INS_EXTRA를 빼고: --sp dbo.UP_UTIL_SETTLE_EXPECT_PROC,dbo.UP_Util_Settle_Ins_Extra4PLCard
     # G4 — 배치 후반부 (하위 SP SUMMARY_EXTRA / Summary_AcqManual은 이 그룹만 사용)
     dotnet run --project src/ReSet.Cli -- --sp dbo.UP_Util_Settle_Summary,dbo.UP_Util_Settle_Summary_Etc,dbo.UP_Util_Settle_Proc_Etc,dbo.UP_Util_Stat_PGCollect_Ins
     ```
-    `UF_GET_INCVTAXRATE`·`UF_GET_ROUND4VAT`는 G1~G3에 걸쳐 쓰이므로, 캐시 포맷 버전을 올려 UDF까지 재생성되는 상황이면 네 공용 UDF(`INCVTAXRATE`, `ROUND4VAT`, `WORKDAY2`, `UIF_SettleYMD`)를 모두 참조하는 `dbo.UP_UTIL_SETTLE_INS_EXTRA`를 먼저 단독으로 돌려 캐시를 채운 뒤(G3에서는 제외) 나머지를 병렬로 실행합니다.
+    **G0(공용 UDF 선행 생성)이 필요한 때**: `UF_GET_INCVTAXRATE`·`UF_GET_ROUND4VAT`는 G1~G3에 걸쳐 쓰이므로, 캐시 포맷 버전을 올려 UDF까지 재생성되는 상황이면 네 공용 UDF(`INCVTAXRATE`, `ROUND4VAT`, `WORKDAY2`, `UIF_SettleYMD`)를 모두 참조하는 `dbo.UP_UTIL_SETTLE_INS_EXTRA`를 G0으로 먼저 단독 실행해 캐시를 채운 뒤(그 회차의 G3에서는 `INS_EXTRA`를 제외) 나머지를 병렬로 실행합니다. UDF 캐시가 그대로인 회차라면 G0을 건너뛰고 G1~G4만 돌립니다.
 
 > [!NOTE]
 > 배치 모드로 대량 실행 중 특정 SP에 대한 메타데이터 조회 실패 또는 AI 통신 에러가 발생하더라도, 해당 SP만 에러 로그가 출력되고 스킵(try-catch 격리)되며 전체 배치 작업은 중단 없이 다음 SP 분석을 계속 수행합니다.
