@@ -130,13 +130,13 @@ namespace ReSet.Core.Tests
         // 있으면 갈 곳을 말하지 않고 길만 막는 요청이 된다. 두 설정 파일 어느 쪽에서든
         // Order를 지우면서 이 값을 false로 남겨 두는 조합을 막는다.
         //
-        // [현재 상태] Default.AllowFallbacks가 지금 두 설정 모두 true라, 아래
-        // if 블록의 전건(AllowFallbacks == false)이 거짓이라 본문이 돌지 않는다.
-        // 즉 이 검사는 지금 잠들어 있다 - 누가 나중에 AllowFallbacks를 false로
-        // 되돌리면서 Order를 비우는 회귀가 나면 그때 깨어나 잡는다. Assert.NotNull
-        // 한 줄을 조건 밖에 둔 것은 "잠든 채로 초록"과 "라우팅 구획 자체가
-        // 사라져도 초록"을 구분하기 위해서다 - 조건문 안 단언만 있으면 후자도
-        // 통과해 버려, 이 검사가 아무것도 안 보는 상태를 코드에서 알아챌 수 없다.
+        // 조건문이 아니라 총함수 단언(AllowFallbacks가 true거나, false면 Order가
+        // 비지 않아야 한다)으로 적는다 - 예전에는 이 명제를 if로 쪼개 조건부 본문에
+        // 넣었는데, AppSettings_OpenRouterDefault_DeclaresQuantizationFloorWithoutOrder가
+        // 두 파일 모두에서 AllowFallbacks==true를 이미 못박고 있어 그 if 본문은 이
+        // 검사 파일 안에서 도달 불가였다(데이터를 바꿔도 깨어나지 않고, 그 못박기
+        // 자체를 지워야 하는데 그 변경은 형제 검사가 먼저 잡는다). 총함수 형태는
+        // 죽은 가지 없이 같은 명제를 매 실행마다 실제로 평가한다.
         [Theory]
         [InlineData("src/ReSet.Cli/appsettings.json")]
         [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
@@ -145,12 +145,9 @@ namespace ReSet.Core.Tests
             var routing = ReSet.Cli.Program.ReadOpenRouterRouting(Load(relativePath), "OpenRouter");
 
             Assert.NotNull(routing);
-
-            if (routing!.AllowFallbacks == false)
-            {
-                Assert.NotNull(routing.Order);
-                Assert.NotEmpty(routing.Order!);
-            }
+            Assert.True(
+                routing!.AllowFallbacks == true || routing.Order?.Count > 0,
+                "AllowFallbacks가 false인데 Order가 비어 있습니다 - 갈 곳 없이 길만 막습니다");
         }
 
         // 두 설정 파일이 ByModel 항목 집합에서 서로 갈라지는 것을 잡는다. 옛
