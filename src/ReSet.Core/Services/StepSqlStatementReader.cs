@@ -563,7 +563,14 @@ namespace ReSet.Core.Services
             var windowStartTokenIndex = FindTokenIndexAtOffset(tokens, windowStartOffset);
 
             int? ordinal = null;
-            var matchCount = 0;
+
+            // [2026-09-08] 서수의 **집합**을 센다. 이 코퍼스는 한 문장 앞에 주석을 둘
+            // 두는데(기계 라벨 `-- … (INSERT 1, …)` 와 U-앵커 `/* INSERT 1: … */`)
+            // 둘은 **같은 서수를 말한다** - 유일성으로 세면 그 일치하는 중복이
+            // 모호성으로 읽혀 앵커가 통째로 버려진다. 실측: Batch1 87 → 90 ·
+            // 코퍼스 254 → 260 이고 **잃는 문장은 0** 이다.
+            // 근거: docs/audit-reports/2026-09-08-U앵커-실측.md §1
+            var distinctOrdinals = new HashSet<int>();
 
             for (int i = firstTokenIndex - 1; i >= windowStartTokenIndex; i--)
             {
@@ -580,11 +587,12 @@ namespace ReSet.Core.Services
                 var match = AnchorPattern.Match(token.Text);
                 if (!match.Success) continue;
 
-                matchCount++;
                 ordinal = int.Parse(match.Groups["ordinal"].Value);
+                distinctOrdinals.Add(ordinal.Value);
             }
 
-            return matchCount == 1 ? ordinal : null;
+            // 서수가 갈리면 여전히 모호다 - 넓히는 것은 「일치하는 중복」뿐이다.
+            return distinctOrdinals.Count == 1 ? ordinal : null;
         }
 
         /// 음수 정수 리터럴 대입만. `@v = 0`·`@v = @@ROWCOUNT`는 후보가 아니다.

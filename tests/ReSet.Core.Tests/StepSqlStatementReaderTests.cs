@@ -1502,4 +1502,67 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
             new[] { "TSettleMst.MPLTID=TSettleMst.PLTID" },
             Assert.Single(statements).JoinPairs.ToArray());
     }
+
+    // ── 일치하는 중복은 모호가 아니다 (2026-09-08) ────────────────────────────
+    //
+    // 사전 선언: docs/audit-reports/2026-09-08-U앵커-사전선언.md
+    // 기제: docs/audit-reports/2026-09-08-U앵커-실측.md §1
+    //
+    // 이 코퍼스는 한 문장 앞에 주석을 **둘** 둔다 - 기계 라벨과 U-앵커. 둘은 같은
+    // 서수를 말하는데 유일성 규칙(matchCount == 1)이 그것을 모호성으로 버렸다.
+    // 실물에서 Batch1 의 앵커 다섯(S02 의 INSERT 1~5)이 그렇게 사라지고 있었다.
+
+    [Fact]
+    public void ReadsTheAnchorWhenTwoLeadingCommentsAgreeOnTheOrdinal()
+    {
+        // 실물 모양이다(POQSettleBatch1/S12:94-96) - 기계 라벨과 U-앵커가 **둘 다**
+        // 공백을 둔 표기라 현행 패턴에서 둘 다 매치한다. 그래서 유일성 규칙이
+        // 이 자리를 통째로 버리고 있었다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "-- SQL_INSERT_SUMMARY (INSERT 1, 원본 라인 53~72)\n" +
+            "/* INSERT 1: 그룹별 재집계. GROUP BY 목록은 원본 명세와 동일 */\n" +
+            "INSERT INTO dbo.TSettleByOUT (YMD) SELECT YMD FROM dbo.TSettleMst;"));
+
+        Assert.Equal(1, Assert.Single(statements).Anchor);
+    }
+
+    [Fact]
+    public void AlreadyReadsTheAnchorWhenOnlyOneSpellingMatchesTodaysPattern()
+    {
+        // POQSettleBatch1/S02:102-104 모양이다. `INSERT1`(공백 없음)은 현행
+        // AnchorPattern(`\bINSERT\s+`)에 아예 안 걸려 매치가 하나뿐이므로 **오늘도**
+        // 앵커가 붙는다. 이 자리가 문제가 되는 것은 패턴을 완화할 때(③ T22)이고,
+        // 그때 유일성 규칙이 있으면 다섯을 잃는다 - 이 시험은 그 전제를 고정한다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "-- SQL_INSERT1 (INSERT 1, 오류코드 -2)\n" +
+            "/* INSERT1: PG 계약정보 → TPGSettleRate 스냅샷 */\n" +
+            "INSERT INTO dbo.TPGSettleRate (YMD) SELECT YMD FROM dbo.TClientContract;"));
+
+        Assert.Equal(1, Assert.Single(statements).Anchor);
+    }
+
+    [Fact]
+    public void StaysAmbiguousWhenTwoLeadingCommentsDisagree()
+    {
+        // 서수가 다르면 여전히 모호다 - 이 변경이 넓히는 것은 「일치하는 중복」뿐이다.
+        var statements = StepSqlStatementReader.Read(Fence(
+            "-- SQL_INSERT1 (INSERT 1, 오류코드 -2)\n" +
+            "/* INSERT 2: 다른 서수를 말한다 */\n" +
+            "INSERT INTO dbo.TPGSettleRate (YMD) SELECT YMD FROM dbo.TClientContract;"));
+
+        Assert.Null(Assert.Single(statements).Anchor);
+    }
+
+    [Fact]
+    public void ReadsTheAnchorWhenThreeCommentsAllAgree()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "-- SQL_DELETE_GROUP (DELETE 1, 원본 라인 44~50)\n" +
+            "/* DELETE 1: 커서가 순회하던 그룹을 상관 EXISTS로 치환 */\n" +
+            "-- DELETE 1 재확인\n" +
+            "DELETE FROM dbo.TSettleByOUT WHERE OutYMD = @o;"));
+
+        Assert.Equal(1, Assert.Single(statements).Anchor);
+    }
+
 }
