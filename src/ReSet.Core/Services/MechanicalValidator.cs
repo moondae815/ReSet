@@ -751,6 +751,146 @@ namespace ReSet.Core.Services
             return defects;
         }
 
+        /// <summary>
+        /// 계약이 선언한 상태값 중 <b>그 컬럼엔 한 번도 안 쓰이는데 같은 값이 형제 상태
+        /// 컬럼에는 쓰이는 것</b>을 잡는다 (축 B 잔여 결함 <b>T25</b>).
+        ///
+        /// [무엇을 잡는가 - 실물]
+        /// <c>batch.BatchRun.RunStatus</c> 는 계약이 <c>Running·Succeeded·Failed·Restarting</c>
+        /// 넷을 확정하는데 코퍼스 어느 단계도 <c>Failed</c> 를 쓰지 않는다(실측 2026-09-08:
+        /// Running 26 · Succeeded 3 · Restarting 1 · <b>Failed 0</b>). 실패한 실행이
+        /// <c>'Running'</c> 으로 남고 <b>다음 회차가 그것을 재시작 대상으로 집어 든다.</b>
+        ///
+        /// [오라클은 <see cref="BatchControlContract"/>(커밋된 소스)다 - 비순환]
+        /// 대장은 오라클을 「계약 + 아키텍처의 상태 전이 선언」으로 적어 뒀는데, 뒤엣것은
+        /// <b>생성물</b>(<c>agent/common/00-architecture.md</c>)이라 순환이고 산문이다.
+        /// 그 문서가 <c>Running --> Failed</c> 를 선언하고도 아무 단계가 안 지키는 것은
+        /// <b>결함이 진짜임의 방증</b>일 뿐 판정 재료가 아니다. 전이를 몰라도 판정은 선다.
+        ///
+        /// [왜 「선언됐는데 0 회」로 넓히지 않는가 - 실측이 정했다]
+        /// 넓히면 발화 6 중 <b>5 가 오탐</b>이다 - <c>Skipped·Pending·Info·Warning·Error</c>
+        /// 는 그냥 안 쓰는 값일 수 있고 <b>안 쓰는 것이 결함이라는 근거가 없다.</b>
+        /// 「같은 값이 다른 상태 컬럼엔 쓰인다」가 하는 일은 <b>「이 값은 이 시스템에서
+        /// 실제로 쓰이는 어휘다」를 코퍼스 스스로 증명하게 하는 것</b>이다.
+        ///
+        /// [왜 문서 단위인가]
+        /// 「이 Job 어디에도 없다」는 판정이라 단계 하나만 보는 <see cref="ValidateBatchStep"/>
+        /// 으로는 원리적으로 못 한다 - 다른 단계의 본문을 못 본다.
+        /// <see cref="ValidateSplitProcedureObligations"/> 와 같은 자리이고 같은 논거다.
+        ///
+        /// [침묵의 범위를 알고 써라]
+        /// ① 그 값이 <b>어디에도</b> 안 쓰이면 침묵한다(위 문단). ② 계약의
+        /// <see cref="ControlRowOrigin.FirstStepInserts"/> 표만 본다 -
+        /// <see cref="ControlRowOrigin.EachStepInserts"/> 표는 담당 단계를 지목할 수 없고,
+        /// 계약이 그 자리를 단계 검사에 맡겨 뒀다. ③ 담당 단계를 못 찾으면 침묵한다
+        /// (귀속 불가면 보고하지 않는다 - 작성 계약 7). <b>이 검사의 발화 0 은
+        /// 「종료 처리가 온전하다」가 아니다.</b>
+        /// </summary>
+        public IReadOnlyDictionary<string, StepDefect> ValidateControlStatusTerminalWrites(
+            IReadOnlyDictionary<string, string> sectionsByStepCode,
+            IReadOnlyList<BatchStepPlan> allSteps)
+        {
+            var defects = new Dictionary<string, StepDefect>(StringComparer.OrdinalIgnoreCase);
+            if (sectionsByStepCode == null || sectionsByStepCode.Count == 0) return defects;
+            if (allSteps == null || allSteps.Count == 0) return defects;
+
+            var body = string.Join("\n", sectionsByStepCode.Values
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .SelectMany(RawCodeFenceBodies));
+            if (body.Length == 0) return defects;
+
+            // 담당 단계: 계약이 FirstStepInserts 로 정한 표의 행 생성 단계.
+            var ownerByTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (stepCode, tables) in BatchControlContract.ResolveRowCreators(allSteps))
+            {
+                foreach (var table in tables)
+                {
+                    if (!ownerByTable.ContainsKey(table)) ownerByTable[table] = stepCode;
+                }
+            }
+
+            foreach (var table in BatchControlContract.Tables)
+            {
+                if (string.IsNullOrWhiteSpace(table.StatusColumn)) continue;
+                if (!ownerByTable.TryGetValue(table.Name, out var owner)) continue;
+
+                var column = table.Columns.FirstOrDefault(c =>
+                    string.Equals(c.Name, table.StatusColumn, StringComparison.OrdinalIgnoreCase));
+                if (column?.AllowedValues == null || column.AllowedValues.Count == 0) continue;
+
+                foreach (var value in column.AllowedValues)
+                {
+                    if (CountStatusAssignments(body, column.Name, value) > 0) continue;
+
+                    // 같은 값을 쓰는 다른 상태 컬럼이 하나라도 있어야 발화한다.
+                    var alsoWrittenAs = BatchControlContract.Tables
+                        .Where(t => !ReferenceEquals(t, table) && !string.IsNullOrWhiteSpace(t.StatusColumn))
+                        .Select(t => t.StatusColumn!)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .FirstOrDefault(other => CountStatusAssignments(body, other, value) > 0);
+                    if (alsoWrittenAs == null) continue;
+
+                    var reason =
+                        $"{owner} ({table.Name}의 {column.Name}에 계약이 확정한 상태값 " +
+                        $"`{value}`를 이 Job 어느 단계도 기록하지 않습니다 - 같은 값을 " +
+                        $"{alsoWrittenAs}에는 기록하므로 어휘를 모르는 것이 아닙니다. " +
+                        "그 상태로 끝난 실행이 종료 상태로 가지 못해 다음 회차가 재시작 " +
+                        "대상으로 집어 듭니다.)";
+
+                    defects[owner] = defects.TryGetValue(owner, out var prior)
+                        ? prior with { Reason = prior.Reason + " " + reason }
+                        : new StepDefect(StepDefectKind.QualityFloor, reason);
+                }
+            }
+
+            return defects;
+        }
+
+        /// <summary>
+        /// 코드 펜스의 <b>원문</b> 본문. mermaid 는 뺀다.
+        ///
+        /// [왜 <see cref="CleanedSqlFences"/>·<see cref="CleanedCodeFencesExcludingDiagrams"/>
+        /// 를 안 쓰는가 - 그 둘은 이 검사가 찾는 것을 지운다]
+        /// 둘 다 <c>BlankCommentsAndStrings</c> 로 <b>문자열 리터럴을 빈칸으로 바꾼다.</b>
+        /// 이 검사의 판별 재료가 정확히 문자열 리터럴(<c>N'Failed'</c>)이므로 그 헬퍼를
+        /// 쓰면 <b>영영 발화하지 못한다.</b> 2026-09-06 회차의 D1 검사가 같은 자리를
+        /// 밟았고(<c>N'S16'</c> 이 사라졌다) 그 기록이 사전 선언에 있다.
+        ///
+        /// [왜 산문을 빼는가 - 사전 선언 §4, 실측으로 정했다]
+        /// 문서 전체를 세면 「실패 시 <c>RunStatus = N'Failed'</c> 로 기록합니다」라는
+        /// <b>산문 한 문장이 검사를 침묵시킨다</b>(거짓 음성). 오늘 코퍼스에서는 결과가
+        /// 같지만(<c>Failed</c> 는 전체 0 · 펜스 안 0) 안전한 실패 방향은 「덜 인정한다」다.
+        /// </summary>
+        private static IEnumerable<string> RawCodeFenceBodies(string markdown)
+        {
+            foreach (Match fence in Regex.Matches(
+                markdown,
+                @"```(?<lang>[A-Za-z0-9_+-]*)[^\n]*\n(?<body>.*?)```",
+                RegexOptions.Singleline))
+            {
+                if (string.Equals(fence.Groups["lang"].Value, "mermaid", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                yield return fence.Groups["body"].Value;
+            }
+        }
+
+        /// <summary>
+        /// <c>&lt;컬럼&gt; = N'&lt;값&gt;'</c> 대입의 개수. <c>N</c> 접두와 공백은 자유롭고
+        /// 대소문자를 안 가린다 - 이 코퍼스가 세 표기를 다 쓴다.
+        ///
+        /// 값 쪽에 단어 경계를 요구하지 않는 이유: 값이 따옴표로 닫히므로 경계가
+        /// 이미 문법으로 정해져 있다.
+        /// </summary>
+        private static int CountStatusAssignments(string body, string column, string value) =>
+            Regex.Matches(
+                body,
+                $@"{Regex.Escape(column)}\s*=\s*N?'{Regex.Escape(value)}'",
+                RegexOptions.IgnoreCase).Count;
+
+
         private static string FirstNonEmptyLine(string markdown)
         {
             foreach (var line in markdown.Split('\n'))

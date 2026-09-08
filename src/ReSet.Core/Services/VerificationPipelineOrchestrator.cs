@@ -4005,6 +4005,16 @@ namespace ReSet.Core.Services
                     : defect;
             }
 
+            // [T25] 계약이 확정한 상태값 중 그 컬럼엔 한 번도 안 쓰이는데 같은 값이
+            // 형제 상태 컬럼에는 쓰이는 것. 같은 이유로 문서 단위다 - 「이 Job 어디에도
+            // 없다」는 단계 하나만 보는 검사로 원리적으로 못 한다.
+            foreach (var (code, defect) in _validator.ValidateControlStatusTerminalWrites(sections, steps))
+            {
+                floorViolations[code] = floorViolations.TryGetValue(code, out var prior)
+                    ? MergeFloorViolation(prior, defect)
+                    : defect;
+            }
+
             // 목록 순서대로 조립한다. 사전의 삽입 순서가 아니라 목차의 순서가 기준이다.
             var ordered = steps
                 .Select(step => sections.TryGetValue(step.Code, out var markdown) ? markdown : string.Empty)
