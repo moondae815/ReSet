@@ -11815,5 +11815,109 @@ END";
             Assert.DoesNotContain(result.Errors, e => e.Contains("트랜잭션이 단계로 갈렸습니다"));
         }
 
+
+        // ── T36: 본문이 쓰는 대상 표가 목차에 없다 ────────────────────────────
+        //
+        // 사전 선언: docs/audit-reports/2026-09-08-T36-사전선언.md
+        // 「어느 쪽이 기준인가」는 풀지 않는다 - 양쪽이 순환이다. 해의 방향만 쓴다:
+        // 본문이 쓰는데 목차에 없으면 권한이 없어 실행이 실패한다.
+
+        private static BatchStepPlan DeclaringStep(string code, params string[] targets) => new(
+            Code: code, Name: $"{code} 단계",
+            LegacyProcedures: Array.Empty<string>(),
+            TargetTables: targets,
+            ErrorCodes: new[] { "-9160" }, Chunkable: false, SchemaTables: Array.Empty<string>());
+
+        private const string UndeclaredTableMarker = "목차에 없습니다";
+
+        private static StepValidationResult ValidateTargets(BatchStepPlan step, string sql) =>
+            new MechanicalValidator().ValidateBatchStep(
+                "### " + step.Code + " 단계\n\n```sql\n" + sql + "\n```\n",
+                step, Array.Empty<string>(), new Dictionary<string, SpecConditions>());
+
+        [Fact]
+        public void ValidateBatchStep_CheckUndeclaredWriteTargets_ReportsATableTheOutlineDoesNotDeclare()
+        {
+            // 실물(POQSettleBatch1/S16): 목차는 BatchReconciliationResult 하나인데
+            // 본문은 BatchControlTotal·BatchValidationIssue 에도 쓴다.
+            var result = ValidateTargets(
+                DeclaringStep("S16", "batch.BatchReconciliationResult"),
+                "INSERT INTO batch.BatchControlTotal (RunId, ControlName) VALUES (@r, N'X');");
+
+            Assert.Contains(result.Errors, e =>
+                e.Contains(UndeclaredTableMarker) && e.Contains("BatchControlTotal"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckUndeclaredWriteTargets_FiresOncePerExcessTable()
+        {
+            // 발화 단위는 표다 - 어느 표에 권한이 없는지가 이행자가 알아야 할 것이다.
+            var result = ValidateTargets(
+                DeclaringStep("S16", "batch.BatchReconciliationResult"),
+                "INSERT INTO batch.BatchControlTotal (RunId) VALUES (@r);\n" +
+                "INSERT INTO batch.BatchValidationIssue (RunId) VALUES (@r);");
+
+            Assert.Equal(2, result.Errors.Count(e => e.Contains(UndeclaredTableMarker)));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckUndeclaredWriteTargets_StaysSilentWhenTheOutlineDeclaresIt()
+        {
+            var result = ValidateTargets(
+                DeclaringStep("S16", "batch.BatchControlTotal"),
+                "INSERT INTO batch.BatchControlTotal (RunId) VALUES (@r);");
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains(UndeclaredTableMarker));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckUndeclaredWriteTargets_StaysSilentForContractTablesEveryStepWrites()
+        {
+            // 계약이 EachStepInserts 로 「모든 단계가 삽입한다」고 못박은 표는 목차에
+            // 없는 것이 정상이다. 면제하지 않으면 코퍼스 발화 25 중 약 23 이 이것이다.
+            var result = ValidateTargets(
+                DeclaringStep("S16", "batch.BatchReconciliationResult"),
+                "INSERT INTO batch.BatchStepJournal (RunId, StepCode) VALUES (@r, N'S16');\n" +
+                "INSERT INTO batch.BatchCheckpoint (RunId, StepCode) VALUES (@r, N'S16');");
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains(UndeclaredTableMarker));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckUndeclaredWriteTargets_StaysSilentWhenTheOutlineDeclaresNothing()
+        {
+            // 목차가 비면 이미 다른 검사가 「목차 TargetTables 가 비어 있다」로 든다 -
+            // 같은 결함을 두 경로로 두 번 보고하지 않는다.
+            var empty = new BatchStepPlan(
+                "S16", "S16 단계", Array.Empty<string>(), Array.Empty<string>(),
+                new[] { "-9160" }, false, Array.Empty<string>());
+
+            var result = ValidateTargets(empty, "INSERT INTO batch.BatchControlTotal (RunId) VALUES (@r);");
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains(UndeclaredTableMarker));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckUndeclaredWriteTargets_StaysSilentWithoutStatements()
+        {
+            var result = new MechanicalValidator().ValidateBatchStep(
+                "### S16 단계\n\n대상 테이블을 설명만 하는 절입니다.\n",
+                DeclaringStep("S16", "batch.BatchReconciliationResult"),
+                Array.Empty<string>(), new Dictionary<string, SpecConditions>());
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains(UndeclaredTableMarker));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_CheckUndeclaredWriteTargets_MatchesOnBareNameNotQualifier()
+        {
+            // 목차는 한정자를 붙이거나 뗄 수 있다 - 맨이름으로 맞춘다(이 파일의 관례).
+            var result = ValidateTargets(
+                DeclaringStep("S16", "[batch].[BatchControlTotal]"),
+                "INSERT INTO batch.BatchControlTotal (RunId) VALUES (@r);");
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains(UndeclaredTableMarker));
+        }
+
     }
 }

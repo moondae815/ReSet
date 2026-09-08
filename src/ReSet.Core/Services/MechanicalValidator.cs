@@ -520,6 +520,9 @@ namespace ReSet.Core.Services
             // [N6] 원본의 단일 트랜잭션이 여러 단계로 갈렸는가. statementFacts 없이도
             // 돌아야 하므로 facts 블록 밖에 둔다 - 재료는 원본 DDL 과 allSteps 뿐이다.
             SafeCheck(() => CheckTransactionSpanSplit(step, allSteps, ddlByProcedure, result));
+            // [T36] 본문이 쓰는 대상 표가 목차에 없는가. 신설 단계에도 돌아야 하므로
+            // facts 블록 밖에 둔다 - 실물(S16)이 레거시 출신이 없는 단계다.
+            SafeCheck(() => CheckUndeclaredWriteTargets(stepMarkdown, step, result));
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
@@ -8354,6 +8357,83 @@ namespace ReSet.Core.Services
 
             foreach (var key in ambiguous) result.Remove(key);
             return result;
+        }
+
+        /// <summary>
+        /// 단계 본문이 <b>쓰는</b> 대상 표가 목차에 <b>없는</b> 것을 본다
+        /// (축 B 잔여 결함 <b>T36</b>).
+        ///
+        /// [무엇을 잡는가 - 실물]
+        /// <c>POQSettleBatch1/S16</c> 의 목차는 <c>batch.BatchReconciliationResult</c> 하나인데
+        /// 본문은 <c>batch.BatchControlTotal</c>·<c>batch.BatchValidationIssue</c> 에도 쓴다.
+        /// 목차가 권한·DDL 을 끌고 가므로 <b>그 표에 권한이 없어 실행이 실패한다.</b>
+        ///
+        /// [「어느 쪽이 기준인가」는 풀지 않는다 - 풀 필요가 없다]
+        /// 승인 표(<c>[Approved Step List]</c>)의 <c>Tables:</c> 칸은 기계 렌더지만
+        /// (<c>AiService</c> 가 목차의 <c>TargetTables</c> 를 그대로 찍는다) <b>그 목차 자체가
+        /// 모델 산출</b>이라 양쪽이 모델로 수렴한다 - <b>순환이다.</b> 그래서 진리는 못 정한다.
+        /// <b>대신 해가 나는 방향은 정해져 있다</b> - 본문 ⊄ 목차는 실행 실패이고, 역방향
+        /// (목차에 있는데 본문이 안 씀)은 과다 부여라 해가 작다. 외부 오라클 없이 서는
+        /// <b>자기일관성 검사</b>이고 <see cref="CheckDuplicateProjectionNames"/> 와 같은 계열이다.
+        ///
+        /// [면제의 근거가 비순환이다]
+        /// 계약이 <see cref="ControlRowOrigin.EachStepInserts"/> 로 「모든 단계가 삽입한다」고
+        /// 못박은 표(<c>BatchStepJournal</c>·<c>BatchCheckpoint</c>)는 목차에 없는 것이 정상이다.
+        /// <b>면제하지 않으면 코퍼스 발화 25 중 약 23 이 그것이다</b>(실측 2026-09-08).
+        /// 임의로 좁힌 것이 아니라 <see cref="BatchControlContract"/>(커밋된 소스)가 가진 축이다.
+        ///
+        /// [기각한 자 셋 - 다시 집지 마라. 근거는 2026-09-08-T25-T36-오라클-실측.md §2]
+        /// ① 목차 이름이 계약에 없는가 → 신설 표와 오기를 못 가른다(발화 9) ② 부분 문자열
+        /// 철자 충돌 → <c>BatchRun</c> 과 <c>BatchRunLock</c> 을 같은 표의 두 철자로 오탐한다.
+        /// <b>이름 유사도로 표 동일성을 판정하지 마라.</b> ③ 「본문이 계약 이름을 쓰는가」로
+        /// 신설/오기 구분 → <b>침묵 0</b>. 모든 단계가 계약 표를 쓰므로 갈래가 안 돈다.
+        ///
+        /// [침묵의 범위를 알고 써라]
+        /// ① 문장이 0 이면 침묵한다 ② 목차 선언이 비면 침묵한다 - 이미 다른 검사가
+        /// 「목차 TargetTables 가 비어 있다」로 들므로 같은 결함을 두 번 보고하지 않는다
+        /// ③ <b>동적 SQL 문자열 안의 대상은 리더가 안 낸다</b>(섀도우 조립이 그 모양이다).
+        /// <b>이 검사의 침묵은 「본문이 그 표에 안 쓴다」를 뜻하지 않는다.</b>
+        /// </summary>
+        private static void CheckUndeclaredWriteTargets(
+            string stepMarkdown,
+            BatchStepPlan step,
+            StepValidationResult result)
+        {
+            var declared = step.TargetTables.Concat(step.SchemaTables)
+                .Select(BareObjectName)
+                .Where(n => n.Length > 0)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            // 목차가 비면 침묵한다 - 그 사실 자체는 이미 위 PlanDefects 가 든다.
+            if (declared.Count == 0) return;
+
+            // 문장을 여기서 다시 읽는다. 아래 facts 블록의 읽기는 레거시 출신이 있는
+            // 단계에서만 돌아, 신설 단계(T36 의 실물이 정확히 그것이다)에서는 없다.
+            var statements = StepSqlStatementReader.Read(stepMarkdown, out _);
+            if (statements.Count == 0) return;
+
+            var exempt = BatchControlContract.Tables
+                .Where(t => t.Origin == ControlRowOrigin.EachStepInserts)
+                .Select(t => BareObjectName(t.Name))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var undeclared = statements
+                .Select(s => BareObjectName(s.TargetTable ?? string.Empty))
+                .Where(t => t.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(t => !declared.Contains(t) && !exempt.Contains(t))
+                .OrderBy(t => t, StringComparer.Ordinal);
+
+            foreach (var table in undeclared)
+            {
+                // 목차(분할 설계)의 결함이다 - 이 단계의 본문을 다시 생성해도 목차에
+                // 그 표가 생기지 않는다. N6 와 같은 근거로 PlanDefects 다.
+                result.PlanDefects.Add(
+                    $"{step.Code} 본문이 `{table}`에 쓰는데 그 표가 목차에 없습니다 - " +
+                    $"목차가 선언한 것은 {string.Join(", ", declared.OrderBy(d => d, StringComparer.Ordinal))}뿐입니다. " +
+                    "목차가 권한과 DDL 을 끌고 가므로, 승인된 표만 보고 권한을 잡으면 이 표에 " +
+                    "권한이 없어 실행이 실패합니다.");
+            }
         }
 
         /// <summary>
