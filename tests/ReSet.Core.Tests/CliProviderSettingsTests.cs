@@ -129,6 +129,14 @@ namespace ReSet.Core.Tests
         // AllowFallbacks=false는 "이 목록 밖으로 넘어가지 말라"는 뜻이므로 목록이 비어
         // 있으면 갈 곳을 말하지 않고 길만 막는 요청이 된다. 두 설정 파일 어느 쪽에서든
         // Order를 지우면서 이 값을 false로 남겨 두는 조합을 막는다.
+        //
+        // [현재 상태] Default.AllowFallbacks가 지금 두 설정 모두 true라, 아래
+        // if 블록의 전건(AllowFallbacks == false)이 거짓이라 본문이 돌지 않는다.
+        // 즉 이 검사는 지금 잠들어 있다 - 누가 나중에 AllowFallbacks를 false로
+        // 되돌리면서 Order를 비우는 회귀가 나면 그때 깨어나 잡는다. Assert.NotNull
+        // 한 줄을 조건 밖에 둔 것은 "잠든 채로 초록"과 "라우팅 구획 자체가
+        // 사라져도 초록"을 구분하기 위해서다 - 조건문 안 단언만 있으면 후자도
+        // 통과해 버려, 이 검사가 아무것도 안 보는 상태를 코드에서 알아챌 수 없다.
         [Theory]
         [InlineData("src/ReSet.Cli/appsettings.json")]
         [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
@@ -136,12 +144,68 @@ namespace ReSet.Core.Tests
         {
             var routing = ReSet.Cli.Program.ReadOpenRouterRouting(Load(relativePath), "OpenRouter");
 
-            if (routing?.AllowFallbacks == false)
+            Assert.NotNull(routing);
+
+            if (routing!.AllowFallbacks == false)
             {
                 Assert.NotNull(routing.Order);
                 Assert.NotEmpty(routing.Order!);
             }
         }
+
+        // 두 설정 파일이 ByModel 항목 집합에서 서로 갈라지는 것을 잡는다. 옛
+        // PinnedBackendsPerModel 표는 두 파일이 같은 표의 부분집합이자 상위집합이어야
+        // 한다는 사실로 이 어긋남을 간접적으로 막았다 - 표를 폐기하면서 그 부수
+        // 효과도 함께 없어졌다. 한쪽에만 새 ByModel 항목이 구조적으로 유효하게
+        // (네임스페이스 있고 Order 비지 않게) 추가되면, 다른 개별 검사는 그 항목의
+        // 존재 자체를 요구하지 않으므로 아무것도 잡지 못한다. 이 검사가 그 자리를
+        // 직접 막는다.
+        [Fact]
+        public void AppSettings_BothCliConfigs_DeclareIdenticalOpenRouterRouting()
+        {
+            var cli = Load("src/ReSet.Cli/appsettings.json")
+                .GetSection("AiSettings:Providers:OpenRouter:Routing");
+            var validator = Load("src/ReSet.Validator.Cli/appsettings.json")
+                .GetSection("AiSettings:Providers:OpenRouter:Routing");
+
+            AssertRoutingSectionsAreIdentical(cli, validator);
+        }
+
+        private static void AssertRoutingSectionsAreIdentical(IConfigurationSection cli, IConfigurationSection validator)
+        {
+            var cliDefault = cli.GetSection("Default");
+            var validatorDefault = validator.GetSection("Default");
+
+            Assert.Equal(
+                ReadArray(cliDefault, "Quantizations"),
+                ReadArray(validatorDefault, "Quantizations"));
+            Assert.Equal(cliDefault["AllowFallbacks"], validatorDefault["AllowFallbacks"]);
+            Assert.Equal(
+                ReadArray(cliDefault, "Order"),
+                ReadArray(validatorDefault, "Order"));
+
+            var cliByModel = cli.GetSection("ByModel");
+            var validatorByModel = validator.GetSection("ByModel");
+
+            var cliKeys = cliByModel.GetChildren().Select(c => c.Key).OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToArray();
+            var validatorKeys = validatorByModel.GetChildren().Select(c => c.Key).OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToArray();
+
+            Assert.Equal(
+                cliKeys,
+                validatorKeys);
+
+            foreach (var key in cliKeys)
+            {
+                Assert.Equal(
+                    ReadArray(cliByModel.GetSection(key), "Order"),
+                    ReadArray(validatorByModel.GetSection(key), "Order"));
+            }
+        }
+
+        private static string[] ReadArray(IConfigurationSection section, string key) =>
+            section.GetSection(key).GetChildren()
+                .Select(child => child.Value ?? string.Empty)
+                .ToArray();
 
         [Fact]
         public void ReadOpenRouterRouting_WithConfiguredOrder_ReadsArrayAndFlags()
