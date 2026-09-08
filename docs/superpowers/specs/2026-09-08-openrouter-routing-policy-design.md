@@ -201,9 +201,16 @@ fp8 · ctx 1,048,576 · 캐시읽기 단가 순 (실측 2026-09-08):
    OpenAPI 스키마와 실물 응답이며 설정 파일이 아니다.
 2. **모양 불변식** — `Default`가 `Quantizations`를 선언한다 · `Default`가 **`Order`를
    갖지 않는다**(죽은 이름을 남의 모델에 물려주던 자리) · `AllowFallbacks`가 켜져 있다.
-3. **역방향** — `ByModel`의 키가 설정이 실제로 참조하는 모델(`ModelName`,
-   `Critic:ModelName`, `Consolidator:ModelName`)의 부분집합이다. 낡은 항목이 자동으로
-   걸리므로 4-1 같은 정리를 사람이 기억할 필요가 없다.
+3. **키 모양** — `ByModel`의 키가 네임스페이스가 붙은 OpenRouter 모델 ID여야 하고
+   (`z-ai/glm-5.3`처럼 `/`를 포함), 각 항목의 `Order`가 비어 있지 않아야 한다.
+
+**처음에 적었던 "역방향" 검사는 기각한다.** `ByModel` 키가 설정이 참조하는
+모델(`ModelName`·`Critic:ModelName`·`Consolidator:ModelName`)의 부분집합인지 보려
+했으나, 성립하지 않는다 — 커밋된 `appsettings.json`의 모델은 `gpt-5.6-terra`·
+`claude-sonnet-5`이고 OpenRouter 모델은 gitignore된 `appsettings.local.json`에만 산다.
+그 검사는 항상 실패한다. **낡은 `ByModel` 항목의 자동 탐지는 이 저장소에서 불가능하며,
+사람이 지운다.** 표가 한 줄이라 감당할 수 있는 대가다 — 여섯 줄이었다면 다시 생각할
+자리다.
 
 이러면 **모델을 바꿔도 테스트를 손대지 않는다.** 지금은 손대야 한다.
 
