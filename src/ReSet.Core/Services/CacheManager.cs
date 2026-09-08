@@ -316,6 +316,22 @@ namespace ReSet.Core.Services
         //     코퍼스 31개 중 HAVING을 가진 객체는 COMM_UPD 하나뿐이라(전수 grep)
         //     영향 객체는 1이다. 스윕 차분: BASE 0 → 신규 1(그 진짜 양성), 거짓 양성 0,
         //     다른 검사 카운트 불변. 집합 술어 대장은 583 → 584(비최상위 91 → 92).
+        //
+        //     [같은 v20 에 둘째 변경] DML 범위 표의 `조인 키` 칸이 **외부 조인 종류**를
+        //     함께 싣는다(`PGName · 외부 조인 Y(LEFT OUTER)`). 축 A 감사 🟠:
+        //     `INS_EXTRA:205`의 `LEFT OUTER JOIN TPGProperty Y ON X.PGName = Y.PGName`의
+        //     조인 종류가 명세서 어디에도 없었다 - 종류 라벨은 집합 술어 표의 범위 칸에만
+        //     얹혀 나가는데 이 ON 은 조인 키 등식뿐이라 그 행이 필터로 빠져 라벨이 탈
+        //     자리가 사라진다. 파생 테이블 안의 조인은 별칭을 앞세운다
+        //     (`파생 테이블 X · B(LEFT OUTER)`) - 층위를 뭉개면 파생 안의 조인이 최상위
+        //     조인처럼 읽힌다. 렌더(AiService)와 L1 기대값(MechanicalValidator)이
+        //     `DmlScopeFact.JoinKeysCell` 한 자리에서 나온다 - 축자 정확 일치 대조라
+        //     두 곳이 갈리면 전 객체가 거짓 양성이 된다.
+        //     스윕: BASE 0 → 신규 10(6 객체: COLLECTYMD 2 · UIF_SettleYMD 2 ·
+        //     EXCEPTION_PROC 3 · SETTLE_INS 1 · INS_EXTRA 1 · INS_EXTRA4PLCARD 1),
+        //     전부 「새 재료가 아직 명세서에 없다」이고 재생성으로 닫힌다. 거짓 양성 0.
+        //     21 로 올리지 않는 이유: 19 가 아직 어떤 산출물에도 적용되지 않았다
+        //     (공유 캐시 인덱스 31 건 전량 19, 재생성 전) - 20 한 판이 둘을 함께 나른다.
         private const int CurrentCacheFormatVersion = 20;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
