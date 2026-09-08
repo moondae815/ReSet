@@ -1450,7 +1450,12 @@ A[""시작""] --> B[""끝""]
                 e => e.Type == ErrorType.DatabasePlacementProseContradiction);
             Assert.Contains("SETTLE_POQ_DB.dbo.THoliday", error.Message);
             // [작성 계약 9] 귀속 어휘는 고정 문구가 아니라 발화가 있던 원문 줄이어야 한다.
-            Assert.Equal(new[] { error.RawContext }, error.Lexemes);
+            // RawContext 는 string? 이라 배열 리터럴이 string?[] 로 추론돼 IReadOnlyList<string>?
+            // 자리와 널 허용 여부가 어긋난다(CS8620). 지역 변수로 받아 NotNull 로 실제 단언한 뒤
+            // 그 변수로 비교하면 흐름 분석이 non-null 로 좁혀 경고 없이 같은 값 비교를 한다.
+            var rawContext = error.RawContext;
+            Assert.NotNull(rawContext);
+            Assert.Equal(new[] { rawContext }, error.Lexemes);
         }
 
         // 소속 DB *밖* 객체를 크로스 DB 라 부르는 것은 정상이다 - 코퍼스에서 이 어휘의
