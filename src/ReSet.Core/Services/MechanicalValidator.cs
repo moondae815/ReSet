@@ -12209,6 +12209,21 @@ namespace ReSet.Core.Services
     /// ValidationResult를 재사용하지 않는 이유: 그 타입의 SuggestedPromptFix는
     /// 문서 전체의 H2 템플릿을 제안하도록 만들어져 있어, 단계 섹션 하나를 고치라는
     /// 지시에는 엉뚱한 교정 가이드가 붙는다.
+    ///
+    /// [알려진 한계 - 미리 적어 둔다, 2026-09-09 리뷰 Fix Round 1] 이 타입에는
+    /// <c>Firings</c>/<c>Report()</c>/<c>DetailedErrors</c> 통로가 없다. 이 타입을
+    /// 쓰는 <c>ValidateBatchStep</c> 재시도 루프(VerificationPipelineOrchestrator.cs
+    /// 의 배치 단계 생성 갈래)는 <c>L1AttemptLog.Append(...)</c> 를 전혀 부르지
+    /// 않는다 - 그건 오직 문서 단위 <c>_validator.Validate(...)</c> 갈래에서만
+    /// 난다. 그 결과 이 타입에 실리는 발화는 <c>raw/l1-attempts.json</c> 에도
+    /// 안 남고 <c>SelfReinforcingCheckTests</c> 가 재는 코퍼스에도 안 들어간다 -
+    /// 같은 검사가 시도마다 같은 문구를 반복 발화해 재시도 예산을 태우는 사고
+    /// (CheckErrorCodeUniquenessClaim 이 낸 것과 같은 모양)가 이 갈래에서 나면
+    /// 자동 탐지가 없다. 닫으려면 이 타입에 <c>Report</c>/<c>Firings</c> 를
+    /// 놓는 것과 <c>ValidateBatchStep</c> 실패를 <c>L1AttemptLog</c> 에 연결하는
+    /// 것을 **한 커밋에서 같이** 해야 한다 - 하나만 하면 값은 채워지는데 아무도
+    /// 안 읽는 자리가 생겨 「닫혔다」는 거짓 신호만 남긴다
+    /// (tests/ReSet.Core.Tests/l1-firing-key-baseline.txt 참고).
     /// </summary>
     public class StepValidationResult
     {
