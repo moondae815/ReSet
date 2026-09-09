@@ -54,5 +54,58 @@ namespace ReSet.Core.Tests
 
             Assert.Empty(result.DetailedErrors);
         }
+
+        // 스캐너 양성 표본 - 직접 Errors.Add 는 키가 안 붙으므로 위반이다.
+        [Fact]
+        public void Scanner_FlagsADirectErrorsAdd()
+        {
+            var source = @"
+class C
+{
+    void M(ValidationResult result)
+    {
+        result.Errors.Add(""x"");
+    }
+}";
+
+            var offender = Assert.Single(L1FiringKeyPolicyScanner.ScanSource(source, "Fake.cs"));
+
+            Assert.Equal("Fake.cs", offender.RelativePath);
+            Assert.Equal("M", offender.Member);
+            Assert.Equal(6, offender.Line);
+        }
+
+        // 스캐너 음성 표본 - Report 는 키가 붙으므로 위반이 아니다.
+        [Fact]
+        public void Scanner_DoesNotFlagReport()
+        {
+            var source = @"
+class C
+{
+    void M(ValidationResult result)
+    {
+        result.Report(""x"");
+    }
+}";
+
+            Assert.Empty(L1FiringKeyPolicyScanner.ScanSource(source, "Fake.cs"));
+        }
+
+        // 다른 리스트의 Add 를 오탐하면 규칙이 버려진다.
+        [Fact]
+        public void Scanner_DoesNotFlagUnrelatedAdds()
+        {
+            var source = @"
+class C
+{
+    void M(ValidationResult result, System.Collections.Generic.List<string> other)
+    {
+        other.Add(""x"");
+        result.DetailedErrors.Add(null);
+    }
+}";
+
+            Assert.Empty(L1FiringKeyPolicyScanner.ScanSource(source, "Fake.cs"));
+        }
     }
 }
