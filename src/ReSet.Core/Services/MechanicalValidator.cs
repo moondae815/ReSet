@@ -6051,7 +6051,9 @@ namespace ReSet.Core.Services
                     var message =
                         $"`{label}` 표의 {i + 1}번째 행이 {cells}칸인데 헤더 행은 "
                         + $"{headerCells}칸입니다. 셀 수가 다르면 표로 렌더링되지 않아 확정값이 "
-                        + "평문으로 무너집니다. 헤더와 같은 칸 수로 옮기십시오.";
+                        + "평문으로 무너집니다. 해당 행: \n" + rows[i].Trim() + "\n"
+                        + (DescribeMergedRows(rows[i], headerCells)
+                           ?? "헤더와 같은 칸 수로 옮기십시오.");
                     result.Errors.Add(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
@@ -6063,6 +6065,55 @@ namespace ReSet.Core.Services
                 }
             }
         }
+
+        /// <summary>
+        /// 칸이 남는 행이 <b>여러 행이 한 줄로 붙은 것</b>이면 그렇다고 말하고, 나눈 결과를
+        /// 그대로 만들어 준다. 아니면 <c>null</c> - 부르는 쪽이 종전 처방으로 돌아간다.
+        ///
+        /// [진단이 방향까지 틀리면 더 나쁜 결함을 지시한다 - 2026-09-09 실측]
+        /// EXCEPTION_PROC 시도 1 에서 모델이 줄바꿈 하나를 빠뜨려 라인 122 행과 153 행이
+        /// 한 줄로 붙었다(<c>| 122 | @po_intRetVal | -1 | 153 | @po_intRetVal | -1 |</c>).
+        /// 프롬프트가 준 표는 깨끗했으니 순수한 전사 실수다. 그런데 종전 문구
+        /// 「헤더와 같은 칸 수로 옮기십시오」는 <b>칸을 지우라</b>는 뜻으로 읽힌다 -
+        /// 「수정 금지」 표에서 그렇게 하면 확정된 행 하나가 통째로 사라진다.
+        ///
+        /// 붙은 자리는 기계가 안다. 본문 열 수(헤더 칸 수 - 양끝 빈 칸 둘)로 초과분이
+        /// 나누어떨어지면 그만큼의 행이 붙은 것이고, 본문 칸을 그 폭으로 잘라 원래 행들을
+        /// 복원할 수 있다. 모델에게 추측할 것을 남기지 않는다.
+        /// </summary>
+        private static string? DescribeMergedRows(string row, int headerCells)
+        {
+            // SplitRow는 양끝의 빈 칸을 함께 내므로 본문 열 수는 헤더 칸 수 - 2다.
+            var width = headerCells - 2;
+            if (width < 1) return null;
+
+            var cells = SplitTableRowCells(row);
+            var body = cells.Count - 2;
+            if (body <= width || body % width != 0) return null;
+
+            var rowCount = body / width;
+            var split = Enumerable.Range(0, rowCount)
+                .Select(n => "| " + string.Join(
+                    " | ",
+                    cells.Skip(1 + (n * width)).Take(width).Select(c => c.Trim()))
+                    + " |");
+
+            return $"{NumberWord(rowCount)} 행이 한 줄로 붙었습니다 - 줄바꿈이 빠진 것이지 "
+                + "칸이 남는 것이 아닙니다. 칸을 지우지 마십시오(확정된 행이 사라집니다). "
+                + "아래 " + rowCount + "줄로 나누십시오:\n"
+                + string.Join("\n", split);
+        }
+
+        /// <summary>
+        /// 「두 행이 붙었습니다」가 「2 행이…」보다 읽힌다. 셋을 넘으면 숫자로 적는다.
+        /// </summary>
+        private static string NumberWord(int n) => n switch
+        {
+            2 => "두",
+            3 => "세",
+            4 => "네",
+            _ => n.ToString()
+        };
 
         /// <summary>
         /// 헤딩 하나와 그 표가 끝나는 인덱스를 찾는다. LocateLockHintSection의 일반형이다 -
