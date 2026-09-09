@@ -128,6 +128,20 @@ namespace ReSet.Core.Services
         public IReadOnlyList<string>? Lexemes { get; set; }
     }
 
+    /// <summary>
+    /// L1 발화 하나와 그것을 낸 검사의 키.
+    ///
+    /// [왜 ErrorType 이 아닌가 - 2026-09-09 실측] <see cref="DetailedError"/> 는 관측용이
+    /// 아니라 <b>의미를 지닌 통로</b>다 - <c>RegenerationScopeSelector.FromL1Errors</c> 와
+    /// <c>BuildSuggestedPromptFix</c> 가 그것을 소비해 재생성 범위와 프롬프트 처방을 정한다.
+    /// 키를 달자고 없던 <c>DetailedError</c> 를 40 자리에 새로 넣으면 재생성 범위 선택
+    /// 동작이 바뀐다. 그래서 순수 관측용 통로를 따로 낸다.
+    ///
+    /// [왜 CallerMemberName 인가] 오늘 40 자리가 키를 못 단 이유는 <b>사람이 붙여야
+    /// 했기 때문</b>이다. 호출자 이름을 컴파일러가 채우면 빠뜨릴 방법이 없다.
+    /// </summary>
+    public sealed record L1Firing(string CheckKey, string Message);
+
     public class MechanicalValidator
     {
         private static readonly string[] MermaidShapes = {
@@ -11906,6 +11920,29 @@ namespace ReSet.Core.Services
         public string? CleansedMarkdown { get; set; }
         public List<string> Errors { get; set; } = new();
         public List<DetailedError> DetailedErrors { get; set; } = new();
+
+        /// <summary>
+        /// 이 검증에서 난 발화 전부, 낸 검사의 키와 함께. <see cref="Errors"/> 와 같은
+        /// 내용을 담되 키가 붙는다 - 「어느 검사가 시도마다 계속 발화하는가」를 세려면
+        /// 키가 있어야 한다(docs/superpowers/specs/2026-09-09-거부된-시도-코퍼스-design.md).
+        /// </summary>
+        public List<L1Firing> Firings { get; } = new();
+
+        /// <summary>
+        /// 발화 하나를 <see cref="Errors"/> 와 <see cref="Firings"/> 양쪽에 넣는다.
+        /// <see cref="DetailedErrors"/> 는 <b>건드리지 않는다</b> - 그쪽은 재생성 범위를
+        /// 정하는 의미 통로라, 검사가 스스로 필요할 때만 따로 넣는다.
+        ///
+        /// 공용 헬퍼에서 부르면 키가 그 헬퍼 이름이 된다. 의도한 것이다 - 여러 헤딩이
+        /// 한 헬퍼를 공유하면 그 헬퍼가 한 검사이고, 수렴을 재는 단위도 그것이다.
+        /// </summary>
+        public void Report(
+            string message,
+            [System.Runtime.CompilerServices.CallerMemberName] string checkKey = "")
+        {
+            Errors.Add(message);
+            Firings.Add(new L1Firing(checkKey, message));
+        }
 
         public string? SuggestedPromptFix
         {
