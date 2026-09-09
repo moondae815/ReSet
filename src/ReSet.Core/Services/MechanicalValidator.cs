@@ -4136,8 +4136,70 @@ namespace ReSet.Core.Services
         /// 「문장별로 고유한 음수값이 대입되며」. 게다가 110 행은 「처리 결과 코드.」의
         /// 마침표에서 문장이 갈려 「코드」가 아예 다른 조각에 남는다. 그래서 둘 다
         /// 통과했다.
+        ///
+        /// 「값」이 이 목록에 있어도 넓어지지 않는 이유는 <see cref="ModifiesErrorCode"/> 다 -
+        /// 같은 절에 있기만 해서는 안 되고 유일성 낱말이 <b>그 명사를 직접 꾸며야</b> 한다.
         /// </summary>
-        private static readonly string[] UniquenessTopicTokens = { "코드", "음수값", "음수 값" };
+        private static readonly string[] UniquenessTopicTokens = { "코드", "음수값", "음수 값", "값" };
+
+        /// <summary>
+        /// 격조사가 붙은 명사. 한국어에서 관형어는 <b>이 경계를 넘어가지 못한다</b> -
+        /// 「서로 다른 <u>단계가</u> 같은 실패 코드」에서 「서로 다른」은 「코드」를 꾸미지
+        /// 않는다. 관형격 「의」는 수식을 잇는 조사라 경계가 아니다(「고유<u>의</u> 음수
+        /// 오류 코드」).
+        /// </summary>
+        private static readonly Regex CaseParticleRegex =
+            new(@"[가-힣](?:은|는|이|가|을|를|에|로|와|과)(?=\s|$|[^가-힣])", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 유일성 낱말이 오류 코드를 <b>직접 꾸미는가</b>. 같은 절에 있기만 한 것으로는
+        /// 부족하다.
+        ///
+        /// [실물 - 2026-09-09 두 번째 재생성, 시도 3] ①②③ 을 닫은 뒤 새로 드러난 자리다.
+        /// 「이는 두 개의 <b>서로 다른</b> 업무 로직 단계가 <b>같은</b> 실패 <b>코드</b>로
+        /// 매핑되어 있어…」는 옳은 문장이다 - 「서로 다른」이 꾸미는 것은 <i>단계</i>이고
+        /// 코드에 대해서는 「같은」이라고 정확히 적었다. 그런데 종전 판정은 낱말이 같은
+        /// 절에 있다는 것만 보고 발화했다.
+        ///
+        /// 이 오탐이 특히 나쁜 이유는 <b>그 문장을 쓰게 만든 것이 이 검사의 처방 문구</b>
+        /// 라는 데 있다. 「공유 관계를 그대로 적어 『같은 코드를 쓰는 문장이 있다』는 사실을
+        /// 서술하라」를 따르면 자연히 저 문장이 나오고, 그 문장이 다시 걸린다 -
+        /// <see cref="UniquenessDenialTokens"/> 가 닫은 자기강화 루프가 한 겹 아래에서
+        /// 다시 열린 것이다.
+        ///
+        /// [알려진 한계 - 미리 적어 둔다] 관형 수식(「고유한 오류 코드」)만 본다. 서술
+        /// 용법(「오류 코드는 고유하다」)은 지시어가 낱말보다 <b>앞</b>에 오므로 이 함수로는
+        /// 못 잡고, <see cref="PredicativeUniquenessRegex"/> 가 그중 가장 좁은 모양 하나만
+        /// 따로 받는다. 그 모양은 <b>코퍼스에서 관측된 적이 없고</b> 예방으로 둔 것이다 -
+        /// 실물 발화 여섯은 전부 관형 용법이다. 넓히기 전에 실측부터 하라.
+        /// </summary>
+        private static bool ModifiesErrorCode(string clause, int claimEnd)
+        {
+            var rest = clause[claimEnd..];
+
+            var topic = UniquenessTopicTokens
+                .Select(t => rest.IndexOf(t, StringComparison.Ordinal))
+                .Where(i => i >= 0)
+                .DefaultIfEmpty(-1)
+                .Min();
+            if (topic < 0) return false;
+
+            // 지시어 <b>자신</b>에게 붙은 조사는 경계가 아니다(「음수값<u>이</u>」) - 그래서
+            // 조사가 지시어보다 뒤면 도달한 것으로 본다.
+            var stop = CaseParticleRegex.Match(rest);
+            return !stop.Success || topic <= stop.Index;
+        }
+
+        /// <summary>
+        /// 서술 용법 중 가장 좁은 모양 하나(「오류 코드<b>는</b> 고유하다」). 지시어와
+        /// 유일성 낱말이 조사 하나만 사이에 두고 맞붙은 경우만 받는다.
+        ///
+        /// 예방용이다 - 이 모양은 코퍼스에서 관측된 적이 없다.
+        /// <see cref="ModifiesErrorCode"/> 의 [알려진 한계] 참고.
+        /// </summary>
+        private static readonly Regex PredicativeUniquenessRegex =
+            new(@"(?:코드|음수값|값)\s*(?:은|는|이|가)\s*(?:서로 다르|서로 다른|고유)",
+                RegexOptions.Compiled);
 
         /// <summary>
         /// 주장을 무르는 한정·부정 표지. 같은 절에 하나라도 있으면 유일성 단정이 아니다.
@@ -4174,12 +4236,13 @@ namespace ReSet.Core.Services
         {
             foreach (var clause in SplitByRegex(sentence, UniquenessClauseBoundaryRegex))
             {
-                var claims = Array.Exists(UniquenessClaimTokens,
-                    t => clause.Contains(t, StringComparison.Ordinal));
-                if (!claims) continue;
-
-                var onErrorCodes = Array.Exists(UniquenessTopicTokens,
-                    t => clause.Contains(t, StringComparison.Ordinal));
+                // 유일성 낱말이 오류 코드를 직접 꾸미는 자리가 하나라도 있어야 주장이다.
+                // 같은 절에 있기만 한 것으로는 부족하다 - ModifiesErrorCode 문서 참고.
+                var onErrorCodes =
+                    PredicativeUniquenessRegex.IsMatch(clause)
+                    || UniquenessClaimTokens.Any(token =>
+                        AllOccurrences(clause, token).Any(at =>
+                            ModifiesErrorCode(clause, at + token.Length)));
                 if (!onErrorCodes) continue;
 
                 var denied = Array.Exists(UniquenessDenialTokens, token =>
@@ -4221,6 +4284,20 @@ namespace ReSet.Core.Services
             return (start > 0 ? "…" : string.Empty)
                 + text.Substring(start, length)
                 + (start + length < text.Length ? "…" : string.Empty);
+        }
+
+        /// <summary>
+        /// 한 절 안의 낱말이 여러 번 나올 수 있다. 「고유」 하나가 코드를 안 꾸민다고
+        /// 해서 뒤의 「고유」도 그렇다는 보장이 없으므로 자리를 전부 본다.
+        /// </summary>
+        private static IEnumerable<int> AllOccurrences(string text, string token)
+        {
+            var at = text.IndexOf(token, StringComparison.Ordinal);
+            while (at >= 0)
+            {
+                yield return at;
+                at = text.IndexOf(token, at + token.Length, StringComparison.Ordinal);
+            }
         }
 
         /// <summary>

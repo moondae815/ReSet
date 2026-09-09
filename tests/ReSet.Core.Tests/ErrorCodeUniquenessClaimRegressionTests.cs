@@ -123,6 +123,81 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain("[정확성 - 기계 확정 표와 모순]", error);
         }
 
+        // ④ 「서로 다른」이 <b>코드가 아닌 것</b>을 꾸미면 주장이 아니다.
+        //
+        // [실물 - 2026-09-09 두 번째 재생성, 시도 3] ①②③ 을 닫은 뒤 새로 드러난 자리다.
+        // 「이는 두 개의 서로 다른 업무 로직 단계가 같은 실패 코드로 매핑되어 있어…」는
+        // 옳다 - 「서로 다른」이 꾸미는 것은 <b>단계</b>이고, 코드에 대해서는 「같은」이라고
+        // 정확히 적었다. 그런데 낱말이 같은 절에 있다는 것만 보고 발화했다.
+        //
+        // 이 오탐이 특히 나쁜 이유: 이 문장을 쓰게 만든 것이 <b>이 검사의 처방 문구</b>다.
+        // 「공유 관계를 그대로 적어 『같은 코드를 쓰는 문장이 있다』는 사실을 서술하라」를
+        // 따르면 자연히 저 문장이 나오고, 그 문장이 다시 걸린다 - ① 과 똑같은 자기강화
+        // 루프가 한 겹 아래에서 다시 열린 것이다.
+        [Fact]
+        public void Attempt3_WhenTheModifierIsNotAboutTheCodes_ShouldStaySilent()
+        {
+            var error = Assert.Single(UniquenessErrors("ExceptionProcAttempt3ScopeExcerpt.md"));
+
+            Assert.DoesNotContain("서로 다른 업무 로직 단계", error);
+        }
+
+        // ④ 를 닫으면서 ①②③ 이 잡던 것을 함께 잃으면 안 된다. 같은 문서의 진짜 거짓
+        //    주장 둘은 그대로 발화해야 한다 - 둘 다 「고유」가 오류 코드를 직접 꾸민다.
+        [Fact]
+        public void Attempt3_ShouldStillReportTheRealClaims()
+        {
+            var error = Assert.Single(UniquenessErrors("ExceptionProcAttempt3ScopeExcerpt.md"));
+
+            // 개요 - 「고유한 음수 오류 코드를 출력 파라미터에 설정하고」
+            Assert.Contains("고유한 음수 오류 코드", error);
+            // 로직 흐름 요약 - 「해당 단계 고유의 음수 오류 코드를 `@po_intRetVal`에」
+            Assert.Contains("고유의 음수 오류 코드", error);
+            Assert.Contains("2자리", error);
+        }
+
+        // ④ 를 닫는 규칙(관형 수식만 본다)이 서술 용법에 구멍을 낸다 - 「코드는 고유하다」는
+        //    지시어가 낱말보다 앞에 온다. 가장 좁은 모양 하나만 따로 받고 여기서 잠근다.
+        //
+        //    [이 시험은 오라클이 아니라 잠금이다] 위 넷과 달리 재료가 실물이 아니다 -
+        //    이 모양은 코퍼스에서 관측된 적이 없고 예방으로 넣은 가지다. 「모델이 이렇게
+        //    쓴다」의 근거로 쓰지 마라. 넓히려거든 실측부터 하라.
+        [Fact]
+        public void WhenTheClaimIsPredicative_ShouldStillReport()
+        {
+            var markdown = WrapSpec(
+                "각 UPDATE 문의 오류 코드는 고유하므로 호출자가 실패 지점을 특정할 수 있다.\n\n"
+                + LoadFixture("ExceptionProcAttempt3ScopeExcerpt.md")
+                    .Split("\n")
+                    .SkipWhile(l => !l.StartsWith("###"))
+                    .Aggregate((a, b) => a + "\n" + b));
+
+            var result = new MechanicalValidator().Validate(markdown, ExceptionProcErrorCodes());
+
+            Assert.Contains(result.Errors, e => e.Contains("오류 코드는 고유하므로"));
+        }
+
+        // 한 절에 같은 낱말이 두 번 나오고 <b>앞의 것만</b> 코드가 아닌 것을 꾸미는 모양.
+        // 앞자리에서 판정을 끝내면 뒷자리의 진짜 주장이 가려진다 - 이번 회차가 내내 잡은
+        // FirstOrDefault 와 같은 병이라 자리를 잠근다.
+        //
+        // [이 시험도 오라클이 아니라 잠금이다] 위 예방 시험과 같다 - 코퍼스에서 관측된
+        // 적이 없다. 「모델이 이렇게 쓴다」의 근거로 쓰지 마라.
+        [Fact]
+        public void WhenTheFirstOccurrenceIsNotAboutTheCodes_ShouldStillSeeTheSecond()
+        {
+            var markdown = WrapSpec(
+                "서로 다른 업무 단계가 서로 다른 오류 코드를 갖는다.\n\n"
+                + LoadFixture("ExceptionProcAttempt3ScopeExcerpt.md")
+                    .Split("\n")
+                    .SkipWhile(l => !l.StartsWith("###"))
+                    .Aggregate((a, b) => a + "\n" + b));
+
+            var result = new MechanicalValidator().Validate(markdown, ExceptionProcErrorCodes());
+
+            Assert.Contains(result.Errors, e => e.Contains("서로 다른 업무 단계가 서로 다른 오류 코드"));
+        }
+
         // 인용 블록 하나만 있고 모델의 주장이 없으면 발화 자체가 없어야 한다.
         // 위 시험은 「인용 말고 다른 것을 골랐다」로도 통과하므로 이 자리를 따로 잠근다.
         [Fact]
