@@ -54,7 +54,6 @@ namespace ReSet.Core.Services
         // 실행 의미 표(기계 확정 DB 배치 등)의 L1 앵커. 위와 같은 이유로 서수 이동은
         // 기능에 영향이 없다.
         ExecutionSemanticsTableMissing,
-        DatabasePlacementProseContradiction,
         MappingDescriptionPredicateNotInStatement,
         // CASE 분기 표(기계 확정 - 조건·결과 원문)의 L1 앵커. 위와 같은 이유로 서수
         // 이동은 기능에 영향이 없다.
@@ -227,7 +226,6 @@ namespace ReSet.Core.Services
                     CheckObjectDeclaration(cleansed, expectations, result);
                     CheckOrderByExpressions(cleansed, expectations, result);
                     CheckExecutionSemantics(cleansed, expectations, result);
-                    CheckDatabasePlacementProse(cleansed, expectations, result);
                     CheckMappingDescriptionPredicates(cleansed, expectations, result);
                     CheckCaseBranches(cleansed, expectations, result);
                     CheckTransactionBoundaries(cleansed, expectations, result);
@@ -4991,70 +4989,6 @@ namespace ReSet.Core.Services
 
         private static readonly Regex ComparisonPredicate =
             new(@"(>=|<=|<>|!=|=|\bIN\b)", RegexOptions.Compiled);
-
-        /// <summary>
-        /// 소속 DB 안에 있는 3부 참조를 산문이 <b>크로스 DB로 부르는지</b> 본다.
-        ///
-        /// [왜 - 2026-09-08 축 A 감사 🟠] `UF_GET_COLLECTYMD`의 산문이 `실행 의미` 표의
-        /// `DB 배치` 확정("참조 객체는 전부 `SETTLE_POQ_DB` 로컬입니다")을 되짚어
-        /// `SETTLE_POQ_DB.dbo.THoliday`를 크로스 DB로 불렀다. 표는 옳고 산문이 뒤집은
-        /// 모양이라 `CheckExecutionSemantics`(행 존재만 본다)로는 안 잡힌다.
-        ///
-        /// [귀속 - 작성 계약 7·8] 어휘만으로는 못 쓴다. 코퍼스에서 이 어휘는 <b>정상</b>
-        /// 쓰임이 훨씬 많다(진짜 크로스 DB 객체를 그렇게 부르는 자리). 그래서 같은 줄에
-        /// <b>소속 DB 안 객체의 3부 이름이 실제로 있을 때만</b> 보고한다 - 이름이 없으면
-        /// 침묵한다. 실측(코퍼스 31): 소속 DB 안 3부 참조를 가진 객체 7개 중 발화 3건,
-        /// 전부 진짜 양성이다(`UF_GET_COLLECTYMD` 1 · `INS_EXTRA4PLCARD` 2 - 후자는
-        /// 외부 둘과 로컬 둘을 한 문장에 묶어 전부 크로스 DB라 부른다).
-        ///
-        /// [자기 트리거 없음] `DatabasePlacementExtractor`의 확정 문장은 "로컬입니다"를
-        /// 쓰고 이 어휘를 쓰지 않는다 - 기계 확정 표 자신이 발화시키지 않는다.
-        ///
-        /// [작성 계약 9] 시정 문구의 백틱이 귀속 어휘가 되지 않도록, 발화가 실제로 있던
-        /// <b>원문 줄</b>을 <see cref="DetailedError.Lexemes"/>에 싣는다.
-        /// </summary>
-        private static void CheckDatabasePlacementProse(
-            string markdown, SpecExpectations expectations, ValidationResult result)
-        {
-            if (expectations.LocalThreePartReferences.Count == 0) return;
-
-            try
-            {
-                foreach (var line in MarkdownSectionLocator.SplitLines(markdown))
-                {
-                    if (!CrossDatabaseLexicon.IsMatch(line)) continue;
-
-                    foreach (var local in expectations.LocalThreePartReferences)
-                    {
-                        if (line.IndexOf(local, StringComparison.OrdinalIgnoreCase) < 0) continue;
-
-                        var message =
-                            $"`{local}`은(는) 이 객체와 같은 DB에 있어 3부 표기일 뿐 크로스 "
-                            + "데이터베이스 참조가 아닙니다. 기계 확정 `실행 의미` 표의 `DB 배치` 행이 "
-                            + "그 객체를 소속 DB 안으로 확정했는데 산문이 그것을 되짚었습니다. "
-                            + "소속 DB 밖 객체만 크로스 데이터베이스로 부르십시오.";
-                        result.Errors.Add(message);
-                        result.DetailedErrors.Add(new DetailedError
-                        {
-                            Type = ErrorType.DatabasePlacementProseContradiction,
-                            Message = message,
-                            RawContext = line.Trim(),
-                            Lexemes = new[] { line.Trim() }
-                        });
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                // [작성 계약 6] 자기 try/catch가 없으면 Validate의 catch-all이 형제 검사
-                // 전부의 판정을 삼킨다.
-                Log.Warning(ex, "[CheckDatabasePlacementProse] DB 배치 산문 대조 실패 - 이 검사만 건너뜁니다.");
-            }
-        }
-
-        /// <summary>크로스 DB를 주장하는 어휘. 코퍼스 실측으로 고른 셋이다.</summary>
-        private static readonly Regex CrossDatabaseLexicon =
-            new(@"크로스 데이터베이스|Cross-Database|크로스 DB", RegexOptions.Compiled);
 
         /// <summary>
         /// 기계 확정 실행 의미 표가 명세서에 옮겨졌는지 본다. 재료가 없으면 조용히

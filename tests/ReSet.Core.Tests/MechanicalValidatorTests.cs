@@ -1420,69 +1420,6 @@ A[""시작""] --> B[""끝""]
                 }
             };
         }
-
-        // [DB 배치 산문 되짚기 - 2026-09-08 축 A 감사 🟠] UF_GET_COLLECTYMD:85 실측 모양.
-        // 기계 확정 `DB 배치` 행은 THoliday 를 소속 DB 안으로 확정했는데 산문이
-        // 그것을 크로스 DB 라 되짚었다. 이행이 그 분류를 따라 별도 연결을 배선하면
-        // 휴일 조회 원천이 갈린다.
-        [Fact]
-        public void Validate_WhenProseCallsALocalThreePartReferenceCrossDatabase_ShouldFail()
-        {
-            var expectations = new SpecExpectations(
-                Array.Empty<UpdateColumnExpectation>(),
-                new Dictionary<string, IReadOnlySet<string>>(),
-                new HashSet<string>(),
-                Array.Empty<string>())
-            {
-                LocalThreePartReferences = new[] { "SETTLE_POQ_DB.dbo.THoliday" }
-            };
-
-            var markdown = WrapSpec(
-                "- Linked Server: 원격 Linked Server 참조는 없습니다. `MASTER..SPT_VALUES` 및 "
-                + "`SETTLE_POQ_DB.dbo.THoliday`는 3부 식별자로 참조되었으나, 이는 Linked Server가 "
-                + "아닌 동일 서버 인스턴스 내 크로스 데이터베이스(Cross-Database) 참조입니다.");
-
-            var result = new MechanicalValidator().Validate(markdown, expectations);
-
-            Assert.False(result.IsValid);
-            var error = Assert.Single(
-                result.DetailedErrors,
-                e => e.Type == ErrorType.DatabasePlacementProseContradiction);
-            Assert.Contains("SETTLE_POQ_DB.dbo.THoliday", error.Message);
-            // [작성 계약 9] 귀속 어휘는 고정 문구가 아니라 발화가 있던 원문 줄이어야 한다.
-            // RawContext 는 string? 이라 배열 리터럴이 string?[] 로 추론돼 IReadOnlyList<string>?
-            // 자리와 널 허용 여부가 어긋난다(CS8620). 지역 변수로 받아 NotNull 로 실제 단언한 뒤
-            // 그 변수로 비교하면 흐름 분석이 non-null 로 좁혀 경고 없이 같은 값 비교를 한다.
-            var rawContext = error.RawContext;
-            Assert.NotNull(rawContext);
-            Assert.Equal(new[] { rawContext }, error.Lexemes);
-        }
-
-        // 소속 DB *밖* 객체를 크로스 DB 라 부르는 것은 정상이다 - 코퍼스에서 이 어휘의
-        // 쓰임은 이쪽이 훨씬 많아, 이 자리가 새면 전 객체에 거짓 양성이 난다.
-        [Fact]
-        public void Validate_WhenProseCallsAForeignReferenceCrossDatabase_ShouldPass()
-        {
-            var expectations = new SpecExpectations(
-                Array.Empty<UpdateColumnExpectation>(),
-                new Dictionary<string, IReadOnlySet<string>>(),
-                new HashSet<string>(),
-                Array.Empty<string>())
-            {
-                LocalThreePartReferences = new[] { "SETTLE_POQ_DB.dbo.THoliday" }
-            };
-
-            var markdown = WrapSpec(
-                "- Linked Server: `SETTLE_CARD_DB.dbo.TExtraTxMst`는 3부 식별자로 참조되었으나 "
-                + "동일 서버 인스턴스 내 크로스 데이터베이스(Cross-Database) 참조입니다.");
-
-            var result = new MechanicalValidator().Validate(markdown, expectations);
-
-            Assert.DoesNotContain(
-                result.DetailedErrors,
-                e => e.Type == ErrorType.DatabasePlacementProseContradiction);
-        }
-
         private static string WrapSpec(string crudBody)
         {
             return string.Join("\n", new[]
