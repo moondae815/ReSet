@@ -6641,19 +6641,76 @@ namespace ReSet.Core.Services
         /// <summary>
         /// 금지 축약어가 나타난 <b>줄들</b>을 돌려준다. 참/거짓만 돌려주면 메시지가 위치를
         /// 말할 수 없고, 모델은 긴 문서에서 찾을 자리를 모른다(2026-09-09 실측).
+        ///
+        /// [판정 단위 - 2026-09-09 실측] 종전엔 줄 어디든 토큰이 있으면 걸렸다.
+        /// EXCEPTION_PROC 재생성 3·4 판에서 PGVT 행의 「설명」 칸이 "위와 동일한
+        /// 조건 판단(...)"으로 <b>조건을 괄호 안에 글자로 다 풀어 쓴 뒤</b> 그
+        /// 접속 표현으로 문장을 시작했다. 칸은 이미 채워져 있는데 종전 검사는
+        /// 「그 칸을 실제 값으로 채우십시오」라며 3·4 판 도합 5 회를 자기강화
+        /// 루프로 소진시켰다(PGCOMM·PGVT 가 CASE 조건을 공유하는 인접 컬럼이라
+        /// "위와 동일" 이 자연스러운 한국어라 매 시도 문구를 새로 써도 같은
+        /// 낱말이 나온다).
+        ///
+        /// 그래서 판정 단위를 「값이 들어갔어야 할 자리」로 바꾼다 - 표 행(<c>|</c>
+        /// 로 시작)이면 <b>칸</b> 단위로, 칸을 다듬은 내용이 사실상 그 축약어
+        /// 자체일 때만 위반이다. 표가 아니면 <b>줄</b> 전체가 사실상 그 축약어일
+        /// 때만 위반이다(295행 부근 시험이 요구하는, 표가 아닌 맨 산문 자리).
+        /// 「위와 동일」이 칸/줄 <i>안에</i> 섞여 있는 것과 그 칸/줄이 <i>곧</i>
+        /// 「위와 동일」인 것을 가른다 - CLVT 행처럼 원천 칸 자체가 축약어인
+        /// 진짜 결함은 계속 잡는다(<c>AntiShortcut_ShouldPointAtTheOffendingLines</c>
+        /// 가 그 자리를 잠근다).
+        ///
+        /// "etc." 는 이 축과 무관하게 <see cref="StandaloneEtcRegex"/> 완화를 그대로
+        /// 쓴다 - 이미 컬럼명 오탐(CLEtc.)과 진짜 축약어(CLComm, etc.)를 가르는
+        /// 별도 규칙을 갖고 있고, 후자는 칸 전체가 아니라 칸 <i>일부</i>로 등장해도
+        /// 계속 걸려야 한다(<c>Validate_WithStandaloneEtcAbbreviation_ShouldStillReturnFalse</c>).
+        ///
+        /// [알려진 한계 - 미리 적어 둔다, 2026-09-09 리뷰 라운드 1]
+        /// <see cref="IsEssentiallyTheShortcut"/>는 정확히 같음만 본다. 그래서
+        /// 금지 토큰 뒤에 짧은 참조 주석이 붙은 칸 - 예: <c>위와 동일 (UPDATE 3
+        /// 참조)</c>, <c>(생략) — 나머지는 동일 패턴</c> - 은 칸 전체가 토큰과
+        /// 같지 않으므로 조용히 통과한다. 이 변경 이전(부분 문자열 포함)에는
+        /// 잡혔다. 지금 넓히지 않는 이유: 이 모양은 오늘 코퍼스(로그 30 개,
+        /// <c>output/*/*/docs/Spec.md</c> 전량) 어디에도 0 건이고, 넓히면 이
+        /// 태스크가 닫으려는 오탐("위와 동일한 조건 판단(...)"처럼 조건을 다
+        /// 풀어 쓴 뒤 접속 표현으로 시작하는 칸)이 다시 걸린다 - 부분 문자열
+        /// 포함으로 되돌아가는 것과 같기 때문이다. 이 모양이 실제로 나타나면
+        /// 재야 할 것: 그 칸이 <i>정말로 값을 생략</i>했는지(위반) 아니면
+        /// <i>값을 다 채운 뒤 참조를 덧붙였는지</i>(오탐, PGVT 행과 같은 모양)
+        /// 부터 실물로 가르고, 가른 결과에 따라 "접두사가 토큰과 같고 나머지가
+        /// 짧은 괄호/대시 주석"인 경우만 추가로 위반으로 잡는 좁은 규칙을
+        /// 여기 더한다 - 부분 문자열 포함으로 되돌리지 않는다.
         /// </summary>
         private static IReadOnlyList<string> FindShortcutLines(string text, string forbidden)
         {
             var hits = new List<string>();
             foreach (var line in (text ?? string.Empty).Split('\n'))
             {
-                var hit = forbidden == "etc."
-                    ? StandaloneEtcRegex.IsMatch(line)
-                    : line.Contains(forbidden, StringComparison.OrdinalIgnoreCase);
+                bool hit;
+                if (forbidden == "etc.")
+                {
+                    hit = StandaloneEtcRegex.IsMatch(line);
+                }
+                else if (line.TrimStart().StartsWith("|", StringComparison.Ordinal))
+                {
+                    hit = SplitTableRowCells(line).Any(cell => IsEssentiallyTheShortcut(cell, forbidden));
+                }
+                else
+                {
+                    hit = IsEssentiallyTheShortcut(line, forbidden);
+                }
                 if (hit) hits.Add(line.Trim());
             }
             return hits;
         }
+
+        /// <summary>
+        /// 다듬은 내용이 그 축약어 자체와 같은지(대소문자 무시) 본다. 부분 문자열
+        /// 포함이 아니라 <b>정확히 같음</b>이다 - "그 자리 전부가 축약어"라는
+        /// 축을 그대로 옮긴 것이다(위 FindShortcutLines 문서 참고).
+        /// </summary>
+        private static bool IsEssentiallyTheShortcut(string cellOrLine, string forbidden) =>
+            cellOrLine.Trim().Equals(forbidden, StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// 메시지에 실을 줄 조각. 너무 길면 앞뒤를 남기고 줄인다.
