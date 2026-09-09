@@ -28,4 +28,10 @@
     <ProjectReference Include="..\..\src\ReSet.Validator.Cli\ReSet.Validator.Cli.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 실행 로그에서 오려 온 CLI 스트림 픽스처. 산출물로 복사되어야 시험이 연다. -->
+    <None Update="Fixtures\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 </Project>

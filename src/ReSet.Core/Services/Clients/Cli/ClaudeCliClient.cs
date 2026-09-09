@@ -55,7 +55,14 @@ namespace ReSet.Core.Services.Clients.Cli
             var arguments = new List<string>
             {
                 "-p",
-                "--output-format", "json",
+                // [stream-json 인 이유 - 2026-09-09 재생성 사고] `json` 은 **마지막 턴만**
+                // `result` 에 담는다. 한 턴의 출력 한도(실측 약 64,000 토큰)를 넘는 대상은
+                // CLI 가 여러 턴으로 이어 쓰므로, 그 형식으로는 앞이 통째로 사라진 조각을
+                // 받는다(EXCEPTION_PROC 실측: 누적 68,722 토큰 → 받은 본문 6,111 자).
+                // stream-json 은 턴마다 assistant 이벤트를 주고, 조립기가 겹침을 찾아 잇는다.
+                // --verbose 가 없으면 -p 와 함께 쓸 때 이벤트가 나오지 않는다.
+                "--output-format", "stream-json",
+                "--verbose",
                 // 순수 LLM으로 쓴다. 툴을 켜두면 에이전트가 파일 시스템을 돌아다닌다.
                 "--tools", string.Empty,
                 "--disable-slash-commands",
@@ -145,7 +152,7 @@ namespace ReSet.Core.Services.Clients.Cli
                 throw CliFailureClassifier.ToException(ProviderName, _command, processResult, null);
             }
 
-            var response = ParseResponse(processResult.StandardOutput);
+            var response = ClaudeCliStreamAssembler.Assemble(processResult.StandardOutput);
 
             // 실패 판정보다 먼저 남긴다. 실패한 호출도 토큰을 태웠고, 그 사실은
             // 실패했다는 이유로 사라져서는 안 된다.
@@ -182,7 +189,7 @@ namespace ReSet.Core.Services.Clients.Cli
         /// 객체에 담아, 정수 한 칸에 옮길 수 없다. 0을 넣으면 "추론을 안 했다"는 거짓이
         /// 로그에 남는다.
         /// </summary>
-        private static TokenUsage? ReadUsage(JsonElement root)
+        internal static TokenUsage? ReadUsage(JsonElement root)
         {
             if (!root.TryGetProperty("usage", out var usage)
                 || usage.ValueKind != JsonValueKind.Object)
@@ -198,7 +205,7 @@ namespace ReSet.Core.Services.Clients.Cli
                 Thinking: null);
         }
 
-        private static string? ReadString(JsonElement root, string propertyName) =>
+        internal static string? ReadString(JsonElement root, string propertyName) =>
             root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
                 ? value.GetString()
                 : null;

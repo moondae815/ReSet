@@ -21,7 +21,12 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("-p", arguments);
             Assert.Contains("--output-format", arguments);
-            Assert.Contains("json", arguments);
+            // [stream-json - 2026-09-09] `json` 은 마지막 턴만 준다. 한 턴 한도를 넘는
+            // 대상에서 앞이 사라진 조각을 받는 자리라 stream-json 으로 바꿨다.
+            Assert.Contains("stream-json", arguments);
+            Assert.DoesNotContain("json", arguments.Where(a => a != "stream-json"));
+            // -p 와 함께 쓸 때 --verbose 가 없으면 이벤트가 나오지 않는다.
+            Assert.Contains("--verbose", arguments);
             Assert.Contains("--disable-slash-commands", arguments);
             Assert.Contains("--no-session-persistence", arguments);
 
