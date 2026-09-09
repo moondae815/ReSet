@@ -10961,6 +10961,64 @@ END"
             Assert.DoesNotContain("-2", error);   // 중복이 아닌 코드는 고발하지 않는다
         }
 
+        /// <summary>
+        /// 「고유」 주장 기각 케이스의 재료. 위 IsReported 시험과 같은 실물 모양이다 -
+        /// 두 시험이 다른 재료를 쓰면 한쪽만 통과하는 자리가 생긴다.
+        /// </summary>
+        private static ValidationResult RunErrorCodeUniquenessCase()
+        {
+            var expectations = EmptySpecExpectations() with
+            {
+                ErrorCodes = new[]
+                {
+                    new ErrorCodeFact("UPDATE", 3, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 4, "-1", "@po_intRetVal"),
+                    new ErrorCodeFact("UPDATE", 5, "-2", "@po_intRetVal"),
+                }
+            };
+
+            var markdown = WrapSpec(
+                "각 문장 직후 `@@ERROR` 검사로 실패 시 롤백 후 고유 음수 코드를 "
+                + "출력 파라미터에 설정하고 즉시 종료합니다.\n\n"
+                + DmlScopeExtractor.ErrorCodeTableHeading + "\n\n"
+                + "| 문장 | 오류 코드 | 설정 대상 |\n"
+                + "| :--- | :--- | :--- |\n"
+                + "| UPDATE 3 | -1 | @po_intRetVal |\n"
+                + "| UPDATE 4 | -1 | @po_intRetVal |\n"
+                + "| UPDATE 5 | -2 | @po_intRetVal |\n");
+
+            return new MechanicalValidator().Validate(markdown, expectations);
+        }
+
+        // [처방이 없으면 못 닫는다 - 2026-09-09 실측] 종전 문구는 「틀렸다」까지만 말했다.
+        // EXCEPTION_PROC 재생성에서 이 결함이 6 회 중 5 회 발화하고 끝내 0 에 못 갔다
+        // (2·2·1·2·2·1). 모델은 문장을 매번 다시 썼으나(인용문이 시도마다 달랐다) 무엇을
+        // 쓰라는지 몰라 개념을 그대로 뒀다. 메시지는 (a) 공유 관계를 실물로 주고
+        // (b) 할 일을 명령형으로 적어야 한다.
+        [Fact]
+        public void ErrorCodeTable_WhenClaimIsRejected_ShouldTellTheModelWhatToWrite()
+        {
+            var result = RunErrorCodeUniquenessCase();
+
+            var error = Assert.Single(result.Errors, e => e.Contains("고유"));
+            // (a) 어느 문장이 그 코드를 공유하는지 - 모델이 그대로 옮겨 적을 재료다.
+            Assert.Contains("공유 관계:", error);
+            Assert.Contains("UPDATE", error);
+            // (b) 할 일. 「틀렸다」만 있으면 6 회를 헤맨다.
+            Assert.Contains("고치는 법:", error);
+            Assert.Contains("쓰지 마십시오", error);
+        }
+
+        // 「자신의」 뜻으로 쓴 경우까지 낱말을 빼라고 말해야 한다 - 검사가 두 뜻을 못 가르므로
+        // 모델에게 「어느 뜻이든 그 낱말은 쓰지 마라」를 명시해야 닫힌다.
+        [Fact]
+        public void ErrorCodeTable_ShouldSayTheWordIsBannedEvenWhenMeantAsOwn()
+        {
+            var error = Assert.Single(RunErrorCodeUniquenessCase().Errors, e => e.Contains("고유"));
+
+            Assert.Contains("자기 코드를 대입한다", error);
+        }
+
         [Fact]
         public void ErrorCodeTable_WhenProseClaimsUniqueAndTableHasNone_StaysSilent()
         {

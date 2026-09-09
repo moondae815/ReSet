@@ -4043,10 +4043,26 @@ namespace ReSet.Core.Services
             var trimmed = claim.Trim();
             if (trimmed.Length > 80) trimmed = trimmed[..80] + "…";
 
+            // [진단만 하고 처방이 없으면 못 닫는다 - 2026-09-09 실측]
+            // 종전 문구는 「틀렸다」까지만 말했다. EXCEPTION_PROC 재생성에서 이 결함이
+            // 6 회 중 5 회 발화하고 끝내 0 에 못 갔다(2·2·1·2·2·1) - 모델이 문장을 매번
+            // 다시 쓰긴 했으나(인용문이 시도마다 달랐다) **무엇을 쓰라는지 몰라** 개념을
+            // 그대로 두고 표현만 바꿨다. 그래서 (a) 어느 문장이 어느 코드를 공유하는지
+            // 실물로 주고 (b) 할 일을 명령형으로 적는다.
+            var sharing = string.Join(" · ", duplicated.Select(code =>
+                code + "→" + string.Join("·", expectations.ErrorCodes
+                    .Where(f => string.Equals(f.Code, code, StringComparison.Ordinal))
+                    .Select(f => $"{f.Operation} {f.StatementOrdinal}"))));
+
             result.Errors.Add(
                 $"명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 "
                 + $"중복된 코드 {offenders}이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 "
-                + $"특정할 수 없습니다. 해당 서술: \"{trimmed}\"");
+                + $"특정할 수 없습니다. 공유 관계: {sharing}. "
+                + "고치는 법: 그 문장에서 「고유」·「서로 다른」을 빼고, 위 공유 관계를 그대로 적어 "
+                + "「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 "
+                + "사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 "
+                + "「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. "
+                + $"해당 서술: \"{trimmed}\"");
         }
 
         /// <summary>
