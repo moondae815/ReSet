@@ -1397,8 +1397,57 @@ Based on the structured reference context above, reverse engineer the stored pro
                 lines.Add($"   | {fact.Operation} {fact.StatementOrdinal} | {EscapeTableCell(fact.Code)} | {EscapeTableCell(fact.Variable)} |");
             }
 
+            lines.AddRange(BuildDuplicateErrorCodeNoticeLines(facts));
             lines.Add("");
             return lines;
+        }
+
+        /// <summary>
+        /// 이 표에 <b>같은 코드를 쓰는 문장이 둘 이상</b> 있으면 그 사실과, 산문에서 코드를
+        /// 어떻게 불러야 하는지를 표 바로 옆에서 말한다.
+        ///
+        /// [L1 만으로는 안 닫힌다 - 2026-09-09 실측] <c>UP_UTIL_SETTLE_EXCEPTION_PROC</c> 의
+        /// 표는 18 행 중 14 개 코드가 실제로 서로 다르고 <c>-1</c>·<c>-2</c> 둘만 겹친다.
+        /// 모델이 보기에 「문장별 고유 음수 코드」는 <b>거의</b> 참이라, L1
+        /// (<c>CheckErrorCodeUniquenessClaim</c>)이 그 낱말을 지목하고 무엇을 쓸지까지
+        /// 명령형으로 줘도 다음 시도에서 같은 문장을 거의 그대로 다시 썼다
+        /// (시도 1 에 2 자리, 시도 2 에 3 자리 - <b>줄었어야 할 수가 늘었다</b>).
+        /// 매 시도가 문서를 통째로 새로 쓰는데, 표를 건네는 이 자리가 「축자 복사하라」만
+        /// 말하고 <b>산문에서 뭐라 부를지는 아무 말도 안 했기</b> 때문이다.
+        ///
+        /// 그래서 규칙 층에서 먼저 막고 L1 은 뒤에 남긴다 - F1′ 를 닫을 때와 같은 짝이다.
+        /// 두 층이 <b>같은 기계 확정 재료</b>(이 표의 중복)에서 문장을 만들므로 서로
+        /// 어긋날 수 없다. 오라클이 갈리면 모델은 둘 중 하나를 버린다.
+        ///
+        /// [캐시 버전을 올리지 않는 이유] 이 블록은 표에 중복이 있는 객체에서만 나온다 -
+        /// 코퍼스 31 편 중 2 편이고 나머지 29 편은 프롬프트 바이트가 불변이다
+        /// (2026-09-09 실측). 그 2 편도 재생성될 때에만 새 프롬프트를 받는다.
+        /// </summary>
+        private static List<string> BuildDuplicateErrorCodeNoticeLines(
+            IReadOnlyList<ErrorCodeFact> facts)
+        {
+            var shared = facts
+                .GroupBy(f => f.Code, StringComparer.Ordinal)
+                .Where(g => g.Count() > 1)
+                .OrderBy(g => g.Key, StringComparer.Ordinal)
+                .ToList();
+            if (shared.Count == 0) return new List<string>();
+
+            var sharing = string.Join(" · ", shared.Select(g =>
+                g.Key + "→" + string.Join("·", g.Select(f => $"{f.Operation} {f.StatementOrdinal}"))));
+
+            return new List<string>
+            {
+                "",
+                "   [DUPLICATE CODES IN THIS TABLE] 위 표에는 같은 코드를 쓰는 문장이 있습니다: "
+                + sharing + ". 따라서 반환 코드만으로는 실패 지점을 특정할 수 없습니다. "
+                + "산문(개요·로직 흐름 요약·오류 처리 서술 등 문서 어디에서도)에서 이 코드들을 "
+                + "「고유」·「고유한」·「서로 다른」이라 부르지 마십시오 - 대부분의 코드가 실제로 "
+                + "다르더라도 그 낱말은 유일성 주장으로 읽힙니다. 「각 문장이 자기 코드를 "
+                + "대입한다」는 뜻으로 쓰려던 것이라도 마찬가지입니다. 대신 위 공유 관계를 "
+                + "그대로 적고 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 "
+                + "특정할 수 없다」는 사실을 서술하십시오."
+            };
         }
 
         /// <summary>
