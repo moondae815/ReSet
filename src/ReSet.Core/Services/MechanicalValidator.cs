@@ -4002,9 +4002,23 @@ namespace ReSet.Core.Services
         /// 걸린다. 산문 토큰은 「이 문장이 그 주장을 하는가」를 고르는 데만 쓰이고, 발화 여부는
         /// <see cref="SpecExpectations.ErrorCodes"/> 가 정한다.
         ///
-        /// [착수 전 코퍼스 실측] 「고유」가 「코드」와 같은 문장에 있는 명세서는 4 편이고 그중
-        /// 표에 중복이 있는 것은 EXCEPTION_PROC 하나뿐이다 — <b>발화 1 · 오탐 0</b>
-        /// (EXPECT_PROC 11 코드 · INS_EXTRA 5 · Settle_Summary 8 은 전부 서로 달라 침묵).
+        /// [발화 반경 실측 - 2026-09-09, 고친 뒤 다시 쟀다] 코퍼스 <b>객체 31 · 표에 중복이
+        /// 있는 객체 2 · 발화 1</b>(EXCEPTION_PROC). 고치기 전 판정으로 재도 발화 1 이라
+        /// 반경이 넓어지지 않았다 — 그래서 캐시 버전은 올리지 않는다.
+        ///
+        /// [판정부를 다시 세운 이유 - 2026-09-09 실측, 재시도 6 회 소진]
+        /// 종전 판정부는 <c>sentence.Contains("코드") &amp;&amp; (Contains("고유") ||
+        /// Contains("서로 다른"))</c> 한 줄이었고 세 갈래로 틀렸다. 하나하나의 실물 근거는
+        /// 아래 각 재료의 문서에 적었다:
+        ///   ① 부정문을 못 가른다 — <see cref="UniquenessDenialTokens"/>. <b>6 회를 태운
+        ///      원인</b>이고, 이 검사의 처방을 따르면 다시 걸리는 자기강화 루프였다.
+        ///   ② 인용 블록을 지목한다 — <see cref="QuoteLineRegex"/>. 결함을 <b>고발한</b>
+        ///      L2 리뷰 문장을 「고치라」고 돌려주고 있었다.
+        ///   ③ 진짜 거짓 주장을 놓친다 — <see cref="UniquenessTopicTokens"/> 와
+        ///      <see cref="ExcerptAroundUniquenessWord"/>. 코드를 「음수값」이라 부르면
+        ///      지시어에 안 걸렸고, <c>FirstOrDefault</c> 라 둘 중 하나만 잡았다.
+        /// 회귀는 <c>ErrorCodeUniquenessClaimRegressionTests</c> 가 잠근다 — 픽스처는
+        /// 실행 로그(시도 5·6 응답)와 배송본에서 한 글자도 고치지 않고 오려 왔다.
         ///
         /// [알려진 한계 - 미리 적어 둔다] 한국어 「고유」는 「유일한」과 「자신의」 둘 다로 쓰인다.
         /// <c>UP_Util_Settle_Summary</c> 의 「자신의 <b>고유</b> 코드(-1~-8)」는 후자이고 지금은
@@ -4029,19 +4043,19 @@ namespace ReSet.Core.Services
                 .ToList();
             if (duplicated.Count == 0) return;
 
-            // 「고유」·「서로 다른」이 「코드」와 같은 문장에 있을 때만 주장으로 본다.
-            // 문장 단위로 자르는 이유는 문서 어딘가에 두 낱말이 따로 있는 것을 주장으로
-            // 오인하지 않기 위해서다.
-            var claim = SplitIntoSentences(markdown)
-                .FirstOrDefault(sentence =>
-                    sentence.Contains("코드", StringComparison.Ordinal)
-                    && (sentence.Contains("고유", StringComparison.Ordinal)
-                        || sentence.Contains("서로 다른", StringComparison.Ordinal)));
-            if (claim == null) return;
+            // 인용 줄(`>`)은 판정 대상이 아니다 - 아래 QuoteLineRegex 문서 참고.
+            var assertions = QuoteLineRegex.Replace(markdown, string.Empty);
+
+            var claims = SplitIntoSentences(assertions)
+                .Where(HasUnnegatedUniquenessClaim)
+                .Select(ExcerptAroundUniquenessWord)
+                .Where(s => s.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            if (claims.Count == 0) return;
 
             var offenders = string.Join(", ", duplicated);
-            var trimmed = claim.Trim();
-            if (trimmed.Length > 80) trimmed = trimmed[..80] + "…";
+            var quoted = string.Join(" · ", claims.Select(claim => "\"" + claim + "\""));
 
             // [진단만 하고 처방이 없으면 못 닫는다 - 2026-09-09 실측]
             // 종전 문구는 「틀렸다」까지만 말했다. EXCEPTION_PROC 재생성에서 이 결함이
@@ -4062,7 +4076,170 @@ namespace ReSet.Core.Services
                 + "「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 "
                 + "사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 "
                 + "「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. "
-                + $"해당 서술: \"{trimmed}\"");
+                + $"해당 서술 {claims.Count}자리 - 하나만 고치고 끝내지 마십시오: {quoted}");
+        }
+
+        /// <summary>
+        /// 인용 줄(<c>&gt;</c>) 전체. 명세서의 인용 블록은 <b>L2 리뷰가 남긴 지적</b>이지
+        /// 모델의 주장이 아니다.
+        ///
+        /// [실물 - 2026-09-09 EXCEPTION_PROC 배송본 29 행] 종전 <c>FirstOrDefault</c> 가
+        /// 집던 문장이 바로 그 인용 블록의 「…'고유 음수값 설정' 표현은 … 표와 모순됩니다」
+        /// 였다. 결함을 <b>고발한</b> 문장을 지목해 「고치라」고 돌려주고 있었던 것이다.
+        /// 그동안 진짜 거짓 주장 둘(561·110 행)은 조용히 배송됐다.
+        ///
+        /// 문장이 아니라 <b>줄</b>을 통째로 지우는 이유: 한 인용 줄 안에 문장이 여럿이고
+        /// (「3. 」의 마침표+공백이 이미 경계다) 둘째 문장부터는 <c>&gt;</c> 표지가 없다.
+        /// 문장 단위로 걸러내면 첫 문장만 빠지고 나머지가 그대로 판정 대상이 된다.
+        /// </summary>
+        private static readonly Regex QuoteLineRegex =
+            new(@"(?m)^[ \t]*>.*$", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 「고유」 주장의 부정 여부를 볼 때 쓰는 절 경계. 종결·연결 어미만 경계로 센다.
+        ///
+        /// [왜 문장이 아니라 절인가 - 2026-09-09 실측] 문장 전체에 부정 토큰이 하나라도
+        /// 있으면 통과시키는 규칙은 <b>양쪽으로</b> 틀린다. 배송본 110 행
+        /// 「…문장별로 <b>고유한</b> 음수값이 대입되며, 정상 종료 시에는 본문에서 값을
+        /// 대입하지 <b>않습니다</b>…」의 「않」은 <i>다른 절의 다른 서술어</i>에 걸린
+        /// 것이라, 문장 단위로 보면 진짜 거짓 주장이 조용히 통과한다. 반대로
+        /// 「오류 코드는 고유하지 않습니다」는 정직한 부정인데 부정을 아예 안 보면 발화한다.
+        /// 부정이 <b>고유와 같은 절</b>에 있을 때만 부정으로 세야 둘 다 맞는다 -
+        /// <see cref="HasUnnegatedClaim"/> 이 3부 주장에서 이미 쓰는 축과 같다.
+        ///
+        /// [콤마는 경계가 아니다] <see cref="ClauseBoundaryRegex"/> 의 Fix Round 5 가
+        /// 이미 낸 결론이고 여기서도 실측으로 확인했다 - 시도 6 의
+        /// 「해당 문장 <b>고유</b>(단, 일부 <b>중복</b> 포함) 음수 코드 대입」은 괄호 안에
+        /// 콤마가 있어, 콤마를 경계로 잡으면 「고유(단」과 「일부 중복 포함)…」이 갈리고
+        /// 한정어 「중복」이 주장에서 떨어져 나가 오탐이 된다.
+        ///
+        /// <see cref="ClauseBoundaryRegex"/> 를 그대로 쓰지 않는 이유는 그 표지
+        /// (「이며」)가 이 코퍼스의 실제 어미(「대입되며」·「수행하며」)를 못 잡기
+        /// 때문이다. 그쪽을 넓히면 3부 주장 검사의 판정까지 함께 흔들리므로 여기에
+        /// 따로 둔다.
+        /// </summary>
+        private static readonly Regex UniquenessClauseBoundaryRegex =
+            new(@"며(?=\s|,|$)|니다|지만|그러나|\.(?=\s|$)", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 유일성을 단정하는 낱말. 이것이 있어야 주장 후보다.
+        /// </summary>
+        private static readonly string[] UniquenessClaimTokens = { "고유", "서로 다른" };
+
+        /// <summary>
+        /// 그 낱말이 <b>오류 코드</b>를 두고 한 말임을 확인하는 지시어. 하나라도 같은 절에
+        /// 있어야 한다 - 없으면 「서로 다른 두 원천의 집계식」처럼 전혀 다른 것을 두고 한
+        /// 말이다(시도 5 의 인용 블록에 실제로 있다).
+        ///
+        /// [「코드」만으로는 좁다 - 2026-09-09 실측] 배송본의 진짜 거짓 주장 둘은 코드를
+        /// 「음수값」이라 부른다: 561 행 「`@po_intRetVal`에 고유 음수값 설정」, 110 행
+        /// 「문장별로 고유한 음수값이 대입되며」. 게다가 110 행은 「처리 결과 코드.」의
+        /// 마침표에서 문장이 갈려 「코드」가 아예 다른 조각에 남는다. 그래서 둘 다
+        /// 통과했다.
+        /// </summary>
+        private static readonly string[] UniquenessTopicTokens = { "코드", "음수값", "음수 값" };
+
+        /// <summary>
+        /// 주장을 무르는 한정·부정 표지. 같은 절에 하나라도 있으면 유일성 단정이 아니다.
+        ///
+        /// [이것이 6 회를 태운 자리다 - 2026-09-09 실측] 종전 판정부에는 부정문 처리가
+        /// 아예 없었다. 그래서 검사 메시지가 시킨 대로 고쳐 쓴 문장이 <b>다시 걸렸다</b>:
+        /// 시도 5 「…서로 다른 고유 오류 코드를 갖는 것이 <b>아니라</b>, 문장별로 지정된
+        /// 음수 코드(<b>중복</b> 포함)가 설정되는 구조입니다」, 시도 6 「…서로 다른
+        /// 고유값이 <b>아니라</b> 일부 <b>중복</b>됩니다」. 고칠 것이 없는데 발화하니
+        /// 모델은 표현만 바꾸며 같은 자리를 맴돌았고, 6 회를 소진한 뒤 검증 미통과본이
+        /// 배송됐다(1 차 시도 90/100 채택). 처방을 따르면 다시 걸리는 자기강화 루프는
+        /// 걷어낸 「DB 배치 산문 검사」(<c>8e90a640</c>)와 같은 모양이다.
+        /// </summary>
+        private static readonly string[] UniquenessDenialTokens = { "아니", "않", "중복", "공유" };
+
+        /// <summary>
+        /// 「중복이 없다」류. 「중복」이 들어 있어도 이것은 <b>유일성 단정 그 자체</b>라
+        /// 무르는 표지로 세면 안 된다 - 「오류 코드에 중복이 없어 실패 지점을 특정할 수
+        /// 있습니다」가 조용히 통과한다. 단 같은 절에 「아니」가 함께 있으면
+        /// (「중복이 없는 것이 아니라」) 다시 부정이므로 되살리지 않는다.
+        /// </summary>
+        private static readonly Regex NoDuplicatesAssertionRegex =
+            new(@"중복[^.]{0,6}?없", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 한 문장에, 유일성 낱말과 오류 코드 지시어를 함께 담고 <b>부정 표지는 없는</b>
+        /// 절이 하나라도 있는지 본다. 있으면 그 문장은 살아 있는 유일성 단정이다.
+        ///
+        /// 판정은 절 단위로 하되 <b>지목은 문장 단위로</b> 한다. 절은 어미에서 잘린
+        /// 조각이라(「, 오류 발생 시 … 즉시 종료합」) 6 만 자 문서에서 찾기에 문장보다
+        /// 나쁘다 - 검사가 잡는 자리와 모델이 고칠 자리는 다른 단위여도 된다.
+        /// </summary>
+        private static bool HasUnnegatedUniquenessClaim(string sentence)
+        {
+            foreach (var clause in SplitByRegex(sentence, UniquenessClauseBoundaryRegex))
+            {
+                var claims = Array.Exists(UniquenessClaimTokens,
+                    t => clause.Contains(t, StringComparison.Ordinal));
+                if (!claims) continue;
+
+                var onErrorCodes = Array.Exists(UniquenessTopicTokens,
+                    t => clause.Contains(t, StringComparison.Ordinal));
+                if (!onErrorCodes) continue;
+
+                var denied = Array.Exists(UniquenessDenialTokens, token =>
+                    token == "중복"
+                        ? clause.Contains(token, StringComparison.Ordinal)
+                          && !(NoDuplicatesAssertionRegex.IsMatch(clause)
+                               && !clause.Contains("아니", StringComparison.Ordinal))
+                        : clause.Contains(token, StringComparison.Ordinal));
+                if (!denied) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 지목할 발췌를 <b>유일성 낱말을 중심으로</b> 오려 낸다.
+        ///
+        /// [머리부터 80 자를 자르면 정작 그 낱말이 잘려 나간다 - 2026-09-09 실측] 배송본
+        /// 561 행에서 「고유」는 83 번째 글자다. 종전 구현은 문장 머리 80 자를 인용해
+        /// 「…`ROLLBACK TRAN` → `@po_intRetVal`…」까지만 보여 줬다 - 모델이 고쳐야 할
+        /// 낱말이 인용문에 없다. 발췌의 존재 이유가 <b>위치</b>인데 위치를 버린 것이라,
+        /// 「어느 줄인지 말한다」(<c>23301971</c>)로 닫은 것과 같은 병이다.
+        /// </summary>
+        private static string ExcerptAroundUniquenessWord(string sentence)
+        {
+            var text = sentence.Trim();
+            if (text.Length == 0) return text;
+            if (text.Length <= 80) return text;
+
+            var at = UniquenessClaimTokens
+                .Select(t => text.IndexOf(t, StringComparison.Ordinal))
+                .Where(i => i >= 0)
+                .DefaultIfEmpty(0)
+                .Min();
+
+            var start = Math.Max(0, at - 25);
+            var length = Math.Min(80, text.Length - start);
+
+            return (start > 0 ? "…" : string.Empty)
+                + text.Substring(start, length)
+                + (start + length < text.Length ? "…" : string.Empty);
+        }
+
+        /// <summary>
+        /// 경계 표지 자체는 버리고 그 사이 조각만 낸다. <see cref="SplitIntoClauses"/> 와
+        /// 같은 일을 하되 경계 정규식을 인자로 받는다.
+        /// </summary>
+        private static List<string> SplitByRegex(string text, Regex boundary)
+        {
+            var parts = new List<string>();
+            var current = 0;
+
+            foreach (Match marker in boundary.Matches(text))
+            {
+                parts.Add(text.Substring(current, marker.Index - current));
+                current = marker.Index + marker.Length;
+            }
+
+            parts.Add(text[current..]);
+            return parts;
         }
 
         /// <summary>
