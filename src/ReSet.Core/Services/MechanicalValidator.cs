@@ -1011,7 +1011,7 @@ namespace ReSet.Core.Services
 
             foreach (var forbidden in ForbiddenShortcuts)
             {
-                if (!ContainsForbiddenShortcut(scannable, forbidden))
+                if (FindShortcutLines(scannable, forbidden).Count == 0)
                 {
                     continue;
                 }
@@ -6251,9 +6251,19 @@ namespace ReSet.Core.Services
             var scannable = StripQuotedLines(markdown);
             foreach (var forbidden in ForbiddenShortcuts)
             {
-                if (ContainsForbiddenShortcut(scannable, forbidden))
+                var offendingLines = FindShortcutLines(scannable, forbidden);
+                if (offendingLines.Count > 0)
                 {
-                    var msg = $"표 내부에 허용되지 않는 축약어/생략 기호('{forbidden}')가 감지되었습니다. 모든 컬럼과 매핑을 완벽히 기술해야 합니다.";
+                    // [위치가 없으면 못 닫는다 - 2026-09-09 실측] 종전 문구는 「감지되었습니다」
+                    // 까지만 말했다. COMM_UPD(60,282 자, UPDATE 매핑 표 다수) 재생성에서 시도
+                    // 3·4 가 같은 문구로 연속 발화했다 - 모델이 어느 표 어느 줄인지 몰라
+                    // 찾을 자리가 없었다. EXCEPTION_PROC 이 같은 병으로 6 회를 소진했다.
+                    // 자리 수와 줄 원문을 실어 「그 줄을 찾아 채워라」로 만든다.
+                    var shown = string.Join(" / ", offendingLines.Take(5).Select(Excerpt));
+                    var more = offendingLines.Count > 5 ? $" 외 {offendingLines.Count - 5}자리" : string.Empty;
+                    var msg = $"표 내부에 허용되지 않는 축약어/생략 기호('{forbidden}')가 "
+                        + $"{offendingLines.Count}자리에 있습니다: {shown}{more}. "
+                        + "그 칸을 실제 값으로 채우십시오 - 한 자리만 고치고 끝내지 마십시오.";
                     Log.Warning("린트 에러 감지 (Anti-Shortcut 위반) - {Message}", msg);
                     result.Errors.Add(msg);
                     result.DetailedErrors.Add(new DetailedError { Type = ErrorType.General, Message = msg });
@@ -6309,10 +6319,34 @@ namespace ReSet.Core.Services
         internal static readonly string[] ForbiddenShortcuts =
             { "이하 생략", "(생략)", "위와 동일", "기타 등등", "etc.", "TS[]" };
 
-        private static bool ContainsForbiddenShortcut(string text, string forbidden) =>
-            forbidden == "etc."
-                ? StandaloneEtcRegex.IsMatch(text)
-                : text.Contains(forbidden, StringComparison.OrdinalIgnoreCase);
+        /// <summary>
+        /// 금지 축약어가 나타난 <b>줄들</b>을 돌려준다. 참/거짓만 돌려주면 메시지가 위치를
+        /// 말할 수 없고, 모델은 긴 문서에서 찾을 자리를 모른다(2026-09-09 실측).
+        /// </summary>
+        private static IReadOnlyList<string> FindShortcutLines(string text, string forbidden)
+        {
+            var hits = new List<string>();
+            foreach (var line in (text ?? string.Empty).Split('\n'))
+            {
+                var hit = forbidden == "etc."
+                    ? StandaloneEtcRegex.IsMatch(line)
+                    : line.Contains(forbidden, StringComparison.OrdinalIgnoreCase);
+                if (hit) hits.Add(line.Trim());
+            }
+            return hits;
+        }
+
+        /// <summary>
+        /// 메시지에 실을 줄 조각. 너무 길면 앞뒤를 남기고 줄인다.
+        ///
+        /// [백틱을 쓰지 않는다 - 작성 계약 9] 오류 메시지의 백틱 토큰은 그대로 귀속 어휘가
+        /// 된다(<c>MechanicalValidator.ViolationLexemes</c>). 여기에 표 행을 백틱으로 실었더니
+        /// 「귀속 실패 → 전량 재생성」 경로가 「귀속 성공 → 그 절만」으로 바뀌어
+        /// <c>…L1AttributionFailureInSplitPath…</c> 가 4 회 대신 2 회를 관측했다.
+        /// 위치는 주되 어휘 경로는 건드리지 않는다.
+        /// </summary>
+        private static string Excerpt(string line) =>
+            line.Length <= 90 ? $"「{line}」" : $"「{line[..60]}…{line[^25..]}」";
 
         private static readonly Regex StandaloneEtcRegex =
             new Regex(@"(?<![A-Za-z])etc\.", RegexOptions.Compiled | RegexOptions.IgnoreCase);

@@ -10961,6 +10961,30 @@ END"
             Assert.DoesNotContain("-2", error);   // 중복이 아닌 코드는 고발하지 않는다
         }
 
+        // [위치가 없으면 못 닫는다 - 2026-09-09 실측] UP_UTIL_SETTLE_COMM_UPD 재생성에서
+        // 이 검사가 시도 3·4 에 같은 문구로 연속 발화했다. 그 명세서는 60,282 자이고
+        // UPDATE 매핑 표가 여럿인데, 문구가 **어느 표 어느 줄인지 말하지 않아** 모델이
+        // 찾을 자리를 모른다. EXCEPTION_PROC 이 같은 병으로 6 회를 소진했다.
+        [Fact]
+        public void AntiShortcut_ShouldPointAtTheOffendingLines()
+        {
+            var markdown = WrapSpec(
+                "| 테이블 | 컬럼 | 원천 | 설명 |\n"
+                + "| :--- | :--- | :--- | :--- |\n"
+                + "| TSettleMst | CLCOMM | X.CLCOMM | 고객사 수수료 |\n"
+                + "| TSettleMst | CLVT | 위와 동일 | 부가세 |\n"
+                + "| TSettleMst | PGCOMM | 위와 동일 | 원가 수수료 |\n");
+
+            var result = new MechanicalValidator().Validate(markdown, EmptySpecExpectations());
+
+            var error = Assert.Single(result.Errors, e => e.Contains("축약어"));
+            // 몇 자리인지 - 하나만 고치고 끝내지 않게 한다.
+            Assert.Contains("2자리", error);
+            // 어느 줄인지 - 모델이 그대로 찾아갈 수 있어야 한다.
+            Assert.Contains("CLVT", error);
+            Assert.Contains("PGCOMM", error);
+        }
+
         /// <summary>
         /// 「고유」 주장 기각 케이스의 재료. 위 IsReported 시험과 같은 실물 모양이다 -
         /// 두 시험이 다른 재료를 쓰면 한쪽만 통과하는 자리가 생긴다.
