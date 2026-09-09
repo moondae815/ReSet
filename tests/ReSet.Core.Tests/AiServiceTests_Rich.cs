@@ -1045,6 +1045,44 @@ END"
             Assert.Contains("SETTLE_POQ_DB.dbo.TSettleMst", body);
         }
 
+        // [하위 객체 DDL 경계 - 2026-09-09 재생성 사고] UP_Util_Settle_Summary 실측.
+        // 자기 DDL 에 3부가 0건인데 모델이 하위 SP DDL 의 3부 참조를 이 객체의 것으로
+        // 귀속해 L1(CheckIdentifierNotationClaims)이 재시도 4회를 태웠다.
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithNoOwnThreePartButCodeDependency_ShouldStateTheBoundary()
+        {
+            var (service, handler) = CreateProbe();
+            var spDef = ProbeInsertOnlySpDef();   // 3부 참조 0건
+            spDef.Dependencies = new List<DependencyInfo>
+            {
+                new DependencyInfo { Schema = "dbo", Name = "UP_Sub", Type = "SQL_STORED_PROCEDURE" }
+            };
+
+            await service.GenerateSpecificationAsync(spDef, "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.Contains("이 객체의 식별자 표기가 아닙니다", body);
+            Assert.Contains("이 객체의 참조로 적지 마십시오", body);
+        }
+
+        // 코드 의존이 없으면 그 줄이 실리지 않아야 한다 - 실리면 프롬프트 바이트가
+        // 전 객체에서 바뀌어 캐시 인상 없이는 못 쓴다(v21 로 만든 24 편을 버리게 된다).
+        [Fact]
+        public async Task GenerateSpecificationAsync_WithNoCodeDependency_ShouldNotStateTheBoundary()
+        {
+            var (service, handler) = CreateProbe();
+            var spDef = ProbeInsertOnlySpDef();
+            spDef.Dependencies = new List<DependencyInfo>
+            {
+                new DependencyInfo { Schema = "dbo", Name = "TSettleMst", Type = "USER_TABLE" }
+            };
+
+            await service.GenerateSpecificationAsync(spDef, "지침", null);
+
+            var body = DecodeMessageContents(handler.LastRequestBody);
+            Assert.DoesNotContain("이 객체의 식별자 표기가 아닙니다", body);
+        }
+
         // [소속 DB 안/밖 갈래 - 2026-09-08 재생성 사고] 갈라 주지 않으면 모델이 3부 표기
         // 전부를 크로스 데이터베이스라 부르고, L1(DatabasePlacementProseContradiction)이
         // 그것을 잡아 재시도 6회를 소진한다. UIF_SettleYMD 가 실물로 그렇게 걸렸다 -

@@ -300,6 +300,34 @@ namespace ReSet.Core.Services
                     else
                     {
                         staticAnalysisText.AppendLine("- 원본이 3부 이상으로 표기한 오브젝트 참조(테이블/함수) 원문 목록: 없음 (원본에 3부 식별자 또는 크로스 데이터베이스 참조가 존재하지 않습니다. 3부 식별자 기반 크로스 데이터베이스 참조라고 단언하지 마십시오.)");
+
+                        // [하위 객체 DDL 의 3부 참조는 이 객체의 것이 아니다 - 2026-09-09 재생성 사고]
+                        // 프롬프트에는 참고용으로 하위 프로시저·함수의 DDL 이 함께 실린다.
+                        // 자기 DDL 에 3부가 0건인 객체에서 모델이 **그 하위 DDL 의 3부 참조를
+                        // 이 객체의 것으로 귀속**해 `PaymentDB.dbo.TExtraSettleIn` 1건이 원본
+                        // DDL 에 있다고 적었고(UP_Util_Settle_Summary 실측), L1
+                        // CheckIdentifierNotationClaims 가 옳게 고발해 재시도 4회를 태웠다.
+                        // 모델은 다른 자리에 「하위 객체 자신의 구현이라 구분된다」는 단서를
+                        // 달아 둬서 자기가 틀린 자리를 못 찾았다 - 경계를 말해 주지 않으면
+                        // 시정 문구만으로는 못 닫는다.
+                        //
+                        // [조건부인 이유] 이 줄은 **자기 3부가 0건이고 코드 객체를 참조하는**
+                        // 객체에만 실린다. 코퍼스 실측으로 그 조건에 맞는 객체는 1 개뿐이라
+                        // (UP_Util_Settle_Summary) 나머지 프롬프트 바이트는 안 바뀐다 -
+                        // 캐시 형식 버전을 올리지 않아도 되고, 이미 v21 로 만들어진 24 편을
+                        // 버리지 않는다. 조건의 재료(자기 DDL·의존 DDL)는 둘 다 복합 해시
+                        // 입력이라 나중에 그 성질이 바뀌면 캐시가 자동 무효화된다.
+                        var hasCodeDependency = (spDef.Dependencies ?? new List<DependencyInfo>())
+                            .Any(d => SqlObjectTypeClassifier.IsCodeObject(d.Type));
+                        if (hasCodeDependency)
+                        {
+                            staticAnalysisText.AppendLine(
+                                "  - **참고로 실린 하위 프로시저·함수의 DDL 에 3부 식별자 참조가 있어도 그것은 "
+                                + "이 객체의 식별자 표기가 아닙니다.** 그 참조는 호출되는 하위 객체 자신의 "
+                                + "구현이므로, 이 객체의 개요·CRUD 분석·크로스 데이터베이스 항목에 "
+                                + "**이 객체의 참조로 적지 마십시오.** 하위 객체의 참조를 설명할 필요가 있으면 "
+                                + "그 객체의 명세서에 적힙니다.");
+                        }
                     }
 
                     if (spDef.StaticAnalysis.ReferencedFunctions.Count > 0)
