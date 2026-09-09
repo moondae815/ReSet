@@ -203,7 +203,7 @@ namespace ReSet.Core.Services
             if (string.IsNullOrWhiteSpace(markdown))
             {
                 result.IsValid = false;
-                result.Errors.Add("명세서 내용이 비어있습니다.");
+                result.Report("명세서 내용이 비어있습니다.");
                 result.DetailedErrors.Add(new DetailedError { Type = ErrorType.General, Message = "명세서 내용이 비어있습니다." });
                 Log.Warning("명세서 검증 실패 - 내용이 비어있습니다.");
                 return result;
@@ -274,7 +274,7 @@ namespace ReSet.Core.Services
             if (string.IsNullOrWhiteSpace(markdown))
             {
                 result.IsValid = false;
-                result.Errors.Add("계획서 내용이 비어있습니다.");
+                result.Report("계획서 내용이 비어있습니다.");
                 result.DetailedErrors.Add(new DetailedError { Type = ErrorType.General, Message = "계획서 내용이 비어있습니다." });
                 Log.Warning("통합 계획서 검증 실패 - 내용이 비어있습니다.");
                 return result;
@@ -2605,7 +2605,7 @@ namespace ReSet.Core.Services
                             $"테이블명 `{candidate}`이 파서가 확정한 표기 `{caseOnly}`와 대소문자가 다릅니다. " +
                             "실행은 무해하지만 이 표를 식별자 원천으로 삼는 이행·대조가 어긋납니다. " +
                             "원문 표기 그대로 옮기십시오.";
-                        result.Errors.Add(message);
+                        result.Report(message);
                         result.DetailedErrors.Add(new DetailedError
                         {
                             Type = ErrorType.InsertMappingTableNameMismatch,
@@ -2742,7 +2742,7 @@ namespace ReSet.Core.Services
                         var message =
                             $"명세서가 `{tableKey}`의 컬럼 `{candidate}`을(를) 존재하지 않는 것으로 기술했습니다. " +
                             "이 컬럼은 프롬프트의 스키마 표에 실제로 제공되었습니다.";
-                        result.Errors.Add(message);
+                        result.Report(message);
                         result.DetailedErrors.Add(new DetailedError
                         {
                             Type = ErrorType.SchemaClaimFalse,
@@ -2896,7 +2896,7 @@ namespace ReSet.Core.Services
                             + "(함수 인자로 함께 쓰이거나 다른 컬럼끼리 비교되는 자리는 연결이 아닙니다). "
                             + $"DDL이 `{variable}`와 결합하는 컬럼: {(actual.Count > 0 ? string.Join(", ", actual) : "(없음)")}. "
                             + "그 컬럼만 적거나 해당 토큰을 지우십시오.";
-                        result.Errors.Add(message);
+                        result.Report(message);
                         result.DetailedErrors.Add(new DetailedError
                         {
                             Type = ErrorType.ParameterColumnClaimMismatch,
@@ -2997,7 +2997,7 @@ namespace ReSet.Core.Services
                     + $"({string.Join(", ", expectations.ParameterNames.Select(x => $"`{x}`"))})만 행으로 가져야 합니다 - "
                     + string.Join(" / ", parts)
                     + ". DECLARE된 지역 변수·`@@ERROR` 같은 시스템 값은 이 표가 아니라 별도 표나 절에 적으십시오.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.ParameterTableRowMismatch,
@@ -3058,7 +3058,7 @@ namespace ReSet.Core.Services
                         $"명세서가 `{tableKey}`의 컬럼 `{column}`을(를) 널 불허로 단정했으나 의존성 " +
                         "스키마는 널 허용으로 확정했습니다. 이 단정을 근거로 제약을 세우거나 필터를 " +
                         "바꾸면 원본이 배제하던 NULL 행이 대상에 들어옵니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.NullabilityClaimMismatch,
@@ -3234,7 +3234,7 @@ namespace ReSet.Core.Services
                     "명세서가 3부 식별자 또는 크로스 데이터베이스 참조를 단언했으나, "
                     + "원본 DDL에는 3부 이상으로 표기된 테이블 참조가 없습니다. "
                     + "식별자 표기는 <sp-source-ddl>만 근거로 삼아야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.IdentifierNotationClaim,
@@ -3336,7 +3336,7 @@ namespace ReSet.Core.Services
                     $"원본 DDL {block.Line}행의 주석이 명세서에 기록되지 않았습니다: "
                     + $"`{block.Text}`. 조건식 원문·도입 일자·사유를 제약 절에 기술해야 합니다. "
                     + $"(대조 앵커: {string.Join(", ", block.Anchors)})";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.SourceCommentMissing,
@@ -3419,7 +3419,7 @@ namespace ReSet.Core.Services
             var message =
                 $"원본에 3인자 ROUND 호출이 {expectations.RoundingCalls.Count}건 있으나({lines}) "
                 + $"명세서가 절사 쪽 의미를 기술하지 않았습니다. {RoundingSemanticsExtractor.SemanticsSentence}";
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.RoundingSemanticsMissing,
@@ -3442,7 +3442,7 @@ namespace ReSet.Core.Services
                 var message =
                     $"프로시저 본문이 `SET {option}`을 설정하는데 명세서가 이를 기술하지 않았습니다. "
                     + "세션 옵션은 호출 계층의 동작을 바꿀 수 있으므로 기록해야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.SessionOptionMissing,
@@ -3673,7 +3673,7 @@ namespace ReSet.Core.Services
             const string message =
                 "프롬프트가 작성자에게 준 지시문이 명세서 본문에 그대로 실렸습니다. "
                 + "해당 줄은 문서의 내용이 아니라 작성 지시이므로 삭제해야 합니다.";
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.PromptInstructionLeak,
@@ -3699,7 +3699,7 @@ namespace ReSet.Core.Services
             const string message =
                 "헤더 주석이 내부 SP 호출을 NONE으로 선언했으나 실제로는 EXEC 호출이 있습니다. "
                 + "명세서가 이 모순(스테일 주석) 자체를 기록하지 않았습니다.";
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.HeaderContractContradiction,
@@ -3752,7 +3752,7 @@ namespace ReSet.Core.Services
                 var message =
                     $"기계 확정 DML 범위 표가 명세서에 없습니다. `{DmlScopeExtractor.DmlScopeTableHeading}` "
                     + $"헤딩과 {expectations.DmlScopeFacts.Count}개 행을 그대로 옮겨야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DmlScopeTableMissing,
@@ -3798,7 +3798,7 @@ namespace ReSet.Core.Services
                         $"DML 범위 표에 원본 DDL 라인 {fact.Line}의 {statementToken} 행이 없습니다 - "
                         + "문장 칸과 라인 칸이 둘 다 같은 행에 있어야 합니다. "
                         + "표는 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없고, 문장 번호를 바꿔 적을 수 없습니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.DmlScopeTableMissing,
@@ -3834,7 +3834,7 @@ namespace ReSet.Core.Services
                         $"DML 범위 표의 {statementToken} @ 라인 {fact.Line} 행에서 {label} 칸이 기계 확정값 "
                         + $"`{expectedCell}`과 다릅니다. 이 칸은 축자 전사 대상입니다 - 토큰을 더하거나 빼거나 "
                         + "순서를 바꿀 수 없습니다.";
-                    result.Errors.Add(cellMessage);
+                    result.Report(cellMessage);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.DmlScopeTableMissing,
@@ -3862,7 +3862,7 @@ namespace ReSet.Core.Services
                     $"DML 범위 표의 {fact.Operation} @ 라인 {fact.Line} 행에 GROUP BY 값(`{groupByToken}`)이 "
                     + "없습니다. GROUP BY 칸은 기계가 확정한 것이므로 그룹화 키를 그대로 옮겨야 합니다 - "
                     + "\"(없음)\"으로 적거나 일부만 옮기면 원본 그룹화 의미가 소실됩니다.";
-                result.Errors.Add(groupByMessage);
+                result.Report(groupByMessage);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DmlScopeTableMissing,
@@ -3943,7 +3943,7 @@ namespace ReSet.Core.Services
                     + "완전히 같아야 하며, 모델이 재서식한 헤딩은 일치로 보지 않습니다). 헤딩이 이미 있는데도 "
                     + "이 오류가 났다면 표를 새로 쓰지 말고 헤딩 문구를 원문 그대로 맞추십시오. "
                     + $"헤딩 아래에는 {expectations.DerivedColumns.Count}개 컬럼 정의를 그대로 옮겨야 합니다.";
-                result.Errors.Add(headingMessage);
+                result.Report(headingMessage);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DerivedTableDefinitionMissing,
@@ -3969,7 +3969,7 @@ namespace ReSet.Core.Services
                     + $"SET 우변이 `{definition.Alias}.{definition.Column}`에서 멈추면 "
                     + "그 값이 무엇으로 계산되는지가 소실됩니다. "
                     + $"(대조 앵커: {string.Join(", ", definition.Anchors)})";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DerivedTableDefinitionMissing,
@@ -4082,7 +4082,7 @@ namespace ReSet.Core.Services
                     .Where(f => string.Equals(f.Code, code, StringComparison.Ordinal))
                     .Select(f => $"{f.Operation} {f.StatementOrdinal}"))));
 
-            result.Errors.Add(
+            result.Report(
                 $"명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 "
                 + $"중복된 코드 {offenders}이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 "
                 + $"특정할 수 없습니다. 공유 관계: {sharing}. "
@@ -4377,7 +4377,7 @@ namespace ReSet.Core.Services
                 var message =
                     $"기계 확정 집합 술어 표가 명세서에 없습니다. `{DmlScopeExtractor.SetPredicateTableHeading}` "
                     + $"헤딩과 {expectations.SetPredicates.Count}개 행을 그대로 옮겨야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.SetPredicateMismatch,
@@ -4478,7 +4478,7 @@ namespace ReSet.Core.Services
                         + "「술어 원문」 칸은 DDL 원문 그대로여야 합니다 - "
                         + "요약하거나 바꿔 쓸 수 없고, 행을 합치거나 생략할 수 없으며, "
                         + "범위(최상위 / 파생 테이블 X / 조인 ON T / 파생 테이블 X · 조인 ON T)도 사실대로 적어야 합니다.";
-                    result.Errors.Add(countMessage);
+                    result.Report(countMessage);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.SetPredicateMismatch,
@@ -4554,7 +4554,7 @@ namespace ReSet.Core.Services
                         + " 같은 컬럼의 각 IN은 별도 행으로, 원소를 정확히 옮겨야 AND/OR 의미가 보존됩니다.";
                 }
 
-                result.Errors.Add(mismatchMessage);
+                result.Report(mismatchMessage);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.SetPredicateMismatch,
@@ -4763,7 +4763,7 @@ namespace ReSet.Core.Services
                 var message =
                     $"기계 확정 참조 함수 표가 명세서에 없습니다. `{DmlScopeExtractor.ReferencedFunctionTableHeading}` "
                     + $"헤딩과 {expectations.ReferencedFunctionCalls.Count}개 행을 그대로 옮겨야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.ReferencedFunctionMismatch,
@@ -4835,7 +4835,7 @@ namespace ReSet.Core.Services
                     + $"인자 `{expectedCall}` 행이 {facts.Count}개 있어야 하는데 {matchingRows}개 있습니다. "
                     + "함수·호출 위치·인자 칸은 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없고, "
                     + "문장 번호·라인을 바꿔 적을 수 없으며, 인자 원문을 요약할 수 없습니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.ReferencedFunctionMismatch,
@@ -4942,7 +4942,7 @@ namespace ReSet.Core.Services
                 var message =
                     $"기계 확정 잠금 힌트 표가 명세서에 없습니다. `{DmlScopeExtractor.LockHintTableHeading}` "
                     + $"헤딩과 {expectations.LockHints.Count}개 행을 그대로 옮겨야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.LockHintTableMissing,
@@ -4983,7 +4983,7 @@ namespace ReSet.Core.Services
                     + $"(별칭 {fact.Alias}, 범위 {fact.Scope}) 행이 없거나 힌트 값이 다릅니다. "
                     + $"힌트는 `{hintsToken}`을 그대로 옮겨야 합니다 - 종류만 적고 값을 생략하면 "
                     + "원문에서 찾을 수 없습니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.LockHintTableMissing,
@@ -5044,7 +5044,7 @@ namespace ReSet.Core.Services
                 var headingMessage =
                     $"기계 확정 객체 선언 표가 명세서에 없습니다. `{ObjectDeclarationExtractor.ObjectDeclarationTableHeading}` "
                     + $"헤딩과 `{fact.QualifiedName}`의 WITH 옵션(`{expectedOptionsText}`) 행을 그대로 옮겨야 합니다.";
-                result.Errors.Add(headingMessage);
+                result.Report(headingMessage);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.ObjectDeclarationTableMissing,
@@ -5078,7 +5078,7 @@ namespace ReSet.Core.Services
                 $"객체 선언 표에 `{fact.QualifiedName}`의 WITH 옵션(`{expectedOptionsText}`) 행이 없거나 "
                 + "값이 다릅니다. 표는 기계가 확정한 것이므로 옵션 종류만 적고 값(EXECUTE AS의 주체,"
                 + " INLINE의 ON/OFF 등)을 생략할 수 없습니다.";
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.ObjectDeclarationTableMissing,
@@ -5148,7 +5148,7 @@ namespace ReSet.Core.Services
                     $"DML 범위 표의 {fact.Operation} @ 라인 {fact.Line} 행에 ORDER BY 값(`{joined}`)이 "
                     + "없습니다. ORDER BY 칸은 기계가 확정한 것이므로 정렬 대상과 방향(DESC/ASC)까지 "
                     + "그대로 옮겨야 합니다 - \"(없음)\"으로 적거나 일부만 옮기면 원본에서 찾을 수 없습니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DmlScopeTableMissing,
@@ -5241,7 +5241,7 @@ namespace ReSet.Core.Services
                             + $"{headingOperation} {ordinal} 행에는 그 술어가 없습니다. "
                             + "설명 칸은 그 문장에 실재하는 조건만 적어야 합니다 - 다른 문장의 조건을 "
                             + "옮겨 적으면 이행이 대상 행 집합을 잘못 좁힙니다.";
-                        result.Errors.Add(message);
+                        result.Report(message);
                         result.DetailedErrors.Add(new DetailedError
                         {
                             Type = ErrorType.MappingDescriptionPredicateNotInStatement,
@@ -5303,7 +5303,7 @@ namespace ReSet.Core.Services
                     var missing =
                         $"기계 확정 실행 의미 표가 명세서에 없습니다. `{ExecutionSemanticsFacts.TableHeading}` "
                         + $"헤딩과 {expectations.ExecutionSemantics.Count}개 행을 그대로 옮겨야 합니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.ExecutionSemanticsTableMissing,
@@ -5337,7 +5337,7 @@ namespace ReSet.Core.Services
                         $"실행 의미 표에 `{fact.Kind}`(라인 {fact.Line}, 대상 {fact.Target}) 행이 없거나 "
                         + $"확정 사실이 다릅니다. `{fact.Fact}`를 그대로 옮겨야 합니다 - 이것은 미확정 "
                         + "사항이 아니라 확정값입니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.ExecutionSemanticsTableMissing,
@@ -5380,7 +5380,7 @@ namespace ReSet.Core.Services
                     var missing =
                         $"기계 확정 CASE 분기 표가 명세서에 없습니다. `{CaseBranchExtractor.TableHeading}` "
                         + $"헤딩과 {expectations.CaseBranches.Count}개 행을 그대로 옮겨야 합니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.CaseBranchTableMissing,
@@ -5414,7 +5414,7 @@ namespace ReSet.Core.Services
                         $"CASE 분기 표에 라인 {fact.Line}의 `{fact.Ordinal}` 행이 없거나 조건 원문이 "
                         + $"다릅니다. `{fact.Condition}`을 그대로 옮겨야 합니다 - 분기를 합치거나 "
                         + "비교 연산자를 말로 바꾸면 원문에서 찾을 수 없습니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.CaseBranchTableMissing,
@@ -5590,7 +5590,7 @@ namespace ReSet.Core.Services
                         $"기계 확정 트랜잭션 경계 표가 명세서에 없습니다. "
                         + $"`{TransactionBoundaryExtractor.TableHeading}` 헤딩과 "
                         + $"{expectations.TransactionBoundaries.Count}개 행을 그대로 옮겨야 합니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.TransactionBoundaryTableMissing,
@@ -5616,7 +5616,7 @@ namespace ReSet.Core.Services
                     var message =
                         $"트랜잭션 경계 표에 라인 {fact.Line}의 `{fact.Kind}` 행이 없습니다. "
                         + "배치 구현이 재현해야 할 경계이므로 산문으로 대신하거나 행을 합치면 안 됩니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.TransactionBoundaryTableMissing,
@@ -5665,7 +5665,7 @@ namespace ReSet.Core.Services
                         $"기계 확정 변수 대입 표가 명세서에 없습니다. "
                         + $"`{SetAssignmentExtractor.TableHeading}` 헤딩과 "
                         + $"{expectations.SetAssignments.Count}개 행을 그대로 옮겨야 합니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.SetAssignmentTableMissing,
@@ -5699,7 +5699,7 @@ namespace ReSet.Core.Services
                         $"변수 대입 표에 라인 {fact.Line}의 `{fact.Variable}` 행이 없거나 대입식 "
                         + $"원문이 다릅니다. `{fact.Expression}`을 그대로 옮겨야 합니다 - 대입식을 "
                         + "말로 바꾸거나 요약하면 원문에서 찾을 수 없습니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.SetAssignmentTableMissing,
@@ -5781,7 +5781,7 @@ namespace ReSet.Core.Services
                         + $"`{LocalVariableDeclarationExtractor.TableHeading}` 헤딩과 "
                         + $"{expectations.LocalVariableDeclarations.Count}개 행을 `## 파라미터 목록`에 "
                         + "그대로 옮겨야 합니다 — 표만 두고 헤딩을 빼면 리더가 그 표를 못 읽습니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.LocalVariableTableMismatch,
@@ -5811,7 +5811,7 @@ namespace ReSet.Core.Services
                         $"지역 변수 표에 `{fact.Name}` 행이 없거나 선언 타입이 다릅니다. "
                         + $"원본 DDL은 이 변수를 `{fact.DataType}`으로 선언합니다 — 그대로 옮겨야 합니다. "
                         + "타입을 이름으로 추측하면 금액 변수가 정수로 선언되어 절삭됩니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.LocalVariableTableMismatch,
@@ -5843,7 +5843,7 @@ namespace ReSet.Core.Services
                         $"지역 변수 표에 원본 DDL이 선언하지 않은 `{name}` 행이 있습니다. "
                         + "이 표는 기계 확정 전사표이므로 행을 더하면 안 됩니다 — "
                         + "원본에 없는 변수는 지우십시오.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.LocalVariableTableMismatch,
@@ -5891,7 +5891,7 @@ namespace ReSet.Core.Services
                         $"기계 확정 오류 코드 표가 명세서에 없습니다. "
                         + $"`{DmlScopeExtractor.ErrorCodeTableHeading}` 헤딩과 "
                         + $"{expectations.ErrorCodes.Count}개 행을 그대로 옮겨야 합니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.ErrorCodeTableMissing,
@@ -5925,7 +5925,7 @@ namespace ReSet.Core.Services
                         $"오류 코드 표에 `{statementToken}` 행이 없거나 오류 코드·설정 대상이 "
                         + $"다릅니다. `{fact.Code}`를 `{fact.Variable}`에 설정하는 행을 그대로 "
                         + "옮겨야 합니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.ErrorCodeTableMissing,
@@ -6068,7 +6068,7 @@ namespace ReSet.Core.Services
                         + "평문으로 무너집니다. 해당 행: \n" + rows[i].Trim() + "\n"
                         + (DescribeMergedRows(rows[i], headerCells)
                            ?? "헤더와 같은 칸 수로 옮기십시오.");
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.MachineTableShapeBroken,
@@ -6192,7 +6192,7 @@ namespace ReSet.Core.Services
                         $"같은 물리 테이블 `{kvp.Key}`이(가) `## CRUD 분석`의 한 절 안에서 " +
                         $"서로 다른 표기 {kvp.Value.Count}개로 나뉘어 기술되었습니다: " +
                         string.Join(", ", kvp.Value.Select(s => $"`{s}`")) + ".";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.TableIdentitySplit,
@@ -6421,7 +6421,7 @@ namespace ReSet.Core.Services
 
         private static void AddUpdateMappingError(ValidationResult result, string message)
         {
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.UpdateMappingMissing,
@@ -6561,7 +6561,7 @@ namespace ReSet.Core.Services
                 {
                     var msg = $"필수 섹션 헤더 '## {req}'가 누락되었습니다.";
                     Log.Warning("린트 에러 감지 (헤더 누락) - {Message}", msg);
-                    result.Errors.Add(msg);
+                    result.Report(msg);
                     result.DetailedErrors.Add(new DetailedError { Type = ErrorType.HeaderMissing, Message = msg });
                 }
             }
@@ -6584,7 +6584,7 @@ namespace ReSet.Core.Services
                         + $"{offendingLines.Count}자리에 있습니다: {shown}{more}. "
                         + "그 칸을 실제 값으로 채우십시오 - 한 자리만 고치고 끝내지 마십시오.";
                     Log.Warning("린트 에러 감지 (Anti-Shortcut 위반) - {Message}", msg);
-                    result.Errors.Add(msg);
+                    result.Report(msg);
                     result.DetailedErrors.Add(new DetailedError { Type = ErrorType.General, Message = msg });
                 }
             }
@@ -6798,7 +6798,7 @@ namespace ReSet.Core.Services
                                         "아래 컴파일 로그의 줄 번호와 캐럿(^)이 가리키는 자리를 고치십시오. " +
                                         RendererDiagnostics.TrimStackTrace(stderr);
                                     Log.Warning("Mermaid CLI 검증 문법 오류 감지 - Stderr: {Stderr}", stderr);
-                                    result.Errors.Add(message);
+                                    result.Report(message);
                                     result.DetailedErrors.Add(new DetailedError
                                     {
                                         Type = ErrorType.MermaidCliError,
@@ -6877,7 +6877,7 @@ namespace ReSet.Core.Services
                         {
                             var msg = $"Mermaid 다이어그램 내 노드 '{nodeId}'의 텍스트 '{labelText}'에 괄호나 특수문자가 포함되어 있으나 큰따옴표(\"\")로 감싸지지 않았습니다. 문법 오류를 막기 위해 '\"{labelText}\"' 형태로 큰따옴표를 감싸서 출력해 주십시오.";
                             Log.Warning("린트 에러 감지 (Mermaid 따옴표 누락) - Node: {NodeId}, Label: {LabelText}", nodeId, labelText);
-                            result.Errors.Add(msg);
+                            result.Report(msg);
                             result.DetailedErrors.Add(new DetailedError 
                             { 
                                 Type = ErrorType.MermaidQuoteMissing, 
@@ -10711,7 +10711,7 @@ namespace ReSet.Core.Services
                         "증적에는 그 배수만큼 부풀려진 금액이 남습니다. 양쪽을 각자의 부질의나 " +
                         "CTE에서 독립적으로 집계한 뒤 두 스칼라를 비교하십시오.";
 
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.VerificationCartesianComparison,
@@ -10797,7 +10797,7 @@ namespace ReSet.Core.Services
                         .Any(s => CreatesRowIn(s.Body, bare));
                     if (otherProducer) continue;
 
-                    result.Errors.Add(
+                    result.Report(
                         $"{code} 섹션이 `{table.Name}`을 `StepCode <> N'{code}'` 로 읽어 다른 단계가 "
                         + $"적재한 제어합계를 기대값으로 삼는데, 그 표에 행을 만드는 단계가 {code} "
                         + "자신뿐입니다 — 기대값이 항상 공집합이라 대조가 무조건 통과합니다. "
@@ -10904,7 +10904,7 @@ namespace ReSet.Core.Services
 
                 var message = BatchRunRowCreationMessage(table);
 
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.BatchRunRowNeverCreated,
@@ -11264,7 +11264,7 @@ namespace ReSet.Core.Services
                 "옮겨 온 힌트를 지우고, 격리는 SNAPSHOT 의무로만 말하십시오. " +
                 $"({SummarizeCodeTokenHits(hits)})";
 
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.NoLockHintInCode,
@@ -11307,7 +11307,7 @@ namespace ReSet.Core.Services
                 "메커니즘을 못박지 않고 모양만 보여 주는 옳은 표기이며, 한 문서는 한 표기로 " +
                 $"통일해야 합니다. ({SummarizeCodeTokenHits(hits)})";
 
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.FrameworkTypePrescribed,
@@ -11357,7 +11357,7 @@ namespace ReSet.Core.Services
                 "원본 오류 코드는 버리는 것이 아니라 앱의 실패 경로가 받아 기록하십시오 " +
                 $"(규칙 6-1·9). ({SummarizeCodeTokenHits(hits)})";
 
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.SqlSideControlFlow,
@@ -11420,7 +11420,7 @@ namespace ReSet.Core.Services
                 "규칙 4-1(`batch`·`batch_shadow` 스키마)이 다스립니다 - 프로시저는 그 규칙이 여는 " +
                 $"선택지가 아닙니다. ({SummarizeCodeTokenHits(hits)})";
 
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.NewDatabaseObjectDefined,
@@ -11502,7 +11502,7 @@ namespace ReSet.Core.Services
                 "적는 것으로는 결속이 되지 않으므로, 그 표에 쓰는 INSERT의 컬럼 목록이나 " +
                 $"UPDATE의 SET 절에서 `{column.Name}`을 대상으로 삼으십시오.";
 
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.LegacyReturnCodeNeverBound,

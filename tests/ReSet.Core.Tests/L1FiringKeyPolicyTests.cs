@@ -107,5 +107,43 @@ class C
 
             Assert.Empty(L1FiringKeyPolicyScanner.ScanSource(source, "Fake.cs"));
         }
+
+        // 새 위반은 실패한다. 이 게이트가 없으면 다음 사람이 Errors.Add 를 다시 쓰고
+        // 수렴 탐지기가 그 검사에 조용히 눈이 먼다.
+        [Fact]
+        public void NoNewDirectErrorsAdd()
+        {
+            var repoRoot = RepoPaths.FindRepoRoot();
+            var relative = "ReSet.Core/Services/MechanicalValidator.cs";
+            var absolute = System.IO.Path.Combine(repoRoot, "src", relative);
+
+            var actual = L1FiringKeyPolicyScanner.ScanFile(absolute, relative);
+            var allowed = ReadBaseline(System.IO.Path.Combine(
+                repoRoot, "tests", "ReSet.Core.Tests", "l1-firing-key-baseline.txt"));
+            var allowedCount = allowed.TryGetValue(relative, out var count) ? count : 0;
+
+            Assert.True(
+                actual.Count <= allowedCount,
+                $"{relative}: 허용 {allowedCount}건, 실제 {actual.Count}건.\n"
+                + "검사 키가 안 붙는 발화입니다 - result.Report(...) 를 쓰십시오.\n"
+                + string.Join("\n", actual.Select(o => $"  {o.RelativePath}:{o.Line} ({o.Member})")));
+        }
+
+        private static System.Collections.Generic.Dictionary<string, int> ReadBaseline(string path)
+        {
+            var result = new System.Collections.Generic.Dictionary<string, int>(System.StringComparer.Ordinal);
+            foreach (var raw in System.IO.File.ReadAllLines(path))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith("#", System.StringComparison.Ordinal)) continue;
+                var parts = line.Split('=', 2);
+                if (parts.Length == 2 && int.TryParse(parts[1].Trim(), out var count))
+                {
+                    result[parts[0].Trim()] = count;
+                }
+            }
+
+            return result;
+        }
     }
 }

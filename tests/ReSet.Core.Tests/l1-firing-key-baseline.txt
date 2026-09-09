@@ -1,0 +1,21 @@
+# 검사 키가 안 붙는 직접 `result.Errors.Add` 의 파일별 허용 개수.
+# 목록에 없는 파일은 0건을 뜻한다.
+#
+# 이 숫자는 부채다. 키가 없는 발화는 수렴 탐지기
+# (SelfReinforcingCheckTests)에 안 잡힌다 - 2026-09-09 에 재시도 6 회를 태운
+# CheckErrorCodeUniquenessClaim 이 정확히 그 자리에 있었다.
+#
+# 단방향이다: 새 위반은 실패, 내려가는 것은 자유.
+# cancellation-policy-baseline.txt 의 양방향 잠금을 흉내내지 마라 - 여기서는
+# 「0 이 목표」가 분명하므로 상한만 잠근다.
+#
+# ReSet.Core/Services/MechanicalValidator.cs=37 인 이유(2026-09-09 실측):
+# `perl -pi -e 's/result\.Errors\.Add\(/result.Report(/g'` 를 97 자리에 돌리자
+# `dotnet build --no-incremental` 이 37 곳에서 CS1061 을 냈다 - `StepValidationResult`
+# (12213 행)에는 `Report` 메서드가 없다. 이 타입은 `[CallerMemberName]` 통로가 없는
+# 별개 클래스로, 단계별 재시도 판정(`RegenerationCanFix`)에만 쓰이고 L1 검사 수렴
+# 탐지기가 보는 `ValidationResult.Firings` 와는 무관하다. 스캐너는 시맨틱 모델이 아니라
+# 구문 트리만 보므로(변수 타입을 모른다) 이 37 곳도 `<무엇>.Errors.Add(...)` 모양이라
+# 똑같이 위반으로 잡는다 - 오탐이 아니라 스캐너의 관할 밖(다른 타입)이다.
+# 이 37 곳은 손으로 `result.Errors.Add(` 로 되돌렸다(빌드 오류 CS1061 위치 그대로).
+ReSet.Core/Services/MechanicalValidator.cs=37
