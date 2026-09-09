@@ -1048,6 +1048,20 @@ namespace ReSet.Core.Services
                     {
                         Log.Warning("[파이프라인] L1 기계 검증 실패 - SP: {SpName}, 시도: {Attempt}, 오류 수: {ErrorCount}",
                             selectedOption, attempt, l1Result.Errors?.Count ?? 0);
+
+                        // [거부된 시도를 재료로 남긴다 - 2026-09-09]
+                        // 이 정보는 지금 gitignore 된 실행 로그에만 있어, 검사 결함을
+                        // 진단할 때마다 사람이 3 만 줄에서 오려 왔다. 산출물로 남기면
+                        // 승격기가 커밋 코퍼스로 옮기고 연속 서명 게이트가 센다.
+                        if (outputPaths != null && cacheObjectKey != null)
+                        {
+                            var docsDir = outputPaths.ResolveDocsDirectory(cacheObjectKey);
+                            L1AttemptLog.Append(
+                                System.IO.Directory.GetParent(docsDir)!.FullName,
+                                attempt,
+                                l1Result.Firings);
+                        }
+
                         _userInteraction.NotifyL1Errors(selectedOption, attempt, _maxAttempts, l1Result.Errors ?? new System.Collections.Generic.List<string>());
 
                         bool canRetry = _maxAttempts == -1 || attempt < _maxAttempts;
