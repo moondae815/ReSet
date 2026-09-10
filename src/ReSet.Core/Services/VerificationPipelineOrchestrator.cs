@@ -3615,11 +3615,20 @@ namespace ReSet.Core.Services
         /// 관찰한다 — L3 지목 재생성이 이 값들을 읽기 시작하면서(그 값을 읽는
         /// 캐시 재사용 로직) 이 세 값도 더 이상 블랙박스가 아니게 됐다.
         ///
-        /// <paramref name="Attempt"/> — [FINAL FIX - Critical] 이 상태를 만든 시도
-        /// 번호. 구제 채택이 재설계 이전 목차로 되돌아갈 때 새로 여는 판에 골격·
-        /// 섹션을 다시 기록하려면(<see cref="AdoptPlanStructureForRescueAsync"/>)
-        /// 그 본문을 "몇 차 시도가 만들었나"를 알아야 한다 — 그 값이 없으면
-        /// <c>PlanAttemptArtifact.Attempt</c>에 거짓 시도 번호를 적게 된다.
+        /// <paramref name="Attempt"/> — [FINAL FIX - Critical] 이 상태가 후보(최고점)로
+        /// 등록된 시도 번호. 구제 채택이 재설계 이전 목차로 되돌아갈 때 새로 여는
+        /// 판에 골격·섹션을 다시 기록하려면(<c>AdoptPlanStructureForRescueAsync</c>)
+        /// 이 값을 <c>PlanAttemptArtifact.Attempt</c>에 실어야 한다.
+        ///
+        /// [정정 2026-09-10 — 최종 리뷰 Minor] 정확한 것은 "이 상태가 등록된 시도"까지다
+        /// - <c>StepSections</c>의 각 섹션을 "몇 차 시도가 실제로 만들었는가"와는
+        /// 다를 수 있다. 지목 재생성은 지목되지 않은 단계를 동결한 채 넘기므로,
+        /// 이 상태가 나중 시도에서 갱신될 때도 동결된 옛 섹션은 그대로 딸려 온다.
+        /// 구제 재기록은 <c>StepSections</c> 전량을 이 <c>Attempt</c> 하나로 적으므로,
+        /// 그 회차가 실제로 만들지 않은(동결돼 넘어온) 섹션·재사용된 골격의
+        /// <c>Attempt</c>는 과대 표기될 수 있다 — 본문·<c>Sha256</c>은 옳고 영향은
+        /// 감사 정확도에 한정된다. 섹션마다 출처 회차를 따로 들고 다니려면 반경이
+        /// 커 고치지 않는다(사람 결정).
         /// </summary>
         private sealed record AdoptedGenerationState(
             int Attempt,
