@@ -2496,7 +2496,9 @@ namespace ReSet.Core.Services
 
             foreach (var expectation in expectations.UpdateColumns)
             {
-                var body = ResolveSectionBody(expectation, expectations.UpdateColumns, sections, result);
+                var body = ResolveSectionBody(
+                    expectation, expectations.UpdateColumns, sections, result,
+                    lines, crudStart + 1, crudEnd);
                 if (body == null) continue; // 오류(누락 또는 모호)는 ResolveSectionBody가 이미 기록했다.
 
                 var missing = expectation.Columns.Where(column => !ContainsToken(body, column)).ToList();
@@ -6382,7 +6384,10 @@ namespace ReSet.Core.Services
             UpdateColumnExpectation expectation,
             IReadOnlyList<UpdateColumnExpectation> allExpectations,
             IReadOnlyDictionary<string, string> sections,
-            ValidationResult result)
+            ValidationResult result,
+            IReadOnlyList<string> lines,
+            int scopeStart,
+            int scopeEnd)
         {
             var normalizedTarget = NormalizeQualifiedName(expectation.Table);
 
@@ -6408,9 +6413,27 @@ namespace ReSet.Core.Services
 
             if (candidateSections.Count == 0)
             {
+                // 표가 정말 없는가, 아니면 헤딩 레벨만 다른가. 실재하지 않는 부재를
+                // 주장하면 모델이 이미 쓴 표를 다시 쓴다 - FindUpdateHeadingAtWrongLevel 참고.
+                var wrongLevel = FindUpdateHeadingAtWrongLevel(
+                    lines, scopeStart, scopeEnd, expectation.Table);
+
+                if (wrongLevel != null)
+                {
+                    AddUpdateMappingError(result,
+                        $"UPDATE 대상 테이블 `{expectation.Table}`의 매핑 표가 헤딩 레벨 "
+                        + $"`{wrongLevel}`로 쓰여 있습니다 - 표 자체는 있습니다. "
+                        + $"`{UpdateHeadingPrefix}` 처럼 `#` 셋으로 고치십시오(그 표의 내용은 "
+                        + "그대로 두십시오). 레벨이 다르면 기계가 그 절을 못 찾아 "
+                        + "매핑 대조가 통째로 건너뛰어집니다.",
+                        expectation.Table);
+                    return null;
+                }
+
                 AddUpdateMappingError(result,
                     $"`## CRUD 분석`에 UPDATE 대상 테이블 `{expectation.Table}`의 매핑 표가 없습니다. " +
-                    $"정적 파서가 확정한 SET 대상 컬럼: {string.Join(", ", expectation.Columns)}");
+                    $"정적 파서가 확정한 SET 대상 컬럼: {string.Join(", ", expectation.Columns)}",
+                    expectation.Table);
                 return null;
             }
 
@@ -6418,18 +6441,66 @@ namespace ReSet.Core.Services
             var candidateNames = string.Join(", ", candidateSections.Select(kvp => $"`{kvp.Key}`"));
             AddUpdateMappingError(result,
                 $"UPDATE 대상 테이블 `{expectation.Table}`을(를) 마지막 파트 `{lastPart}`만으로는 특정할 수 없습니다 " +
-                $"(후보 섹션: {candidateNames}). 명세서의 UPDATE 대상 테이블 헤딩을 완전 한정 이름으로 구분해 작성해 주십시오.");
+                $"(후보 섹션: {candidateNames}). 명세서의 UPDATE 대상 테이블 헤딩을 완전 한정 이름으로 구분해 작성해 주십시오.",
+                expectation.Table);
             return null;
         }
 
-        private static void AddUpdateMappingError(ValidationResult result, string message)
+        private static void AddUpdateMappingError(
+            ValidationResult result, string message, string? attributionLexeme = null)
         {
             result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.UpdateMappingMissing,
-                Message = message
+                Message = message,
+                // [작성 계약 9] 이 메시지는 백틱 토큰을 여럿 싣는다(`## CRUD 분석`,
+                // 그리고 레벨 오류 갈래에서는 `####`·`###`). 귀속 어휘를 직접 싣지
+                // 않으면 ViolationLexemes 가 그 고정 문구를 문서에서 되찾으려 해
+                // 엉뚱한 자리를 지목한다. 되찾을 것은 테이블 이름 하나다.
+                Lexemes = attributionLexeme is { Length: > 0 }
+                    ? new[] { attributionLexeme }
+                    : null
             });
+        }
+
+        /// <summary>
+        /// `### UPDATE 대상 테이블:` 절이 하나도 안 잡혔을 때, 같은 구간에 <b>다른 헤딩
+        /// 레벨로 쓰인</b> 같은 이름의 절이 있는지 본다. 있으면 그 헤딩 원문을 낸다.
+        ///
+        /// [실측 - 2026-09-10 EXCEPTION_PROC 재생성, 6 회 소진] 그 판을 끝낸 것이 이
+        /// 검사인데 <b>매핑 표는 18 개가 내용까지 온전히 있었다</b> — `####`(레벨 4)로
+        /// 썼을 뿐이다. 그런데 문구는 「매핑 표가 없습니다」였다. 사실이 아닌 부재를
+        /// 주장하면 모델은 이미 쓴 표를 다시 쓰고, 진짜 원인(`#` 한 글자)은 문구
+        /// 어디에도 없어 헤딩은 동전 던지기로 남는다(시도 3·4 는 맞혔고 5 에서
+        /// 되돌아갔다). 같은 부류를 이미 고친 전례가 있다 - <c>1e362c0b</c>.
+        ///
+        /// **발화 자체는 옳다** — 계약이 레벨 3 이고 프롬프트가 그 예시를 준다. 고칠
+        /// 것은 판정이 아니라 문구다.
+        /// </summary>
+        private static string? FindUpdateHeadingAtWrongLevel(
+            IReadOnlyList<string> lines, int start, int end, string expectedTable)
+        {
+            const string Tail = "UPDATE 대상 테이블:";
+            var wanted = LastNamePart(expectedTable);
+
+            for (var i = start; i < end && i < lines.Count; i++)
+            {
+                var line = lines[i].TrimStart();
+                if (!line.StartsWith("#", StringComparison.Ordinal)) continue;
+
+                var hashes = line.Length - line.TrimStart('#').Length;
+                if (hashes == 3) continue;   // 계약대로 쓴 것은 CollectUpdateSections 가 이미 잡았다
+                var rest = line[hashes..].TrimStart();
+                if (!rest.StartsWith(Tail, StringComparison.Ordinal)) continue;
+
+                var table = NormalizeQualifiedName(ReadHeadingTable(rest));
+                if (!string.Equals(LastNamePart(table), wanted, StringComparison.OrdinalIgnoreCase)) continue;
+
+                return new string('#', hashes);
+            }
+
+            return null;
         }
 
         /// <summary>
