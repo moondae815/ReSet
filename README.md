@@ -159,6 +159,7 @@ ReSet/
     │           ├── metadata.json           # 전체 의존성이 덤프된 JSON
     │           ├── dependency-manifest.json # 의존 객체 식별자와 수집 경로 매니페스트
     │           ├── prompt-context.md       # AI에 실제 주입된 원문
+    │           ├── l1-attempts.json        # 시도별 L1 발화 누적 기록 (판·시도·검사 키·메시지)
     │           ├── deconstructed_logic.json # [Ollama 전용] 1단계 구조화 추론 백업본
     │           └── chunks/                 # [로컬 LLM 전용] AST 분할 생성 시 조각별 응답 캐시
     ├── Functions/                   # 재귀 분석된 UDF의 Spec.md 등 객체별 산출물
@@ -677,4 +678,4 @@ dotnet run --project src/ReSet.Cli
 dotnet test
 ```
 
-<!-- synced-through: d6904e80 -->
+<!-- synced-through: 1bc33ada -->

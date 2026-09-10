@@ -67,4 +67,4 @@ flowchart TD
 | §4.14 | 명세서 기반 요구사항 도출 (PRD Derivation) | [4.14-prd-derivation.md](./architecture/4.14-prd-derivation.md) |
 | §5 | TUI/CLI 부가 기능 및 복구 파이프라인 (§5.1–5.8) | [5-secondary-features.md](./architecture/5-secondary-features.md) |
 
-<!-- synced-through: 47d1c052 -->
+<!-- synced-through: 1bc33ada -->
