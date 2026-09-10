@@ -7009,8 +7009,18 @@ namespace ReSet.Core.Services
                                     // 입력)에 puppeteer 내부 프레임과 로컬 절대경로가 실렸다
                                     // (2026-09-07 축 A 감사, 실측 세 편). 진단부는 남고
                                     // 스택은 빠진다. 전체는 바로 아래 로그가 그대로 남긴다.
+                                    // [원인을 이름으로 말한다 - 2026-09-10]
+                                    // 렌더러 원문만 돌려주면 모델이 무엇을 고칠지 모른다.
+                                    // 캐시 v22 재생성 첫 판에서 UF_GET_INCVTAXRATE 가
+                                    // **글자까지 같은 오류**로 5 시도를 태우고 사람이 멈췄다 -
+                                    // 원인은 노드 ID 의 따옴표였는데 mmdc 는 `got 'STR'` 이라고만
+                                    // 말한다. 17da79de(「표가 없습니다」→「헤딩 레벨 ####」)와
+                                    // 같은 부류다. 원인을 못 대면 null 이라 종전 문구 그대로다 -
+                                    // 모르면 지어내지 않는다.
+                                    var diagnosis = MermaidSyntaxDiagnosis.Explain(mermaidContent);
                                     var message =
                                         "Mermaid 다이어그램이 렌더러에서 컴파일되지 않습니다. " +
+                                        (diagnosis is { Length: > 0 } ? diagnosis + " " : string.Empty) +
                                         "아래 컴파일 로그의 줄 번호와 캐럿(^)이 가리키는 자리를 고치십시오. " +
                                         RendererDiagnostics.TrimStackTrace(stderr);
                                     Log.Warning("Mermaid CLI 검증 문법 오류 감지 - Stderr: {Stderr}", stderr);
