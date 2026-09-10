@@ -351,7 +351,31 @@ namespace ReSet.Core.Services
         //
         //     갈래의 근거는 DatabasePlacementExtractor 가 `실행 의미` 표의 `DB 배치` 행에
         //     쓰는 것과 같다 - 프롬프트와 표가 갈리면 안 된다.
-        private const int CurrentCacheFormatVersion = 21;
+        // v22 (2026-09-10) - 축자 복사 블록 안의 **산문 지시**를 표 밖으로 뺐다.
+        //     Actor 프롬프트의 바이트가 바뀌었으므로 인상 대상이다. 옛 계약으로 만든
+        //     산출물은 그 지시를 문서 본문에 담고 있어(아래) 다음 감사에 결함으로 남는다.
+        //
+        //     [무엇이 잘못됐나] 명세서가 자기 작성자에게 지시하는 문장을 담아 배송됐다.
+        //     2026-09-10 EXCEPTION_PROC 2 판(`docs/Spec.md:720`)이 L1 을 통과해 나갔고
+        //     1 판(`:579`)도 같은 모양이다. 전수를 뜨니 한 블록이 아니라 부류였다 -
+        //     명세서 경로에서 지시문을 담은 프롬프트 줄이 36 자리인데
+        //     `PromptInstructionMarker` 를 단 것이 0 이었다(표지를 단 줄은 저장소 전체에
+        //     둘뿐이고 2026-08-18 수정이 그 둘만 고쳤다). 유출은 다섯 블록 · 배송본 10/31 편.
+        //
+        //     [2026-08-18 의 처방이 반만 맞았다] 「한국어 2 인칭을 영어로 되돌린다」로는
+        //     안 막힌다 - 모델이 **번역한다**. ObjectDeclarationIntroText 의
+        //     "Never write that schema binding could not be determined." 가
+        //     UF_GET_OUTYMD4REFUND:26 · UF_GET_COMM4CLIENT4PARTIALCANCEL:40 ·
+        //     UF_GET_COMM4PG 셋에 한국어로 실렸고, DmlScopeTableIntroText 도 하나 실렸다.
+        //     가르는 축은 언어가 아니라 **자리**다 - 유출 다섯이 전부 「이 표를 축자로
+        //     복사하라」 블록 안이었다.
+        //
+        //     [영향 객체가 0 이 아니다] 조건부 프롬프트 예외에 걸리지 않는다. 인트로 다섯 중
+        //     넷은 해당 표가 나는 모든 객체에 실리므로 프롬프트 바이트가 코퍼스 전반에서
+        //     바뀐다. 31 건 전량 재생성이 이 인상의 값이다.
+        //
+        //     번호는 main·feat/rejected-attempts-corpus 와 대조해 정했다 - 셋 다 21 이었다.
+        private const int CurrentCacheFormatVersion = 22;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",

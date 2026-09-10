@@ -212,7 +212,8 @@ namespace ReSet.Core.Tests
             // 자리를 더하면 이 수도 함께 올려야 한다(그때 이 주석을 읽게 된다).
             var counts = CountGuarded(File.ReadAllText(ValidatorSourcePath()), GuardedEntryPoints);
 
-            Assert.Equal(30, counts["Validate"]);
+            // 31: 2026-09-10 에 CheckDocumentInstructsItsAuthor 가 무조건 검사로 더해졌다.
+            Assert.Equal(31, counts["Validate"]);
             Assert.Equal(9, counts["ValidateConsolidated"]);
             Assert.Equal(26, counts["ValidateBatchStep"]);
         }

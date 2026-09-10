@@ -255,7 +255,12 @@ namespace ReSet.Core.Services
                     }
                     else
                     {
-                        staticAnalysisText.AppendLine("- 식별된 Linked Server 원격 참조 목록: 없음 (이 객체는 Linked Server 원격 참조를 사용하지 않습니다. 3부 식별자(Database.Schema.Table) 참조가 있다면 Linked Server가 아님을 CRUD 분석 표 및 개요에 사실 기반으로 구분해 설명하십시오. **어느 것을 크로스 데이터베이스라 부를지는 아래 3부 참조 목록이 소속 DB 안/밖으로 갈라 줍니다 - 그 갈래를 그대로 따르십시오.**)");
+                        // [사실과 지시를 가른다 - 2026-09-10 전수] 종전에는 사실("없음")과
+                        // 2인칭 지시("…설명하십시오", "…따르십시오")가 한 줄에 있었고,
+                        // 그 줄이 배송본에 실렸다(UF_GET_ROUND4VAT). 지시는 표지를 달아
+                        // 따로 낸다 - ObjectDeclarationIntroText 주석의 실측 참고.
+                        staticAnalysisText.AppendLine("- 식별된 Linked Server 원격 참조 목록: 없음 (이 객체는 Linked Server 원격 참조를 사용하지 않습니다.)");
+                        staticAnalysisText.AppendLine($"  {PromptInstructionMarker} If the object has three-part references (Database.Schema.Table), distinguish them from Linked Server references on the facts in `## CRUD 분석` and `## 개요`. Which of them count as cross-database is settled by the three-part reference list below, which splits them by inside/outside the owning DB - follow that split. Do not restate this instruction in the document.");
                     }
 
                     // UPDATE 헤딩 원문 병기(위)만으로는 UPDATE 문이 없는 SP(예: INSERT 전용)에
@@ -868,21 +873,43 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// 바뀌면 여기도 바꾼다. `IF n`은 이 표에 실리지 않으므로(잠금 힌트 표와 다른
         /// 점 - Operation 문서 참고) 여기서 정의하지 않는다.
         /// </summary>
+        // [인트로에는 표 취급만 남긴다 - 2026-09-10 전수]
+        // 종전 상수는 "Copy it verbatim"과 산문 금지("you must NOT write…", "never write…")를
+        // 함께 담았고, 모델이 그 블록을 복사 대상으로 읽어 **금지 문장을 한국어로 번역해
+        // 문서에 실었다** - UF_GET_OUTYMD4REFUND:92. 산문 규칙은 DmlScopeProseRule로 빼
+        // 표 밖에서 표지와 함께 준다. ObjectDeclarationIntroText의 주석 참고.
         private const string DmlScopeTableIntroText =
             "[CRITICAL SCOPE TABLE] The following table is MACHINE-DERIVED from the source DDL. " +
             "Copy it verbatim into `## CRUD 분석` under the exact heading shown, and make sure no " +
-            "sentence in your document contradicts it. Do NOT change any cell. In particular: when a " +
-            "row says the date parameter is NOT applied to the target, you must NOT write that the " +
-            "statement is limited to the settlement date. The 문장 column names the statement the row " +
-            "describes. Besides `INSERT n` / `UPDATE n` / `DELETE n` it can hold `SELECT n` - a " +
-            "standalone read outside any DML (a variable assignment, a cursor source query, a function " +
-            "body query). Such a row updates nothing, so describe it as a read; do not turn it into DML, " +
-            "and do not assume every row is a write just because the heading says DML. Numbering runs " +
-            "from 1 per statement kind. On those `SELECT n` rows the 대상 and 기준일 파라미터 적용 " +
-            "columns hold `—`, which means NO such judgment exists for that row - there is no update " +
-            "target to judge. `—` there is not `아니오`, not a negative finding, and not `unknown`: " +
-            "never write that such a statement leaves the date parameter unapplied, and never name a " +
-            "target for it.";
+            "sentence in your document contradicts it. Do NOT change any cell. The 문장 column names " +
+            "the statement the row describes. Besides `INSERT n` / `UPDATE n` / `DELETE n` it can hold " +
+            "`SELECT n` - a standalone read outside any DML (a variable assignment, a cursor source " +
+            "query, a function body query). Numbering runs from 1 per statement kind. On those " +
+            "`SELECT n` rows the 대상 and 기준일 파라미터 적용 columns hold `—`, which means NO such " +
+            "judgment exists for that row - there is no update target to judge.";
+
+        /// <summary>
+        /// DML 범위 표를 읽고 <b>산문을 쓸 때</b> 지켜야 할 것. 표 블록 밖에서
+        /// <see cref="PromptInstructionMarker"/>와 함께 준다 - 안에 두면 번역돼 배송된다.
+        /// </summary>
+        private const string DmlScopeProseRule =
+            "When a row in that table says the date parameter is NOT applied to the target, do not " +
+            "write that the statement is limited to the settlement date. A `SELECT n` row updates " +
+            "nothing, so describe it as a read; do not turn it into DML, and do not assume every row " +
+            "is a write just because the heading says DML. The `—` cells are not `아니오`, not a " +
+            "negative finding and not `unknown`: do not write that such a statement leaves the date " +
+            "parameter unapplied, and do not name a target for it. Do not restate this instruction in " +
+            "the document.";
+
+        /// <summary>
+        /// 하위 질의에서만 기준일을 쓰는 문장이 있을 때의 산문 규칙. 사실(어느 문장인가)은
+        /// 표 옆에 남기고 금지만 여기로 뺀다 - BuildDmlScopeTableLines의 주석 참고.
+        /// </summary>
+        private const string HiddenDateProseRule =
+            "The `아니오` cells in the 기준일 파라미터 적용 column mean only that the top-level WHERE " +
+            "does not carry the date parameter. Do not use that column as grounds for writing that " +
+            "such a statement does not use the settlement date. Do not restate this instruction in " +
+            "the document.";
 
         /// <summary>
         /// DML 범위 표 본문을 만든다. 헤딩 리터럴 `DmlScopeExtractor.DmlScopeTableHeading`은
@@ -1015,6 +1042,10 @@ Based on the structured reference context above, reverse engineer the stored pro
 
             lines.Add("");
 
+            // 산문 규칙은 표 밖에서 표지와 함께 준다 - DmlScopeTableIntroText 주석 참고.
+            lines.Add($"   {PromptInstructionMarker} {DmlScopeProseRule}");
+            lines.Add("");
+
             // [조건부 안내문 - 2026-08-23 9회차 ⚪ (A)] 이 문장은 모든 객체에 고정으로 붙어
             // 하위 질의가 없거나 기준일 파라미터 자체가 없는 4객체(COMM4PG4INTEREST·
             // PG_Client_CMRate_Ins·SUMMARY_ETC·AcqManual)에서 거짓이었다. `아니오` 행 중 실제로
@@ -1032,9 +1063,19 @@ Based on the structured reference context above, reverse engineer the stored pro
             }
             if (hiddenDateStatements.Count > 0)
             {
+                // [사실과 지시를 가른다 - 2026-09-10 전수] 종전에는 한 줄에 둘이 붙어
+                // 있었고, 모델이 그 줄을 통째로 문서에 옮겨 적었다 - 배송본 6편
+                // (EXCEPTION_PROC:329 · INS_EXTRA4PLCARD:147 · INS_EXTRA:183 · INS:135 ·
+                // PGCOLLECT_INS:105 · COMM_UPD:255). 꼬리 「…서술해서는 안 된다」가
+                // 납품 문서 안에서 자기 작성자에게 지시하는 문장이 됐다.
+                //
+                // 사실(어느 문장이 하위 질의에서 기준일을 쓰는가)은 모델이 알아야 하므로
+                // 표 옆에 남기고, 금지는 표 밖으로 빼 표지를 단다. 옮겨 적히더라도
+                // 사실 문장은 문서 내용으로 성립한다.
                 lines.Add("   > `기준일 파라미터 적용` 칸의 `아니오`는 **최상위 WHERE에 없다**는 뜻일 뿐이다. "
-                    + $"하위 질의·파생 테이블 안에서 기준일을 쓰는 문장({string.Join(", ", hiddenDateStatements)})이 있으므로, "
-                    + "이 칸을 근거로 \"이 문장은 기준일을 사용하지 않는다\"고 서술해서는 안 된다.");
+                    + $"하위 질의·파생 테이블 안에서 기준일을 쓰는 문장이 있다: {string.Join(", ", hiddenDateStatements)}.");
+                lines.Add("");
+                lines.Add($"   {PromptInstructionMarker} {HiddenDateProseRule}");
                 lines.Add("");
             }
             return lines;
@@ -1269,6 +1310,9 @@ Based on the structured reference context above, reverse engineer the stored pro
             }
 
             lines.Add("");
+            // 산문 규칙은 표 밖에서 표지와 함께 준다 - LockHintIntroText 주석 참고.
+            lines.Add($"   {PromptInstructionMarker} {LockHintProseRule}");
+            lines.Add("");
             return lines;
         }
 
@@ -1436,19 +1480,37 @@ Based on the structured reference context above, reverse engineer the stored pro
             var sharing = string.Join(" · ", shared.Select(g =>
                 g.Key + "→" + string.Join("·", g.Select(f => $"{f.Operation} {f.StatementOrdinal}"))));
 
+            // [사실과 지시를 가른다 - 2026-09-10 전수]
+            // 종전에는 한 줄에 둘이 붙어 있었고 2026-09-10 재생성 2판이 그 줄을 거의 축자로
+            // 옮겨 배송했다(EXCEPTION_PROC:720). 꼬리 「…표현해서는 안 되며」·「…서술해야
+            // 합니다」가 납품 문서 안에서 자기 작성자에게 지시하는 문장이 됐다. 1판(:579)도
+            // 같은 모양이었다.
+            //
+            // 사실(어느 문장이 어느 코드를 공유하는가 · 그래서 특정 불가)은 문서가 실제로
+            // 서술해야 할 내용이므로 한국어로 표 옆에 남긴다. 어휘 금지는 표 밖으로 빼
+            // 표지를 단다 - ObjectDeclarationIntroText 주석의 실측 참고.
             return new List<string>
             {
                 "",
                 "   [DUPLICATE CODES IN THIS TABLE] 위 표에는 같은 코드를 쓰는 문장이 있습니다: "
-                + sharing + ". 따라서 반환 코드만으로는 실패 지점을 특정할 수 없습니다. "
-                + "산문(개요·로직 흐름 요약·오류 처리 서술 등 문서 어디에서도)에서 이 코드들을 "
-                + "「고유」·「고유한」·「서로 다른」이라 부르지 마십시오 - 대부분의 코드가 실제로 "
-                + "다르더라도 그 낱말은 유일성 주장으로 읽힙니다. 「각 문장이 자기 코드를 "
-                + "대입한다」는 뜻으로 쓰려던 것이라도 마찬가지입니다. 대신 위 공유 관계를 "
-                + "그대로 적고 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 "
-                + "특정할 수 없다」는 사실을 서술하십시오."
+                + sharing + ". 따라서 반환 코드만으로는 실패 지점을 특정할 수 없습니다.",
+                "",
+                $"   {PromptInstructionMarker} {DuplicateErrorCodeProseRule}",
+                ""
             };
         }
+
+        /// <summary>
+        /// 중복 오류 코드가 있을 때의 산문 어휘 규칙. 표 블록 밖에서
+        /// <see cref="PromptInstructionMarker"/>와 함께 준다.
+        /// </summary>
+        private const string DuplicateErrorCodeProseRule =
+            "Nowhere in the document (개요, 로직 흐름 요약, error-handling prose, anywhere) may you " +
+            "call those return codes 「고유」, 「고유한」 or 「서로 다른」 - even though most of the " +
+            "codes really are distinct, those words read as a uniqueness claim, and that holds even " +
+            "when you mean only that each statement assigns its own code. Write the sharing relation " +
+            "shown above as a plain fact instead. Do not restate this instruction in the document, and " +
+            "do not write a sentence about what may or may not be written.";
 
         /// <summary>
         /// 「지역 변수」 표를 렌더한다. 헤딩 리터럴을 함께 실어 모델이 헤딩을 지어낼
@@ -1758,21 +1820,32 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// <c>DmlScopeExtractor.LockHintVisitor.SubqueryScope</c>의 문서에 있다 -
         /// 이 문구는 그것을 프롬프트 언어로 옮긴 것이므로, 그 문서가 바뀌면 여기도 바꾼다.
         /// </summary>
+        // [인트로에는 표 취급만 남긴다 - 2026-09-10 전수] 산문 금지는 LockHintProseRule로
+        // 뺐다. 이 블록은 아직 유출이 관측되지 않았지만 모양이 같다 - 「Copy this table
+        // verbatim」과 「describe them as reads」가 한 상수에 있으면 모델이 블록 전체를
+        // 복사 대상으로 읽는다(ObjectDeclarationIntroText·DmlScopeTableIntroText 실측).
         private const string LockHintIntroText =
             "[CRITICAL LOCK HINT TABLE] The following lock hints are MACHINE-DERIVED from the source DDL. " +
             "Copy this table verbatim into `## CRUD 분석` under the exact heading shown. " +
-            "A row with `(없음)` means that scan carries NO hint - do not omit those rows and do not " +
-            "generalise across statements: the same table may carry a hint in one statement and not another, " +
-            "or in one alias and not another within the same statement. The 문장 column names the statement " +
+            "A row with `(없음)` means that scan carries NO hint. The 문장 column names the statement " +
             "that owns the scan. Besides `INSERT n` / `UPDATE n` / `DELETE n` it can hold `SELECT n` - a " +
             "standalone SELECT outside any DML (a variable assignment, a cursor source, a function body) - " +
-            "and `IF n` - a query inside an IF predicate. Those two update nothing, so describe them as reads; " +
-            "do not turn them into DML. Numbering runs from 1 per statement kind. The 범위 column says where " +
-            "the scan sits, and it has exactly three values: `최상위` is a position the statement (or that IF " +
-            "predicate) scans directly, `파생` is inside a derived table in that FROM, and `하위 질의` is inside " +
-            "a query opened again within one of those positions - a subquery in a WHERE or in a JOIN ... ON, " +
-            "or a scalar subquery. `하위 질의` wins when a position is both. A scan in any of the three narrows " +
-            "or reads real rows, so none of them may be omitted or softened.";
+            "and `IF n` - a query inside an IF predicate. Numbering runs from 1 per statement kind. The " +
+            "범위 column says where the scan sits, and it has exactly three values: `최상위` is a position " +
+            "the statement (or that IF predicate) scans directly, `파생` is inside a derived table in that " +
+            "FROM, and `하위 질의` is inside a query opened again within one of those positions - a subquery " +
+            "in a WHERE or in a JOIN ... ON, or a scalar subquery. `하위 질의` wins when a position is both.";
+
+        /// <summary>
+        /// 잠금 힌트 표를 읽고 <b>산문을 쓸 때</b> 지켜야 할 것. 표 블록 밖에서
+        /// <see cref="PromptInstructionMarker"/>와 함께 준다.
+        /// </summary>
+        private const string LockHintProseRule =
+            "Keep every `(없음)` row and do not generalise across statements: the same table may carry a " +
+            "hint in one statement and not another, or in one alias and not another within the same " +
+            "statement. `SELECT n` and `IF n` rows update nothing, so describe them as reads; do not turn " +
+            "them into DML. A scan in any of the three 범위 values narrows or reads real rows, so none of " +
+            "them may be omitted or softened. Do not restate this instruction in the document.";
 
         /// <summary>
         /// 잠금 힌트 사실을 <b>표 출력 지시가 아니라 근거 재료</b>로 싣는다.
@@ -1866,15 +1939,34 @@ Based on the structured reference context above, reverse engineer the stored pro
                 "   | 객체 | WITH 옵션 |",
                 "   | :--- | :--- |",
                 $"   | {EscapeTableCell(fact.QualifiedName)} | {EscapeTableCell(options)} |",
+                "",
+                $"   {PromptInstructionMarker} {ObjectDeclarationProseRule}",
                 ""
             };
         }
 
+        // [왜 인트로와 산문 규칙을 갈랐는가 - 2026-09-10 전수]
+        // 종전 인트로는 "Copy this table verbatim"과 "Never write that schema binding
+        // could not be determined."를 한 상수에 담았고, 모델이 그 블록을 복사 대상으로
+        // 읽어 **뒷문장을 한국어로 번역해 문서에 실었다** - UF_GET_OUTYMD4REFUND:26 ·
+        // UF_GET_COMM4CLIENT4PARTIALCANCEL:40 · UF_GET_COMM4PG, 3편.
+        //
+        // 2026-08-18의 처방("한국어 2인칭을 영어로 되돌린다")은 반만 맞았다. 영어로 써도
+        // 모델이 번역한다 - 유출을 가르는 축은 언어가 아니라 **자리**다. 그래서 표를
+        // 다루는 지시(축자 복사)는 인트로에 남기고, 문서 산문에 무엇을 쓰지 말라는
+        // 지시는 표 밖으로 빼 PromptInstructionMarker를 단다.
+        //
+        // 표지를 단 줄이 안 새는 것은 실측이다 - 2026-08-18에 표지를 단 두 줄
+        // (아래 UPDATE 매핑 블록의 FROM 절 · 자기참조 SET)은 배송본 31편에서 지시부
+        // 유출 0이고, 표지 문자열 자체도 0이다.
         private const string ObjectDeclarationIntroText =
             "[CRITICAL OBJECT DECLARATION TABLE] The WITH options below are MACHINE-DERIVED from the " +
-            "CREATE statement. Copy this table verbatim into `## 개요` under the exact heading shown. " +
-            "`(없음)` settles the question: the object is NOT schema-bound. Never write that schema " +
-            "binding could not be determined.";
+            "CREATE statement. Copy this table verbatim into `## 개요` under the exact heading shown.";
+
+        private const string ObjectDeclarationProseRule =
+            "`(없음)` in that table settles the question: the object is NOT schema-bound. When you write " +
+            "the prose, state that as a fact - do not write that schema binding could not be determined. " +
+            "Do not restate this instruction in the document.";
 
         /// <summary>
         /// 「참조 함수」 표에서 호출문의 한정명(<paramref name="qualifiedName"/>)에 대응하는
@@ -1938,8 +2030,18 @@ Based on the structured reference context above, reverse engineer the stored pro
         /// 두 프롬프트 빌더가 이 상수 하나를 공유한다 - 문구를 강화할 때 한쪽만 고쳐질
         /// 위험을 없앤다.
         /// </summary>
+        // [인트로에는 표 취급만 남긴다 - 2026-09-10 전수] LockHintIntroText와 같은 이유다.
         private const string DerivedTableIntroText =
-            "[CRITICAL DERIVED TABLE TABLE] The following derived-table column definitions are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown. When a SET (or SELECT) expression references one of these aliases, you MUST NOT stop at the alias reference - the definition below is what determines the amount.";
+            "[CRITICAL DERIVED TABLE TABLE] The following derived-table column definitions are MACHINE-DERIVED from the source DDL. Copy this table verbatim into `## CRUD 분석` under the exact heading shown.";
+
+        /// <summary>
+        /// 파생 테이블 정의 표를 읽고 <b>산문을 쓸 때</b> 지켜야 할 것. 표 블록 밖에서
+        /// <see cref="PromptInstructionMarker"/>와 함께 준다.
+        /// </summary>
+        private const string DerivedTableProseRule =
+            "When a SET (or SELECT) expression references one of those aliases, do not stop at the alias " +
+            "reference - the definition in that table is what determines the amount. Do not restate this " +
+            "instruction in the document.";
 
         /// <summary>
         /// 파생 테이블 정의 표 본문을 만든다. 헤딩 리터럴
@@ -1965,6 +2067,9 @@ Based on the structured reference context above, reverse engineer the stored pro
                     $"   | {definition.Alias} | {definition.Column} | {EscapeTableCell(definition.Expression)} |");
             }
 
+            lines.Add("");
+            // 산문 규칙은 표 밖에서 표지와 함께 준다 - DerivedTableIntroText 주석 참고.
+            lines.Add($"   {PromptInstructionMarker} {DerivedTableProseRule}");
             lines.Add("");
             return lines;
         }
