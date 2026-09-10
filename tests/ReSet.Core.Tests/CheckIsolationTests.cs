@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using ReSet.Core.Models;
 using ReSet.Core.Services;
 
 namespace ReSet.Core.Tests
@@ -37,16 +39,29 @@ namespace ReSet.Core.Tests
         /// </summary>
         private sealed class Probe : MechanicalValidator
         {
-            private readonly string? _throwAt;
+            private readonly string? _throwOutsideAt;
+            private readonly string? _throwInsideAt;
 
-            public Probe(string? throwAt = null) => _throwAt = throwAt;
+            /// <param name="throwOutsideAt">
+            /// 이름이 걸리면 <c>SafeCheck</c> <b>바깥</b>에서 던진다 - <b>감싸지 않은 호출</b>이
+            /// 던지는 상황이다. <c>Validate</c>에서는 그 예외가 catch-all까지 올라간다.
+            /// </param>
+            /// <param name="throwInsideAt">
+            /// 이름이 걸리면 검사 <b>안</b>에서 던진다 - <b>감싼 호출</b>의 검사가 던지는
+            /// 상황이다. <c>SafeCheck</c>가 삼켜야 하고 나머지 검사는 계속 돌아야 한다.
+            /// </param>
+            public Probe(string? throwOutsideAt = null, string? throwInsideAt = null)
+            {
+                _throwOutsideAt = throwOutsideAt;
+                _throwInsideAt = throwInsideAt;
+            }
 
             public List<string?> SeenCheckExpressions { get; } = new();
 
             /// <summary>
             /// <c>SafeCheck</c>가 <c>protected</c>라 시험이 직접 못 부른다. 동작을 안 바꾸는
             /// 통로만 연다 - 여기서 이름을 재면 <b>파생 타입의 override</b>가 기준이 되어
-            /// 순환이므로, 이름은 제품 경로(<c>Validate</c>)에서만 잰다.
+            /// 순환이므로, 이름은 제품 경로에서만 잰다.
             /// </summary>
             public void RunThroughSafeCheck(Action work) => SafeCheck(work);
 
@@ -54,14 +69,25 @@ namespace ReSet.Core.Tests
             {
                 SeenCheckExpressions.Add(checkExpression);
 
-                if (_throwAt is not null && checkExpression is not null
-                    && checkExpression.Contains(_throwAt, StringComparison.Ordinal))
+                if (Matches(_throwOutsideAt, checkExpression))
                 {
-                    throw new InvalidOperationException("주입된 검사 예외 - " + _throwAt);
+                    throw new InvalidOperationException("주입 - 감싸지 않은 호출이 던진다: " + _throwOutsideAt);
+                }
+
+                if (Matches(_throwInsideAt, checkExpression))
+                {
+                    base.SafeCheck(
+                        () => throw new InvalidOperationException("주입 - 검사가 던진다: " + _throwInsideAt),
+                        checkExpression);
+                    return;
                 }
 
                 base.SafeCheck(check, checkExpression);
             }
+
+            private static bool Matches(string? needle, string? expression) =>
+                needle is not null && expression is not null
+                && expression.Contains(needle, StringComparison.Ordinal);
         }
 
         [Fact]
@@ -81,7 +107,7 @@ namespace ReSet.Core.Tests
             // ValidateMarkdownStructure(첫째)가 발화한 뒤 CheckMachineTableShape(셋째)가
             // 던진다. 종전 코드에서는 catch-all이 첫째의 발화까지 지우고 IsValid = true로
             // 통과시켰다.
-            var result = new Probe(throwAt: "CheckMachineTableShape").Validate(MissingRequiredHeaders);
+            var result = new Probe(throwOutsideAt: "CheckMachineTableShape").Validate(MissingRequiredHeaders);
 
             Assert.Contains(result.Errors, e => e.Contains("CRUD 분석", StringComparison.Ordinal));
             Assert.False(result.IsValid);
@@ -93,7 +119,7 @@ namespace ReSet.Core.Tests
             // DetailedErrors는 RegenerationScopeSelector.FromL1Errors와
             // BuildSuggestedPromptFix가 소비해 **재생성 범위와 프롬프트 처방**을 정한다.
             // Errors만 살리고 이쪽을 지우면 재생성이 무엇을 고쳐야 하는지 모른 채 돈다.
-            var result = new Probe(throwAt: "CheckMachineTableShape").Validate(MissingRequiredHeaders);
+            var result = new Probe(throwOutsideAt: "CheckMachineTableShape").Validate(MissingRequiredHeaders);
 
             Assert.NotEmpty(result.DetailedErrors);
         }
@@ -146,6 +172,137 @@ namespace ReSet.Core.Tests
             probe.Validate(MissingRequiredHeaders);
 
             Assert.Equal(3, probe.SeenCheckExpressions.Count);
+        }
+
+        [Fact]
+        public void Validate_WhenAnEarlyCheckThrowsInside_TheLaterChecksStillRun()
+        {
+            // 감싸기가 사 주는 것은 「다음 검사가 계속 돈다」이다 - B(지우지 않기)만으로는
+            // 못 산다. 첫째가 안에서 던져도 셋 다 돌아야 한다.
+            var probe = new Probe(throwInsideAt: "ValidateMarkdownStructure");
+
+            probe.Validate(MissingRequiredHeaders);
+
+            Assert.Equal(3, probe.SeenCheckExpressions.Count);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // ValidateConsolidated — Validate 와 같은 catch-all 을 가졌다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        /// <summary>필수 통합 H2 가 빠져 <c>ValidateMarkdownStructure</c>가 반드시 발화하는 계획서.</summary>
+        private const string ConsolidatedMissingHeaders = "## 개요\n내용\n";
+
+        [Fact]
+        public void ValidateConsolidated_WithoutAnyInjection_ReportsTheMissingHeaders()
+        {
+            // 정박 - 아래 시험의 전건.
+            var result = new MechanicalValidator().ValidateConsolidated(ConsolidatedMissingHeaders);
+
+            Assert.False(result.IsValid);
+            Assert.NotEmpty(result.Errors);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_WhenALaterCheckThrows_TheEarlierFindingSurvives()
+        {
+            // 종전에 이 메서드의 넷만 SafeCheck 밖이었고, 바로 아래 주석이 그 위험을
+            // 명시하면서 그 위의 넷을 안 감쌌다.
+            var before = new MechanicalValidator().ValidateConsolidated(ConsolidatedMissingHeaders).Errors.Count;
+
+            var result = new Probe(throwOutsideAt: "CheckControlTotalProducer")
+                .ValidateConsolidated(ConsolidatedMissingHeaders);
+
+            Assert.True(result.Errors.Count >= before,
+                $"주입 전 {before} 건이었는데 주입 후 {result.Errors.Count} 건이다 - 지워졌다.");
+            Assert.False(result.IsValid);
+        }
+
+        [Fact]
+        public void ValidateConsolidated_RunsEveryCheckThroughSafeCheck()
+        {
+            // [되돌림 판독 2026-09-10] 이 시험이 없을 때 이 메서드의 감싸기를 통째로
+            // 걷어내 보니 **빨개지는 시험이 0** 이었다 - 아홉 자리가 시험 없는 가지였다.
+            // 위 「먼저 찾은 것이 살아남는가」는 SafeCheck 바깥 주입이라 감싸든 말든
+            // 같은 결과를 낸다. 감싸기 자체를 재는 자는 이 시험이다.
+            var probe = new Probe();
+
+            probe.ValidateConsolidated(ConsolidatedMissingHeaders);
+
+            Assert.Equal(9, probe.SeenCheckExpressions.Count);
+            Assert.All(probe.SeenCheckExpressions, e => Assert.StartsWith("() => ", e!, StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void ValidateConsolidated_WhenAnEarlyCheckThrowsInside_TheLaterChecksStillRun()
+        {
+            // 감싸기가 사 주는 것은 「다음 검사가 계속 돈다」이다. 감싸지 않으면 예외가
+            // catch-all 로 점프해 뒤 검사들이 통째로 안 돈다 - B(지우지 않기)만으로는
+            // 그것까지 못 산다.
+            var probe = new Probe(throwInsideAt: "ValidateMarkdownStructure");
+
+            probe.ValidateConsolidated(ConsolidatedMissingHeaders);
+
+            Assert.Equal(9, probe.SeenCheckExpressions.Count);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // ValidateBatchStep — 고장 모양이 다르다. 지우는 catch-all 이 없어서
+        // 미보호 호출이 던지면 예외가 **호출자로 전파**된다.
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static BatchStepPlan BareStep() => new(
+            Code: "S01", Name: "S01 단계",
+            LegacyProcedures: new[] { "dbo.UP_NOT_REAL" },
+            TargetTables: Array.Empty<string>(),
+            ErrorCodes: Array.Empty<string>(), Chunkable: false,
+            SchemaTables: Array.Empty<string>());
+
+        private static StepValidationResult RunStep(MechanicalValidator validator) =>
+            validator.ValidateBatchStep(
+                "### S01 단계\n\n```sql\nSELECT 1;\n```\n",
+                BareStep(),
+                Array.Empty<string>(),
+                new Dictionary<string, SpecConditions>());
+
+        [Fact]
+        public void ValidateBatchStep_WhenACheckThrows_TheExceptionDoesNotEscapeToTheCaller()
+        {
+            // 이 메서드에는 지우는 catch-all 이 없다(try/catch 자체가 없다). 그래서 고장
+            // 모양이 Validate 와 다르다 - 감싸지 않은 검사가 던지면 예외가 호출자로 그대로
+            // 전파되고, 호출부(VerificationPipelineOrchestrator 의 ValidateBatchStep 호출)는
+            // 그것을 감싸지 않는다(바로 위 try/catch 는 그 호출 앞에서 닫힌다).
+            // 종전에 CheckForbiddenShortcuts 를 포함한 열 자리가 감싸지 않은 상태였다.
+            var validator = new Probe(throwInsideAt: "CheckForbiddenShortcuts");
+
+            var result = RunStep(validator);
+
+            Assert.NotNull(result);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_WhenAnUnwrappedCheckThrows_ItDoesEscape()
+        {
+            // 되돌림 판정의 반대편. 위 시험이 무엇을 사 주는지 이 시험이 말한다 -
+            // 감싸지 않으면(= SafeCheck 바깥에서 던지면) 예외가 실제로 탈출한다.
+            // 이 단언이 깨지면 위 시험은 감싸기가 없어도 통과하는 시험 없는 가지가 된다.
+            var validator = new Probe(throwOutsideAt: "CheckForbiddenShortcuts");
+
+            Assert.Throws<InvalidOperationException>(() => RunStep(validator));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_RunsEveryCheckThroughSafeCheck()
+        {
+            // 26 자리가 전부 SafeCheck 를 타는가. 이름이 안 실리는 자리가 하나라도 있으면
+            // 그 자리는 감싸지 않은 것이다.
+            var probe = new Probe();
+
+            RunStep(probe);
+
+            Assert.NotEmpty(probe.SeenCheckExpressions);
+            Assert.All(probe.SeenCheckExpressions, e => Assert.NotNull(e));
+            Assert.All(probe.SeenCheckExpressions, e => Assert.StartsWith("() => ", e!, StringComparison.Ordinal));
         }
     }
 }

@@ -309,13 +309,13 @@ namespace ReSet.Core.Services
                 // Mermaid 후처리 및 정화 적용
                 var cleansed = PostProcessMarkdown(markdown);
                 result.CleansedMarkdown = cleansed;
-                ValidateMarkdownStructure(cleansed, RequiredConsolidatedHeaders, result);
-                CheckVerificationCartesianComparison(cleansed, result);
-                CheckBatchRunRowCreation(cleansed, result);
-                CheckControlTotalProducer(cleansed, result);
-                // 자기 try/catch로 감싼다 - 이 catch-all은 검사 하나가 던지면 Errors를
-                // 통째로 지우고 소프트 패스시키므로(아래 catch 블록), 가드가 없으면 새
-                // 검사의 예외가 기존 검사 전부의 판정을 삼킨다.
+                // [2026-09-10 감사 [4]] 종전에 이 넷만 SafeCheck 밖에 있었다 - 바로 아래
+                // 주석이 「가드가 없으면 새 검사의 예외가 기존 검사 전부의 판정을 삼킨다」고
+                // 위험을 명시하면서 그 위의 넷을 안 감쌌다. 위험을 아는 자리가 더 위험했다.
+                SafeCheck(() => ValidateMarkdownStructure(cleansed, RequiredConsolidatedHeaders, result));
+                SafeCheck(() => CheckVerificationCartesianComparison(cleansed, result));
+                SafeCheck(() => CheckBatchRunRowCreation(cleansed, result));
+                SafeCheck(() => CheckControlTotalProducer(cleansed, result));
                 SafeCheck(() => CheckLegacyReturnCodeBinding(cleansed, result));
                 // SQL 거처 축(규칙 3-1·10). 조사 §5의 A급 셋이다 - 그때까지 이 세
                 // 규칙은 기계 강제가 0건이었고, 프롬프트와 Critic 두 층만으로 서
@@ -538,16 +538,21 @@ namespace ReSet.Core.Services
                 }
             }
 
-            CheckForbiddenShortcuts(stepMarkdown, step, result);
-            CheckNonCanonicalBatchSchema(stepMarkdown, step, result);
-            CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result, allSteps);
-            CheckMissingConditionColumns(stepMarkdown, step, conditionColumnsByProcedure, result);
-            CheckStepInterface(stepMarkdown, step, stepInterfaces, result);
-            CheckBatchControlVocabulary(stepMarkdown, step, result);
-            CheckBatchControlRowOrigin(stepMarkdown, step, result);
-            CheckFirstStepRowCreation(stepMarkdown, step, runRowOwnedTables, result);
-            CheckShadowBackupContract(stepMarkdown, step, result);
-            CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
+            // [2026-09-10 감사 [4]] 아래 열은 종전에 SafeCheck 밖이었다. 이 메서드에는
+            // 지우는 catch-all이 없어(try/catch 자체가 없다) 고장 모양이 Validate와
+            // 다르다 - 던지면 예외가 호출자로 그대로 전파되고, 호출부
+            // (VerificationPipelineOrchestrator의 ValidateBatchStep 호출)는 그것을
+            // 감싸지 않는다. 나머지 16자리와 같은 관례로 맞춘다.
+            SafeCheck(() => CheckForbiddenShortcuts(stepMarkdown, step, result));
+            SafeCheck(() => CheckNonCanonicalBatchSchema(stepMarkdown, step, result));
+            SafeCheck(() => CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result, allSteps));
+            SafeCheck(() => CheckMissingConditionColumns(stepMarkdown, step, conditionColumnsByProcedure, result));
+            SafeCheck(() => CheckStepInterface(stepMarkdown, step, stepInterfaces, result));
+            SafeCheck(() => CheckBatchControlVocabulary(stepMarkdown, step, result));
+            SafeCheck(() => CheckBatchControlRowOrigin(stepMarkdown, step, result));
+            SafeCheck(() => CheckFirstStepRowCreation(stepMarkdown, step, runRowOwnedTables, result));
+            SafeCheck(() => CheckShadowBackupContract(stepMarkdown, step, result));
+            SafeCheck(() => CheckCatchDiscardsReturnCode(stepMarkdown, step, result));
             SafeCheck(() => CheckStepIdInitialValue(stepMarkdown, step, result));
             SafeCheck(() => CheckDuplicateProjectionNames(stepMarkdown, result));
             SafeCheck(() => CheckChunkUpperBoundProgress(stepMarkdown, result));
