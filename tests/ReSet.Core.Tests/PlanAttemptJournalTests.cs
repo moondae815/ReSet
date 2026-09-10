@@ -241,5 +241,100 @@ namespace ReSet.Core.Tests
                 .RootElement.GetProperty("Steps");
             Assert.Equal(32, steps.EnumerateObject().Count());
         }
+
+        // 리뷰는 누적이 아니라 시계열이라 회차마다 별개 파일이다. feedbackHistory 가
+        // 최근 3라운드만 들고 있으므로(CriticFeedbackLog.MaxRetainedRounds) 디스크가
+        // 메모리보다 오래 기억하는 유일한 자리다.
+        [Fact]
+        public void RecordReview_WritesOneFilePerAttempt()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+
+            journal.RecordReview(1, new ReviewResult
+            {
+                HasDefects = true,
+                FeedbackComment = "S02 의 청크 경계가 최대 키 행을 빠뜨립니다",
+                DefectiveSteps = { "S02" },
+                ScoreAccuracy = 3, ScoreCrud = 4, ScoreInterface = 5,
+                ScoreException = 6, ScoreReadability = 7
+            });
+            journal.RecordReview(2, new ReviewResult { HasDefects = false });
+
+            var dir = journal.CurrentRunDirectory!;
+            var first = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(dir, "reviews", "attempt-01.json"))).RootElement;
+
+            Assert.Equal(1, first.GetProperty("Attempt").GetInt32());
+            Assert.True(first.GetProperty("HasDefects").GetBoolean());
+            Assert.Equal(
+                "S02 의 청크 경계가 최대 키 행을 빠뜨립니다",
+                first.GetProperty("FeedbackComment").GetString());
+            Assert.Equal("S02", first.GetProperty("DefectiveSteps")[0].GetString());
+            Assert.Equal(3, first.GetProperty("ScoreAccuracy").GetInt32());
+            Assert.Equal(50, first.GetProperty("NormalizedScore").GetInt32());
+
+            Assert.True(File.Exists(Path.Combine(dir, "reviews", "attempt-02.json")));
+        }
+
+        // WritesOneFilePerAttempt 는 축 점수·코멘트만 지목한다. AxisThresholdForced 는
+        // "결함 없음" 신고를 오케스트레이터가 축 미달로 뒤집은 유일한 신호이고,
+        // SkeletonDefective·StructureDefective 는 재생성 범위(단계 재작성 vs 목차
+        // 재설계)를 가르는 값이다 - 셋 다 조용히 빠져도 그 시험은 못 잡는다.
+        // ThinkingText 는 반대 방향 대칭 - PlanAttemptReview 의 클래스 주석이
+        // "그대로 직렬화하면 수십 KB 로 붇는다"며 일부러 뺀 필드인데, 빼먹었다는
+        // 사실 자체를 재는 시험이 없으면 나중에 조용히 되살아나도 아무도 모른다.
+        [Fact]
+        public void RecordReview_CapturesTheAxisGateFlagsAndOmitsThinkingText()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+
+            journal.RecordReview(1, new ReviewResult
+            {
+                HasDefects = true,
+                SkeletonDefective = true,
+                StructureDefective = true,
+                AxisThresholdForced = true,
+                ThinkingText = new string('가', 50_000)
+            });
+
+            var raw = File.ReadAllText(Path.Combine(
+                journal.CurrentRunDirectory!, "reviews", "attempt-01.json"));
+            var review = JsonDocument.Parse(raw).RootElement;
+
+            Assert.True(review.GetProperty("SkeletonDefective").GetBoolean());
+            Assert.True(review.GetProperty("StructureDefective").GetBoolean());
+            Assert.True(review.GetProperty("AxisThresholdForced").GetBoolean());
+            Assert.DoesNotContain("ThinkingText", raw);
+        }
+
+        [Fact]
+        public void RecordReview_WithoutAnOpenRun_DoesNothingAndDoesNotThrow()
+        {
+            var journal = NewJournal();
+
+            journal.RecordReview(1, new ReviewResult { HasDefects = false });
+
+            Assert.Null(journal.CurrentRunDirectory);
+        }
+
+        // review == null 가드는 한 줄이라 지워도 겉으로는 안 죽는다 - RecordReview
+        // 본문이 일반 catch 로 NullReferenceException 을 삼키기 때문이다(소프트페일).
+        // 다만 가드 없이 지나가면 review.HasDefects 를 읽기 전에 이미
+        // Directory.CreateDirectory(reviewsDir) 를 실행해 빈 reviews/ 디렉터리를
+        // 남긴다 - ComputeSha256 의 sentinel 분기(리뷰 라운드 1)와 같은 모양의
+        // "지워도 통과"를 이 자리에서 막는다.
+        [Fact]
+        public void RecordReview_WithNullReview_DoesNothingAndDoesNotCreateReviewsDirectory()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+
+            journal.RecordReview(1, null!);
+
+            Assert.False(Directory.Exists(
+                Path.Combine(journal.CurrentRunDirectory!, "reviews")));
+        }
     }
 }

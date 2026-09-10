@@ -239,6 +239,72 @@ namespace ReSet.Core.Services
             }
         }
 
+        /// <summary>
+        /// 회차 하나의 채점 결과. <c>ReviewResult</c> 를 그대로 직렬화하지 않는 이유:
+        /// 그 타입에는 <c>ThinkingText</c> 가 실려 있어 파일이 수십 KB 로 붇고,
+        /// <c>NormalizedScore</c> 는 계산 속성이라 직렬화에서 빠질 수 있다. 무엇이
+        /// 남는지 이 자리에서 못박는다.
+        /// </summary>
+        private sealed record PlanAttemptReview(
+            int Attempt,
+            bool HasDefects,
+            string? FeedbackComment,
+            IReadOnlyList<string> DefectiveSteps,
+            bool SkeletonDefective,
+            bool StructureDefective,
+            bool AxisThresholdForced,
+            int ScoreAccuracy,
+            int ScoreCrud,
+            int ScoreInterface,
+            int ScoreException,
+            int ScoreReadability,
+            int NormalizedScore);
+
+        /// <summary>
+        /// 회차 하나의 리뷰를 남긴다. 골격·섹션과 달리 <b>최신 하나로 덮지 않고
+        /// 회차마다 별개 파일이다</b>(설계서 §4-2) — 리뷰는 누적이 아니라 시계열이고,
+        /// <c>feedbackHistory</c> 가 최근 3라운드만 들고 있어 디스크가 메모리보다
+        /// 오래 기억하는 유일한 자리이기 때문이다. manifest 에는 안 실린다 - "최신
+        /// 하나"가 아니므로 골격·섹션의 인덱싱 계약이 안 맞는다.
+        /// </summary>
+        public void RecordReview(int attempt, ReviewResult review)
+        {
+            if (review == null) return;
+
+            lock (_gate)
+            {
+                if (_runDirectory == null) return;
+                try
+                {
+                    var reviewsDir = Path.Combine(_runDirectory, "reviews");
+                    Directory.CreateDirectory(reviewsDir);
+
+                    var payload = new PlanAttemptReview(
+                        attempt,
+                        review.HasDefects,
+                        review.FeedbackComment,
+                        review.DefectiveSteps?.ToList() ?? new List<string>(),
+                        review.SkeletonDefective,
+                        review.StructureDefective,
+                        review.AxisThresholdForced,
+                        review.ScoreAccuracy,
+                        review.ScoreCrud,
+                        review.ScoreInterface,
+                        review.ScoreException,
+                        review.ScoreReadability,
+                        review.NormalizedScore);
+
+                    WriteAtomic(
+                        Path.Combine(reviewsDir, $"attempt-{attempt:D2}.json"),
+                        JsonSerializer.Serialize(payload, Options));
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "[PlanAttemptJournal] 리뷰를 남기지 못했습니다 - 시도: {Attempt}", attempt);
+                }
+            }
+        }
+
         public static string ComputeSha256(string input)
         {
             // null 만 가드한다 - 빈 문자열은 "미계산" sentinel 이 아니라 실제 빈
