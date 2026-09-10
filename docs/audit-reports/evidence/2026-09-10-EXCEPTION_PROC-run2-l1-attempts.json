@@ -1,0 +1,42 @@
+[
+  {
+    "Attempt": 1,
+    "CheckKey": "ValidateMermaid",
+    "Message": "Mermaid 다이어그램이 렌더러에서 컴파일되지 않습니다. 아래 컴파일 로그의 줄 번호와 캐럿(^)이 가리키는 자리를 고치십시오. Error: Parse error on line 6:\n...1 -->E1{\"\\\"@@ERROR\\\" 대비 0 아님\"}    E1 --\n-----------------------^\nExpecting 'SQE', 'DOUBLECIRCLEEND', 'PE', '-)', 'STADIUMEND', 'SUBROUTINEEND', 'PIPE', 'CYLINDEREND', 'DIAMOND_STOP', 'TAGEND', 'TRAPEND', 'INVTRAPEND', 'UNICODE_TEXT', 'TEXT', 'TAGSTART', got 'STR'"
+  },
+  {
+    "Attempt": 1,
+    "CheckKey": "CheckErrorCodeUniquenessClaim",
+    "Message": "명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 중복된 코드 -1, -2이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 특정할 수 없습니다. 공유 관계: -1→UPDATE 3·UPDATE 4 · -2→UPDATE 5·UPDATE 6. 고치는 법: 그 문장에서 「고유」·「서로 다른」을 빼고, 위 공유 관계를 그대로 적어 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. 해당 서술 1자리 - 하나만 고치고 끝내지 마십시오: \"… TRAN`, `@po_intRetVal`에 고유 음수 코드 대입, `RETURN`으로 즉시 프로시저를 종료한다(트랜잭션 내 이전 UPDATE들…\""
+  },
+  {
+    "Attempt": 2,
+    "CheckKey": "AddUpdateMappingError",
+    "Message": "UPDATE 대상 테이블 `SETTLE_POQ_DB.dbo.TSettleMst`의 매핑 표가 헤딩 레벨 `####`로 쓰여 있습니다 - 표 자체는 있습니다. `### UPDATE 대상 테이블:` 처럼 `#` 셋으로 고치십시오(그 표의 내용은 그대로 두십시오). 레벨이 다르면 기계가 그 절을 못 찾아 매핑 대조가 통째로 건너뛰어집니다."
+  },
+  {
+    "Attempt": 2,
+    "CheckKey": "CheckErrorCodeUniquenessClaim",
+    "Message": "명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 중복된 코드 -1, -2이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 특정할 수 없습니다. 공유 관계: -1→UPDATE 3·UPDATE 4 · -2→UPDATE 5·UPDATE 6. 고치는 법: 그 문장에서 「고유」·「서로 다른」을 빼고, 위 공유 관계를 그대로 적어 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. 해당 서술 1자리 - 하나만 고치고 끝내지 마십시오: \"대부분의 오류 코드가 서로 다른 값을 갖지만, 이 두 쌍은 같은 코드를 공유하므로 이 문서에서는 오류 코드들을 \"고유하다\"거나 \"서로 다르다\"고…\""
+  },
+  {
+    "Attempt": 3,
+    "CheckKey": "ValidateMermaid",
+    "Message": "Mermaid 다이어그램이 렌더러에서 컴파일되지 않습니다. 아래 컴파일 로그의 줄 번호와 캐럿(^)이 가리키는 자리를 고치십시오. Error: Parse error on line 6:\n...-->CHK1[\"\\\"@@ERROR\\\" <> 0 확인\"]    CHK1 \n-----------------------^\nExpecting 'SQE', 'DOUBLECIRCLEEND', 'PE', '-)', 'STADIUMEND', 'SUBROUTINEEND', 'PIPE', 'CYLINDEREND', 'DIAMOND_STOP', 'TAGEND', 'TRAPEND', 'INVTRAPEND', 'UNICODE_TEXT', 'TEXT', 'TAGSTART', got 'STR'"
+  },
+  {
+    "Attempt": 3,
+    "CheckKey": "CheckErrorCodeUniquenessClaim",
+    "Message": "명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 중복된 코드 -1, -2이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 특정할 수 없습니다. 공유 관계: -1→UPDATE 3·UPDATE 4 · -2→UPDATE 5·UPDATE 6. 고치는 법: 그 문장에서 「고유」·「서로 다른」을 빼고, 위 공유 관계를 그대로 적어 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. 해당 서술 1자리 - 하나만 고치고 끝내지 마십시오: \"… `@po_intRetVal`에 해당 문장의 고유 음수 코드 대입 → `RETURN`으로 즉시 종료하며, 이후 문장은 실행되지 않는다\""
+  },
+  {
+    "Attempt": 4,
+    "CheckKey": "CheckErrorCodeUniquenessClaim",
+    "Message": "명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 중복된 코드 -1, -2이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 특정할 수 없습니다. 공유 관계: -1→UPDATE 3·UPDATE 4 · -2→UPDATE 5·UPDATE 6. 고치는 법: 그 문장에서 「고유」·「서로 다른」을 빼고, 위 공유 관계를 그대로 적어 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. 해당 서술 2자리 - 하나만 고치고 끝내지 마십시오: \"…` 후 `@po_intRetVal`에 문장별 고유 코드를 설정하고 `RETURN` 합니다\" · \"…→ `@po_intRetVal`에 해당 문장 고유 코드 SET → `RETURN` 순으로 즉시 종료합니다\""
+  },
+  {
+    "Attempt": 5,
+    "CheckKey": "CheckErrorCodeUniquenessClaim",
+    "Message": "명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 중복된 코드 -1, -2이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 특정할 수 없습니다. 공유 관계: -1→UPDATE 3·UPDATE 4 · -2→UPDATE 5·UPDATE 6. 고치는 법: 그 문장에서 「고유」·「서로 다른」을 빼고, 위 공유 관계를 그대로 적어 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. 해당 서술 3자리 - 하나만 고치고 끝내지 마십시오: \"…후 `@po_intRetVal`에 해당 단계 고유의 음수 코드를 대입하고 즉시 `RETURN`합니다\" · \"실패 시 각 UPDATE 단계별 고유 음수값이 대입되며, 성공 경로에서는 명시적으로 0이 대입되지 않습니다(위 개요의 모순 사항 참조)\" · \"…`ROLLBACK TRAN` → 해당 단계의 고유 음수 코드를 `@po_intRetVal`에 대입 → `RETURN`(값 없이)으로 즉시 종료합…\""
+  }
+]
