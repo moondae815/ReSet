@@ -19,6 +19,14 @@ namespace ReSet.Cli
         IReadOnlyList<string> FailedToParse);
 
     /// <summary>
+    /// `--sp` 로 받은 진입점 이름을 저장된 명세서 경로로 옮긴 결과.
+    /// 찾지 못한 이름을 따로 담아 호출부가 조용히 진행하지 못하게 한다.
+    /// </summary>
+    public sealed record EntryPointResolution(
+        IReadOnlyList<string> SpecPaths,
+        IReadOnlyList<string> NotFound);
+
+    /// <summary>
     /// 통합 배치 설계의 스텝 후보를 선별하고 각 스텝의 분석 메타데이터를 복원한다.
     /// </summary>
     public static class BatchStepCatalog
@@ -29,6 +37,66 @@ namespace ReSet.Cli
         /// 배치 스텝 자격이 있는 명세서만 outputRoot 기준 상대 경로로 돌려준다.
         /// 배치 스텝은 프로시저이므로 UDF와 Job 검증 중간산출물은 제외한다.
         /// </summary>
+
+        /// <summary>
+        /// `--sp` 로 받은 진입점 이름을 저장된 명세서의 outputRoot 기준 상대 경로로 옮긴다.
+        /// 나열 순서를 그대로 보존하고(그 순서가 배치 스텝의 실행 순서다), 명세서를 찾지
+        /// 못한 이름은 <see cref="EntryPointResolution.NotFound"/> 에 담아 돌려준다.
+        ///
+        /// 경로를 이름에서 손조립하지 않고 <see cref="FindStepCandidates"/> 결과를 대조하는
+        /// 이유: 디렉터리 인코딩 규칙이 두 벌이 되면 캐시 조회 경로와 갈라진다. 스텝 자격
+        /// 판정(프로시저만)도 그 메서드가 이미 소유하므로 여기서 다시 적지 않는다.
+        /// </summary>
+        public static EntryPointResolution ResolveEntryPointSpecPaths(
+            string outputRoot, IReadOnlyList<string> identifiers)
+        {
+            var byIdentifier = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var candidate in FindStepCandidates(outputRoot))
+            {
+                var identifier = ExtractProcedureIdentifier(candidate);
+                if (identifier == null)
+                {
+                    continue;
+                }
+
+                // 분석 루트 DB의 명세서가 정본이다. 외부 DB 사본을 집으면 스텝이 다른
+                // DB의 로직을 가리킨다. 먼저 담긴 것을 이기지 못하게 두되, 이미 담긴
+                // 것이 외부 DB이고 새 후보가 현재 DB면 바꾼다.
+                if (byIdentifier.TryGetValue(identifier, out var existing)
+                    && !IsExternalDatabaseSpec(existing))
+                {
+                    continue;
+                }
+
+                byIdentifier[identifier] = candidate;
+            }
+
+            var specPaths = new List<string>();
+            var notFound = new List<string>();
+
+            foreach (var identifier in identifiers)
+            {
+                var wanted = identifier?.Trim() ?? string.Empty;
+                if (wanted.Length > 0 && byIdentifier.TryGetValue(wanted, out var specPath))
+                {
+                    specPaths.Add(specPath);
+                }
+                else
+                {
+                    notFound.Add(identifier ?? string.Empty);
+                }
+            }
+
+            return new EntryPointResolution(specPaths, notFound);
+        }
+
+        private static bool IsExternalDatabaseSpec(string relativePath) =>
+            relativePath
+                .Replace(Path.DirectorySeparatorChar, '/')
+                .Replace(Path.AltDirectorySeparatorChar, '/')
+                .StartsWith("External/", StringComparison.OrdinalIgnoreCase);
+
         public static IReadOnlyList<string> FindStepCandidates(string outputRoot)
         {
             if (string.IsNullOrWhiteSpace(outputRoot) || !Directory.Exists(outputRoot))

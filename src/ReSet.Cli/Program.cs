@@ -205,9 +205,292 @@ namespace ReSet.Cli
                 {
                     cliArgs.RunSweep = true;
                 }
+                else if (arg.Equals("--plan-only", StringComparison.OrdinalIgnoreCase))
+                {
+                    cliArgs.PlanOnly = true;
+                }
             }
 
+            ValidatePlanOnly(cliArgs);
+
             return cliArgs;
+        }
+
+
+        /// <summary>
+        /// `--plan-only` 한 판. 이미 저장된 명세서만 재료로 삼아 통합 배치 전환 계획서와
+        /// 지시서 번들을 만든다 — SP를 다시 분석하지 않고 DB에도 붙지 않는다.
+        ///
+        /// 재료를 모으는 방식만 `--all`/`--sp` 경로와 다르고, 모은 뒤는
+        /// <see cref="RunConsolidatedJobAsync"/> 한 곳으로 합류한다.
+        /// </summary>
+        private static async Task RunPlanOnlyAsync(
+            CliArgs cliArgs,
+            string targetLanguage,
+            string provider,
+            string modelName,
+            string? consolidatorEffort,
+            string outputDir,
+            string resolvedDatabase,
+            VerificationPipelineOrchestrator orchestrator,
+            IMetadataExporter metadataExporter,
+            IConfiguration configuration,
+            IAiClient aiClient,
+            bool isCodegenEnabled,
+            string selectedEngine,
+            CancellationTokenSource globalCts)
+        {
+            var jobName = cliArgs.JobName!;
+            AnsiConsole.MarkupLine(
+                $"\n[bold blue]=== 저장된 명세서로 통합 배치 전환 계획 수립 시작 ({Markup.Escape(jobName)}) ===[/]");
+
+            using var activeCts = new CancellationTokenSource();
+            _currentCts = activeCts;
+
+            try
+            {
+                var materials = await PlanOnlyMaterialLoader.LoadAsync(
+                    outputDir, cliArgs.TargetProcedures, activeCts.Token);
+
+                // 조용히 빼면 사용자는 자기가 지정한 스텝이 다 들어간 줄 안다. 재료가
+                // 모자란 계획서를 만드는 것보다 여기서 멈추는 편이 싸다.
+                if (materials.NotFound.Count > 0)
+                {
+                    AnsiConsole.MarkupLine(
+                        "[red]에러: 지정한 진입점의 분석 명세서를 찾지 못했습니다. 먼저 해당 SP를 분석하십시오.[/]");
+                    foreach (var missing in materials.NotFound)
+                    {
+                        AnsiConsole.MarkupLine($"[red]  - {Markup.Escape(missing)}[/]");
+                    }
+
+                    AnsiConsole.MarkupLine(
+                        $"[grey]명세서는 {Markup.Escape(Path.Combine(outputDir, "Procedures"))} 아래 <스키마.이름>/docs/Spec.md 에 있습니다.[/]");
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                foreach (var added in materials.AddedByClosure)
+                {
+                    AnsiConsole.MarkupLine(
+                        $"[cyan]참조 프로시저를 재료에 추가했습니다: {Markup.Escape(added)}[/]");
+                    Serilog.Log.Information("[배치 설계] 참조 프로시저 재료 추가: {SpecPath}", added);
+                }
+
+                foreach (var warning in materials.Warnings)
+                {
+                    AnsiConsole.MarkupLine($"[yellow]경고: {Markup.Escape(warning)}[/]");
+                    Serilog.Log.Warning("[배치 설계] {Warning}", warning);
+                }
+
+                if (materials.Specs.Count == 0)
+                {
+                    AnsiConsole.MarkupLine("[red]에러: 계획 수립에 쓸 명세서가 없습니다.[/]");
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                AnsiConsole.MarkupLine(
+                    $"[grey]배치 스텝 {materials.Specs.Count}개 · 정적 분석 정의 {materials.Definitions.Count}개로 진행합니다.[/]");
+
+                // 계획서가 안 나왔는데 종료 코드 0으로 끝나면, 아무것도 만들지 않은
+                // 실행이 CI에서 초록으로 통과한다(--coverage-map/--sweep 분기와 같은 규약).
+                var succeeded = await RunConsolidatedJobAsync(
+                    materials.Specs, materials.Definitions, jobName, targetLanguage, provider, modelName,
+                    consolidatorEffort, outputDir, resolvedDatabase, orchestrator, metadataExporter,
+                    configuration, aiClient, isCodegenEnabled, selectedEngine, activeCts.Token);
+
+                if (!succeeded)
+                {
+                    Environment.ExitCode = 1;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                AnsiConsole.MarkupLine("\n[red]사용자에 의해 계획 수립이 중단되었습니다.[/]");
+                Environment.ExitCode = 1;
+            }
+            // 무인 실행이 종료 코드 0으로 끝나면 아무것도 만들지 않았는데도 파이프라인이
+            // 초록으로 통과한다(--coverage-map/--sweep 분기와 같은 규약).
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine(
+                    $"[red]에러: 계획 수립 또는 코딩 에이전트 실행 중 오류 발생: {Markup.Escape(ex.Message)}[/]");
+                Environment.ExitCode = 1;
+            }
+            finally
+            {
+                _currentCts = globalCts;
+            }
+        }
+
+        /// <summary>
+        /// 재료가 확정된 뒤의 통합 배치 Job 한 판 — 계획 수립·검증, 계획서와 추론·프롬프트
+        /// 원문 저장, 지시서 번들 생성, 코딩 에이전트 기동까지.
+        ///
+        /// [왜 함수인가] 이 순서는 무인 경로가 둘이다(SP를 분석하고 이어서 세우는
+        /// `--all`/`--sp`, 저장된 명세서만으로 세우는 `--plan-only`). 사본이 갈리면 같은
+        /// 도구가 진입 경로에 따라 다른 산출물을 낸다. 재료를 <b>어떻게 모으는가</b>만
+        /// 두 경로가 다르고, 모은 뒤는 여기 한 곳이다.
+        ///
+        /// 취소 토큰과 예외 처리는 호출부가 소유한다 - 두 경로의 Ctrl-C 관례가 같아야
+        /// 하지만, 그 관례는 이미 각 호출부의 try/finally에 있다.
+        /// </summary>
+        private static async Task<bool> RunConsolidatedJobAsync(
+            List<(string FileName, string Content)> specsData,
+            List<SpDefinition> spDefs,
+            string jobName,
+            string targetLanguage,
+            string provider,
+            string modelName,
+            string? consolidatorEffort,
+            string outputDir,
+            string resolvedDatabase,
+            VerificationPipelineOrchestrator orchestrator,
+            IMetadataExporter metadataExporter,
+            IConfiguration configuration,
+            IAiClient aiClient,
+            bool isCodegenEnabled,
+            string selectedEngine,
+            CancellationToken cancellationToken)
+        {
+            var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, jobName, provider, outputDir, isBatchMode: true, definitions: spDefs, cancellationToken: cancellationToken);
+            var consolidatedPlan = pipelineResult.Plan;
+            var aiResult = pipelineResult.Result;
+            if (string.IsNullOrEmpty(consolidatedPlan))
+            {
+                AnsiConsole.MarkupLine("[red]에러: 통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
+                return false;
+            }
+            else
+            {
+                var jobsOutputDir = Path.Combine(outputDir, "Jobs", jobName);
+                var docsDir = Path.Combine(jobsOutputDir, "docs");
+                var rawDir = Path.Combine(jobsOutputDir, "raw");
+
+                if (!Directory.Exists(docsDir))
+                {
+                    Directory.CreateDirectory(docsDir);
+                }
+                if (!Directory.Exists(rawDir))
+                {
+                    Directory.CreateDirectory(rawDir);
+                }
+
+                var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
+                await File.WriteAllTextAsync(
+                    planFileName,
+                    VerificationDocumentFormatter.FormatVerifiedDocument(
+                        consolidatedPlan,
+                        pipelineResult.Review,
+                        pipelineResult.Outcome,
+                        provider,
+                        modelName,
+                        consolidatorEffort,
+                        DateTime.Now,
+                        scope: null,
+                        coverage: pipelineResult.Coverage));
+
+                if (aiResult != null)
+                {
+                    // 추론 본문이 비어도 쓴다. 두 산출물은 한 쌍이라, 한쪽만 나가면
+                    // 채택된 시도가 무엇을 사고했는지 되짚을 길이 사라진다.
+                    await File.WriteAllTextAsync(
+                        Path.Combine(docsDir, "Thinking.md"),
+                        ThinkingLogDocument.Compose(
+                            aiResult.ThinkingText, provider, modelName, consolidatorEffort, DateTime.Now));
+                    var rawContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
+                    await File.WriteAllTextAsync(Path.Combine(rawDir, "prompt-context.md"), rawContext);
+                }
+
+                AnsiConsole.MarkupLine($"[green]성공: 통합 배치 설계서 생성 완료![/] {Markup.Escape(planFileName)}");
+
+                // 통합 마이그레이션 지시서 생성
+                AnsiConsole.MarkupLine($"[yellow]{jobName}[/] - 통합 마이그레이션 지시서 생성 중...");
+                var bundle = await metadataExporter.ExportConsolidatedMigrationInstructionsAsync(
+                    spDefs,
+                    consolidatedPlan,
+                    pipelineResult.Outcome,
+                    jobName,
+                    jobsOutputDir,
+                    targetLanguage,
+                    new OutputPathResolver(resolvedDatabase, outputDir),
+                    pipelineResult.Layout,
+                    pipelineResult.Coverage,
+                    cancellationToken);
+
+                foreach (var warning in bundle.Warnings)
+                {
+                    AnsiConsole.MarkupLine($"[yellow]경고: {Markup.Escape(warning)}[/]");
+                }
+
+                AnsiConsole.MarkupLine(
+                    $"[green]성공: 통합 마이그레이션 지시서 번들 생성 완료![/] {Markup.Escape(bundle.EntryPointPath)}");
+
+                // 외부 코딩 에이전트(Codegen) 기동
+                var jobSpecificSrcDir = Path.Combine(jobsOutputDir, "src");
+                await RunCodegenEngineAsync(
+                    bundle,
+                    isBatchMode: true,
+                    enableCodegen: isCodegenEnabled,
+                    engineName: selectedEngine,
+                    targetProjectDir: jobSpecificSrcDir,
+                    configuration: configuration,
+                    aiClient: aiClient,
+                    cancellationToken: cancellationToken);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// `--plan-only`(저장된 명세서만으로 통합 배치 계획을 세우는 무인 경로)의 인자 계약을
+        /// 지킨다. 여기서 막지 않으면 재료가 모자란 채로 파이프라인이 수십 분을 돌고,
+        /// 계획서를 놓을 자리가 없다는 사실을 맨 끝에 가서야 알린다.
+        ///
+        /// 던지는 <see cref="ArgumentException"/>은 <see cref="TryParseCommandLineArgs"/>가
+        /// 안내 문구와 종료 코드 1로 바꾼다 — `--policy-sps` 폐기 분기와 같은 관례다.
+        /// </summary>
+        private static void ValidatePlanOnly(CliArgs cliArgs)
+        {
+            if (!cliArgs.PlanOnly)
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(cliArgs.JobName))
+            {
+                throw new ArgumentException(
+                    "--plan-only 에는 --job-name 이 필요합니다. 계획서와 지시서를 놓을 Job 이름을 지정하십시오.");
+            }
+
+            // --all은 대상을 주지만 순서를 주지 않는다. 배치 스텝은 순서가 의미의 일부라
+            // (설계서 §5.2 순차 단일 선택 루프가 존재하는 이유) 임의 순서로 진행할 수 없다.
+            if (cliArgs.AnalyzeAll)
+            {
+                throw new ArgumentException(
+                    "--plan-only 와 --all 은 함께 쓸 수 없습니다. --all 은 실행 순서를 정하지 못하므로 --sp 로 스텝 순서를 지정하십시오.");
+            }
+
+            if (cliArgs.TargetProcedures.Count == 0)
+            {
+                throw new ArgumentException(
+                    "--plan-only 에는 --sp 가 필요합니다. 배치 스텝이 될 진입점 명세서를 실행 순서대로 나열하십시오(예: --sp dbo.UP_A,dbo.UP_B).");
+            }
+
+            if (cliArgs.GeneratePolicy)
+            {
+                throw new ArgumentException("--plan-only 와 --policy 는 함께 쓸 수 없습니다. 한 번에 한 모드만 실행하십시오.");
+            }
+
+            if (!string.IsNullOrEmpty(cliArgs.ExtractSnapshotPath))
+            {
+                throw new ArgumentException("--plan-only 와 --extract-snapshot 은 함께 쓸 수 없습니다. 한 번에 한 모드만 실행하십시오.");
+            }
+
+            if (!string.IsNullOrEmpty(cliArgs.CoverageMapTarget))
+            {
+                throw new ArgumentException("--plan-only 와 --coverage-map 은 함께 쓸 수 없습니다. 한 번에 한 모드만 실행하십시오.");
+            }
         }
 
         static async Task Main(string[] args)
@@ -454,7 +737,22 @@ namespace ReSet.Cli
             bool isOfflineMode = !string.IsNullOrWhiteSpace(offlinePath);
             IDbMetadataService dbService;
 
-            if (isOfflineMode)
+            if (cliArgs.PlanOnly)
+            {
+                // 이 경로의 재료는 이미 output/에 파일로 있다. 통합 배치 파이프라인과
+                // 지시서 번들 생성은 DB를 부르지 않으므로(ConsolidatedPipelineDbIndependenceTests가
+                // 되돌림으로 못박는다) 연결·로그인·SP 목록 조회를 통째로 건너뛴다.
+                // dbService 인스턴스는 오케스트레이터 생성자가 요구할 뿐 호출되지 않는다.
+                AnsiConsole.MarkupLine(
+                    "[bold blue]=== 계획 전용 모드(--plan-only) — 저장된 명세서만 읽고 DB에는 연결하지 않습니다 ===[/]");
+                if (!string.IsNullOrEmpty(cliArgs.ConnectionString))
+                {
+                    AnsiConsole.MarkupLine("[grey]--plan-only 에서는 연결 문자열을 쓰지 않습니다(무시).[/]");
+                }
+
+                dbService = new DbMetadataService();
+            }
+            else if (isOfflineMode)
             {
                 if (!File.Exists(offlinePath))
                 {
@@ -786,6 +1084,17 @@ namespace ReSet.Cli
                 instructions = await File.ReadAllTextAsync(instructionsFile);
             }
 
+            // 계획 전용 모드 - 저장된 명세서만으로 통합 배치 Job 한 판을 세운다.
+            // SP 목록 로드(DB 조회)보다 앞에 두어야 이 경로가 DB에 닿지 않는다.
+            if (cliArgs.PlanOnly)
+            {
+                await RunPlanOnlyAsync(
+                    cliArgs, targetLanguage, provider, modelName, consolidatorEffort, outputDir,
+                    resolvedDatabase, orchestrator, metadataExporter, configuration, aiClient,
+                    isCodegenEnabled, selectedEngine, globalCts);
+                return;
+            }
+
             // 5. Stored Procedure 목록 로드
             List<string> spNames = new();
             await AnsiConsole.Status()
@@ -1060,90 +1369,10 @@ namespace ReSet.Cli
                             def => Path.Combine("Procedures", $"{def.Schema}.{def.Name}", "docs", "Spec.md"),
                             closure).ToList();
 
-                        var pipelineResult = await orchestrator.RunConsolidatedPipelineAsync(specsData, targetLanguage, cliArgs.JobName, provider, outputDir, isBatchMode: true, definitions: spDefs, cancellationToken: activeCts.Token);
-                        var consolidatedPlan = pipelineResult.Plan;
-                        var aiResult = pipelineResult.Result;
-                        if (string.IsNullOrEmpty(consolidatedPlan))
-                        {
-                            AnsiConsole.MarkupLine("[red]에러: 통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
-                        }
-                        else
-                        {
-                            var jobsOutputDir = Path.Combine(outputDir, "Jobs", cliArgs.JobName);
-                            var docsDir = Path.Combine(jobsOutputDir, "docs");
-                            var rawDir = Path.Combine(jobsOutputDir, "raw");
-
-                            if (!Directory.Exists(docsDir))
-                            {
-                                Directory.CreateDirectory(docsDir);
-                            }
-                            if (!Directory.Exists(rawDir))
-                            {
-                                Directory.CreateDirectory(rawDir);
-                            }
-
-                            var planFileName = Path.Combine(docsDir, "BatchMigrationPlan.md");
-                            await File.WriteAllTextAsync(
-                                planFileName,
-                                VerificationDocumentFormatter.FormatVerifiedDocument(
-                                    consolidatedPlan,
-                                    pipelineResult.Review,
-                                    pipelineResult.Outcome,
-                                    provider,
-                                    modelName,
-                                    consolidatorEffort,
-                                    DateTime.Now,
-                                    scope: null,
-                                    coverage: pipelineResult.Coverage));
-
-                            if (aiResult != null)
-                            {
-                                // 추론 본문이 비어도 쓴다. 두 산출물은 한 쌍이라, 한쪽만 나가면
-                                // 채택된 시도가 무엇을 사고했는지 되짚을 길이 사라진다.
-                                await File.WriteAllTextAsync(
-                                    Path.Combine(docsDir, "Thinking.md"),
-                                    ThinkingLogDocument.Compose(
-                                        aiResult.ThinkingText, provider, modelName, consolidatorEffort, DateTime.Now));
-                                var rawContext = $"=== [System Prompt] ===\n{aiResult.SystemPrompt}\n\n=== [User Prompt] ===\n{aiResult.UserPrompt}";
-                                await File.WriteAllTextAsync(Path.Combine(rawDir, "prompt-context.md"), rawContext);
-                            }
-
-                            AnsiConsole.MarkupLine($"[green]성공: 통합 배치 설계서 생성 완료![/] {Markup.Escape(planFileName)}");
-
-                            // 통합 마이그레이션 지시서 생성
-                            AnsiConsole.MarkupLine($"[yellow]{cliArgs.JobName}[/] - 통합 마이그레이션 지시서 생성 중...");
-                            var bundle = await metadataExporter.ExportConsolidatedMigrationInstructionsAsync(
-                                spDefs,
-                                consolidatedPlan,
-                                pipelineResult.Outcome,
-                                cliArgs.JobName,
-                                jobsOutputDir,
-                                targetLanguage,
-                                new OutputPathResolver(resolvedDatabase, outputDir),
-                                pipelineResult.Layout,
-                                pipelineResult.Coverage,
-                                activeCts.Token);
-
-                            foreach (var warning in bundle.Warnings)
-                            {
-                                AnsiConsole.MarkupLine($"[yellow]경고: {Markup.Escape(warning)}[/]");
-                            }
-
-                            AnsiConsole.MarkupLine(
-                                $"[green]성공: 통합 마이그레이션 지시서 번들 생성 완료![/] {Markup.Escape(bundle.EntryPointPath)}");
-
-                            // 외부 코딩 에이전트(Codegen) 기동
-                            var jobSpecificSrcDir = Path.Combine(jobsOutputDir, "src");
-                            await RunCodegenEngineAsync(
-                                bundle,
-                                isBatchMode: true,
-                                enableCodegen: isCodegenEnabled,
-                                engineName: selectedEngine,
-                                targetProjectDir: jobSpecificSrcDir,
-                                configuration: configuration,
-                                aiClient: aiClient,
-                                cancellationToken: activeCts.Token);
-                        }
+                        await RunConsolidatedJobAsync(
+                            specsData, spDefs, cliArgs.JobName, targetLanguage, provider, modelName,
+                            consolidatorEffort, outputDir, resolvedDatabase, orchestrator, metadataExporter,
+                            configuration, aiClient, isCodegenEnabled, selectedEngine, activeCts.Token);
                     }
                     // 이 안쪽 catch가 RunCodegenEngineAsync가 다시 던진 취소를 먼저 삼키면,
                     // "코딩 에이전트 실행 중 오류"로 둔갑해 보고되고 사용자의 Ctrl-C가
