@@ -119,12 +119,13 @@ ReSet의 산출물은 전부 AI가 만든 것이 아니다. **어느 주체가 �
 | `metadata.json` | 🗄 DB 조회 + 🔎 정적 분석 | 대상 SP와 **의존성 전체를 덤프한 것**. 지시서 번들이 참조 테이블 스키마를 만들 때 쓰는 원천이고, 커버리지 맵의 분모(잎 문장)도 여기 담긴 DDL에서 나온다. **끌 수단이 없다** — 뒤 계층이 원천으로 읽는다 |
 | `dependency-manifest.json` | ⚙️ 결정적 조립 | 어느 의존 객체의 산출물이 어디로 갔는지 잇는 색인. **크로스 DB 분석에서 흩어진 산출물을 되짚는 유일한 지도**이고, 커버리지 맵이 참조 폐포를 세는 근거이기도 하다. 참조분석을 끄면 **루트 한 노드짜리**로 나온다 |
 | `prompt-context.md` | ⚙️ 조립 (🗄 DB 조회 + 🔎 정적 분석 결과 포함) | **AI에 실제로 주입된 원문.** 결과가 이상할 때 모델을 탓하기 전에 입력부터 확인하라고 남긴다. UPDATE 컬럼 매핑 같은 정적 분석 산출도 여기 함께 실린다. **캐시 히트 회차는 이 파일을 덮지 않는다** — 그 회차에는 남길 원문이 없어서 빈 값으로 덮이는데, 그러면 실제로 모델에 보낸 원문이 사라져 이 파일의 존재 이유가 없어진다. 파일이 아예 없을 때만 빈 파일을 만든다 |
+| `l1-attempts.json` | ⚙️ L1 검증 | **시도별 L1 발화의 누적 기록**(판·시도·검사 키·메시지). 검사를 고치려면 그 검사가 무엇에 대해 몇 번 발화했는지가 있어야 하는데, 그 정보는 gitignore된 실행 로그에만 있어 사람이 매번 손으로 오려 왔다. `Run`(재생성 판)이 있어야 같은 객체를 두 번 재생성했을 때 두 계열이 한 파일에서 갈린다 — 시도 번호는 판마다 1부터 다시 시작한다. **L1이 실패한 시도에만 생긴다**(전부 통과하면 남길 발화가 없다). `scripts/promote-l1-attempts.sh`가 이 파일을 커밋되는 코퍼스로 승격하며, 그 위에서 자기강화 게이트가 돈다(§4.4.1) |
 | `deconstructed_logic.json` | 🤖 AI (로컬 LLM 전용) | 로컬 모델은 한 번에 명세서를 못 쓰므로 **구조화 추론을 1단계로 분리**한다. 그 중간 결과의 백업본 |
 | `chunks/chunk_N.json` | 🤖 AI (로컬 LLM 전용) | 긴 SP를 구문 단위로 쪼개 생성할 때의 **조각별 응답 캐시**. 중단·재시도에서 이미 끝난 조각을 다시 태우지 않기 위한 것 |
 
 **앞의 셋은 분석에 성공한 노드마다 항상 나온다.** 끄는 설정이 없다 — 뒤 계층이 이 셋을
 원천으로 읽으므로 끌 수단을 두지 않는 것이 설계 의도이고, 기본 설정(참조분석 끔)도 이제
-그 의도를 지킨다. 남은 두 행만 스위치가 아니라 **어느 제공자를 썼는지**에 달렸다.
+그 의도를 지킨다. 남은 세 행은 스위치가 아니라 다른 것에 달렸다 — `l1-attempts.json`은 **L1이 실패한 시도가 있었는지**에, 맨 아래 두 행은 **어느 제공자를 썼는지**에 달렸다.
 따라서 어떤 산출물이 안 보이면 그것은 **설정의 결과가 아니다.** 다만 「그 노드가
 실패했다」로 단정할 수도 없다 — 내보내기는 취소가 아닌 예외를 **로그에만 남기고 삼키며**
 `PersistenceErrors`에 넣지 않으므로, 노드가 성공·저장됨으로 보고된 채 raw 파일만 빠질 수
@@ -179,8 +180,16 @@ ReSet의 산출물은 전부 AI가 만든 것이 아니다. **어느 주체가 �
 | `raw/PlanStructure.superseded-N.md` | 🤖 AI | 목차를 다시 짤 때마다 | 폐기된 이전 목차. **덮어쓰지 않고 번호를 늘려 보존한다** — 목차가 왜 바뀌었는지는 이전 판이 있어야 알 수 있으므로 |
 | `raw/prompt-context.md` | ⚙️ 조립 | 3/3 성공 시 | 계획서를 만든 프롬프트 원문 |
 | `raw/ddl/*.md` | 🗄 DB 조회 → ⚙️ 표 포매팅 | 번들 생성 시 | Job 전체가 건드리는 참조 테이블의 스키마 표 |
+| `raw/attempts/run-NNN/manifest.json` | ⚙️ 조립 | 판을 열 때(실행 시작·목차 재작성·구제 채택이 재설계 이전 목차로 되돌아갈 때)와 골격·단계가 새로 쓰일 때마다 | 그 판이 무엇을 전제로 도는가(목차 해시·명세서 해시·provider·model·effort·대상 언어)와 무엇이 어느 시도에 쓰였는가. **이 파일이 진실이고 디렉터리의 파일 존재는 진실이 아니다** — 키는 `SchemaVersion`·`Run`·`Job`·`StartedAt`·`OpenedBy`(`run-start`·`structure-redraft`·`rescue-adopt` 셋 중 하나)·`ReuseKey`·`Skeleton`·`Steps`, 전부 **PascalCase**로 직렬화한다. `Steps`의 각 항목은 `Attempt`·`Sha256`에 더해 `DefectKind`·`DefectReason`을 가진다 — 값이 있으면 하한 미달·생성 실패 등 이 섹션을 재사용해도 되는지 2단계가 파일 존재만으로는 물을 수 없던 것에 대한 답이다. **`DefectKind: null`이 곧 건강한 본문이라는 뜻은 아니다** — 병합 뒤에 도는 문서 단위 검사(`ValidateSplitProcedureObligations`·`ValidateControlStatusTerminalWrites` 등)가 붙이는 결함은 `RecordStepSection`이 이미 불린 뒤에 확정되므로 manifest에 실리지 않는다. **리뷰 기록은 이 파일을 갱신하지 않는다** — `RecordReview`는 `reviews/attempt-NN.json`만 쓰고 `FlushManifest()`를 부르지 않는다. **구제 채택이 재설계 이전 목차로 되돌아가며 새 판을 열면, 그 판은 열린 직후 채택된 시도의 골격·섹션을 곧바로 다시 받는다** — 그 재료를 실제로 만든 시도 번호가 보통은 `Attempt`에 남지만(판을 연 시도가 아니다), 지목 재생성으로 동결돼 넘어와 그 회차가 실제로는 만들지 않은 섹션·재사용된 골격까지 `adopted.Attempt` 하나로 뭉뚱그려 적으므로 그 경우 `Attempt`가 과대 표기될 수 있다 — 본문·`Sha256`은 옳고 영향은 감사 정확도에 한정된다 |
+| `raw/attempts/run-NNN/skeleton.md` | 🤖 AI | 골격이 확정될 때마다(구제 채택이 새 판을 열며 재기록하는 경우 포함) | 그 판의 최신 공통 규약. 회차별로 쌓지 않고 **최신 하나**로 덮는다 — 언제 어느 시도가 덮었는지는 manifest의 `Skeleton`이 안다 |
+| `raw/attempts/run-NNN/steps/[코드].md` | 🤖 AI | 단계 본문이 나올 때마다 — **단계 생성이 끝난 직후 한 번, 하한 미달로 다음 시도에 넘어가기 직전에 또 한 번**(하한 재시도 루프가 별개 층이라 두 자리에서 같은 코드를 덮어쓴다), 그리고 구제 채택이 새 판을 열며 재기록할 때 | **거부된 회차의 것도, 하한 미달로 판정된 중간본도 남는다.** 중단됐을 때 다시 뽑지 않아도 되는 유일한 재료. 여기도 최신 하나로 덮는다. **단일 호출 폴백 경로(목차가 단계 목록을 못 내 `GenerateConsolidatedBatchPlanAsync`로 가는 경로)에는 골격도 섹션도 없다** — 그 판은 `manifest.json`과 `reviews/`만 있고 재조립할 재료가 없어 재개 불가로 판정해야 한다(알려진 공백, 사람 결정) |
+| `raw/attempts/run-NNN/reviews/attempt-NN.json` | 🤖 AI(채점) + ⚙️ 조립 | 회차 채점이 끝날 때마다 | 그 회차의 점수와 Critic 지적. 메모리의 `feedbackHistory`는 최근 3라운드만 들고 있어 **디스크가 더 오래 기억한다** — 골격·섹션과 달리 최신 하나로 덮지 않고 회차마다 별개 파일이다(누적이 아니라 시계열) |
 | `docs/BatchMigrationPlan.md` | 🤖 AI + ⚙️ 검증 헤더 | 3/3 성공 시 | **통합 전환 계획서.** 검증 결과와 커버리지를 헤더에 얹는다 |
 | `docs/Thinking.md` | 🤖 AI (추론 부분) | 계획서와 한 쌍 | 채택된 시도의 사고 과정. 계획서와 짝이라 한쪽만 나가면 안 된다 |
+
+`raw/attempts/`는 1단계(쓰기 전용)의 산출물이다 — 지금은 재개(읽기)가 없으므로 중단된
+실행을 이어서 하는 데는 아직 못 쓴다. 재현과 감사를 위한 원본이라는 점은 위의 다른
+`raw/` 산출물과 같다.
 
 ---
 
@@ -369,7 +378,7 @@ Job 이름으로 짝지어 찾는다 — 이 디렉터리 바로 아래가 `[Job
 | ① 사람이 소유하는 입력 | `settlement-process.md` (§1 ✍️ · §8) | 도구는 파일이 없을 때만 자리표시자 초안을 쓰고, 있으면 손대지 않는다(`SettlementPolicyService.cs:67`, `SettlementProcessRosterDraft.Build`). 사람이 채운 **단계 이름·순서·`## 제외` 목록**은 어느 입력에도 없다 |
 | ② 도구가 앞 판을 덮지 않고 쌓는 기록 | `Jobs/[Job]/raw/PlanStructure.superseded-N.md` (§4) · `Jobs/[Job]/agent/progress.json.corrupt[.타임스탬프]` (§5) | 도구가 **빈 번호·빈 이름을 찾아** 보존하는 자리라(`VerificationPipelineOrchestrator.cs:4443-4449`, `AgentProgressStore.cs:132-140`), 지운 뒤 다시 돌리면 **이번 회차의 것이 그 빈자리를 차지할 뿐이다.** 과거 판을 만들 입력은 그때의 실행과 함께 지나갔다 |
 | ③ 도구가 아닌 것이 쓰는 자리 | `Jobs/[Job]/src/` (§6) · `Jobs/[Job]/consistency/` 전체(보존본 `ConsistencyReport-Axis[축]-YYYY-MM-DD.md` 포함, §7.1) · `Jobs/[Job]/agent/` 직하에서 **코딩 에이전트가 남긴** 파일 (아래 문단이 가른다) | 쓴 주체가 외부 에이전트다(§1 🧑‍💻). `src/`에 도구가 하는 일은 디렉터리를 만들어 외부 CLI의 작업 디렉터리로 넘기는 것뿐이고(`ExternalCliCodingEngine.cs:46-52`·`:70`), `consistency/`는 도구 소스 어디에도 쓰는 코드가 없다(`src/` 전체에서 그 경로를 조립하는 자리가 0건이다 — 「안 보인다」가 아니라 **세어 본 결과**다). **도구가 애초에 쓰지 않던 것은 도구를 돌려 되살릴 수 없다** |
-| ④ 지난 실행에 묶인 것 | `Jobs/[Job]/agent/progress.json` (§5) · `Jobs/[Job]/validation/raw/[SP]/Spec.md`·`Source.*` (§6) · 옛 자리에 남은 `Objects/[객체]/raw/prompt-context.md` (§3) · `logs/` (§8) · `offline_snapshot.json` (§8) | 진행 상태는 **완료된 회차의 유일한 기록**이고(`AgentProgressStore.cs:120-126`), 대조 사본은 **그 판정이 실제로 읽은 명세서·소스**라 원본이 바뀐 뒤 다시 돌리면 지금 내용의 사본이 새로 써질 뿐이다(`CodeVerificationOrchestrator.cs:306-311`). 로그는 날짜별로 갈려 오늘 실행이 어제 파일을 만들지 않고(`Program.cs:2649`), 스냅샷을 다시 뜨려면 **그것이 대신하려던 DB 연결**이 필요하다(`SnapshotManager.cs:14-20`) |
+| ④ 지난 실행에 묶인 것 | `Jobs/[Job]/agent/progress.json` (§5) · `Jobs/[Job]/validation/raw/[SP]/Spec.md`·`Source.*` (§6) · 옛 자리에 남은 `Objects/[객체]/raw/prompt-context.md` (§3) · `logs/` (§8) · `offline_snapshot.json` (§8) · `Jobs/[Job]/raw/attempts/` (§4) | 진행 상태는 **완료된 회차의 유일한 기록**이고(`AgentProgressStore.cs:120-126`), 대조 사본은 **그 판정이 실제로 읽은 명세서·소스**라 원본이 바뀐 뒤 다시 돌리면 지금 내용의 사본이 새로 써질 뿐이다(`CodeVerificationOrchestrator.cs:306-311`). 로그는 날짜별로 갈려 오늘 실행이 어제 파일을 만들지 않고(`Program.cs:2649`), 스냅샷을 다시 뜨려면 **그것이 대신하려던 DB 연결**이 필요하다(`SnapshotManager.cs:14-20`). 시도 저널은 **판이 실행마다 새로 열리므로**(`PlanAttemptJournal.OpenRun`) 지운 뒤 다시 돌리면 이번 실행 것이 새 `run-NNN`으로 생길 뿐, 지운 판의 것은 그때의 실행과 함께 지나갔다 |
 
 ③의 마지막 자리는 **`agent/` 직하 전체가 아니다.** 그 자리에 도구가 직접 쓰는 것은
 `MigrationInstructions.md`·`task-*.md`(`InstructionBundleWriter.cs:232`·`:268`)와
@@ -466,4 +475,4 @@ cp -a output "output.bak-<작업이름>-$(date +%Y%m%d)"
 - [아키텍처](architecture.md) — 산출물을 만드는 모듈과 데이터 흐름
 - [알려진 결함](known-defects.md) — 설계 문서가 후속으로 미룬 것 중 심각도와 반복 횟수를 집계한 목록
 
-<!-- synced-through: 7ab3d10c -->
+<!-- synced-through: 1bc33ada -->

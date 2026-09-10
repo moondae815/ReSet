@@ -85,6 +85,7 @@
 6.  **3단계 검증 파이프라인의 역할 분리 및 L2 Actor-Critic을 운용하십시오.**
     *   L1 [MechanicalValidator.cs](./src/ReSet.Core/Services/MechanicalValidator.cs)는 필수 섹션, Anti-Shortcut Fast-Fail, Mermaid 린팅을 담당합니다. `CleanseMermaidCode`를 린팅 전에 적용하고 `CleansedMarkdown`은 성공 여부와 무관하게 최종 원문에 반영하십시오(`architecture.md §4.4.1`).
     *   하한 검사용 `ErrorCodes`의 빈 배열은 검증 불가이며(원본 SP 없는 단계만 예외), `TargetTables`는 `SpecTargetTableExtractor`의 쓰기 집합으로 채우고 `SchemaTables`와 합치지 마십시오(`MechanicalValidatorTests`, `SpecTargetTableExtractorTests`, `architecture.md §4.12`).
+    *   새 L1 검사는 `SafeCheck`로 부르고 `Report(키, 메시지)`로 발화하십시오 — 어기면 수렴 탐지기가 그 검사에 눈이 멉니다(`L1FiringKeyPolicyTests`).
     *   스키마 주장은 DB 전체가 아니라 프롬프트에 실린 컬럼과 대조하십시오(`SchemaPromptColumnSelectorTests`, `SchemaClaimGateRegressionTests`). Mermaid의 `@@ERROR`는 허용합니다.
     *   L2 [AiService.cs](./src/ReSet.Core/Services/AiService.cs)는 `MaxL2Attempts` 안에서 보완하고 [CriticFeedbackLog.cs](./src/ReSet.Core/Services/CriticFeedbackLog.cs)의 최근 3라운드를 누적하십시오(`architecture.md §4.4.2`).
     *   로컬 분기는 `AiClientFactory.IsLocalProvider()`, CLI 분기는 같은 팩토리의 `IsCliProvider()`만 사용하십시오 — `PromptContextScope`의 Full/Narrow 판정도 이것을 부릅니다. 사본을 두면 `-cli`로 끝나지 않는 CLI 제공자가 Full에 남습니다. 확정된 범위가 필요하면 `IAiService.ContextScope`를 읽고 `ResolveMode`를 다시 부르지 마십시오. 분할 생성 진행도는 Stage 1·2를 1/4~4/4로 통합하고 Stage 1 추론도 `Thinking.md`에 누적하십시오.
@@ -226,6 +227,7 @@ dotnet test
 - [ ] `dotnet test` 명령어를 실행하여 **실패 0, 건너뜀 0**으로 모든 단위 테스트가 통과(Passed)하였는가? (기대 개수를 여기 적지 않는다 — 테스트를 하나 추가할 때마다 이 줄이 거짓이 되고, 낡은 숫자는 올바른 빌드에서 항목을 실패시켜 다음 사람이 이 체크리스트를 무시하도록 길들인다. 실제로 하루 만에 네 번 낡았다.)
 - [ ] 워크트리라면 코퍼스 재료 `output/` **하나**를 심링크했는가? 안 걸면 코퍼스 단언이 통째로 건너뛴다(`CorpusSkip`). 2026-09-07에 재료가 넷에서 하나가 되면서 「반쯤 설정」 상태와 그것을 막던 `CorpusSetupGuardTests`가 함께 폐기됐다 — 이 줄이 「넷」이라고 적힌 채 남아 있었다.
 - [ ] 취소 가능한 `await`를 감싸는 `catch`에 `when (ex is not OperationCanceledException)` 필터를 달았는가? (`CancellationPolicyTests`가 자동 검사하며, 기준선 파일 `tests/ReSet.Core.Tests/cancellation-policy-baseline.txt`의 숫자는 고칠 때마다 함께 내려야 한다)
+- [ ] 재생성을 돌렸다면 `scripts/promote-l1-attempts.sh`를 실행했는가? `output/`은 gitignore라 안 돌리면 자기강화 게이트의 재료가 안 자란다.
 - [ ] AGENTS.md에 600바이트를 넘는 줄을 만들지 않았는가? 그런 줄은 규칙이 아니라 문단이다. (`DocumentationBudgetTests`가 자동 검사하며, 상한은 `tests/ReSet.Core.Tests/documentation-budget-baseline.txt`에 있다)
 - [ ] 심볼(클래스·메서드·상수)을 지웠다면 `grep -rn "<지운 이름>" docs/`로 남은 서술을 함께 고쳤는가? **그 grep은 이름 없이 산문으로만 쓴 자리를 원리적으로 못 잡는다** — 지운 심볼이 *하던 일*의 명사구로 2차 스윕하라. 기계 검사로 대신할 수 없다(문서 전문 대조는 오탐 88%). 실측 둘은 `docs/known-defects.md`의 「문서 스윕이 놓친 자리」에 있다.
 - [ ] SQL 객체 타입을 `Contains("TABLE"/"VIEW"/"FUNCTION"/"PROCEDURE")`로 직접 판정한 곳이 없는가? (`SqlObjectTypeClassifier`에 위임해야 하며 `TypeClassificationPolicyTests`가 자동 검사한다)
@@ -235,4 +237,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: d6904e80 -->
+<!-- synced-through: 1bc33ada -->

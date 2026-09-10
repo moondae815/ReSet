@@ -1736,6 +1736,15 @@ namespace ReSet.Core.Services
                 throw new ArgumentException("출력 디렉터리가 필요합니다.", nameof(outputRoot));
             }
 
+            // 회차 도중에 만든 것을 그 자리에서 남긴다 - 쿼터 소진으로 중단돼도
+            // 단계 생성 비용이 사라지지 않게(설계서 2026-09-10). 열기에 실패해도
+            // 객체는 돌아오고 모든 기록이 no-op 이 된다.
+            var attemptJournal = PlanAttemptJournal.Create(
+                outputRoot, jobName, provider, _consolidatorService.ModelName,
+                _consolidatorEffort, targetLanguage,
+                PlanAttemptJournal.ComputeSha256(
+                    string.Join("\n", specs.Select(s => s.FileName + "\n" + s.Content))));
+
             // 미지 테이블 검사의 재료. definitions가 없으면 빈 집합이 되고,
             // 검증기는 그때 검사를 건너뛴다(소프트 스킵). 조립 근거는
             // StepInterfaceFacts.CollectSchemaCatalog에 있다 - 의존 대상뿐 아니라
@@ -1864,7 +1873,7 @@ namespace ReSet.Core.Services
             // 어긋나면 L3 지목 재생성이 화면의 문서가 아닌 폐기된 회차 위에 얹힌다.
             // 셋 다 실제로 발생했던 결함이라 개별 변수로 두지 않는다.
             var adoptedState = new AdoptedGenerationState(
-                string.Empty, null, null, null, new Dictionary<string, StepDefect>());
+                0, string.Empty, null, null, null, new Dictionary<string, StepDefect>());
             // 정체 판정과 1회 상한은 이 정책이 단독으로 소유한다.
             var redraftPolicy = new StructureRedraftPolicy();
             // 계획서의 종료 상태와 그 근거 리뷰. 반환 레코드로 호출부까지 전달되어
@@ -2040,6 +2049,7 @@ namespace ReSet.Core.Services
                             currentPlanStructure = planEnrichment.Markdown;
                             NotifyDroppedTableDeclarations(jobName, planEnrichment);
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "PlanStructure.md"), currentPlanStructure);
+                            attemptJournal.OpenRun(currentPlanStructure, "run-start");
                         }
 
                         // 목차가 단계 목록을 냈을 때만 분할한다. 못 냈으면 단일 호출로
@@ -2069,7 +2079,7 @@ namespace ReSet.Core.Services
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
                                 progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
                                 pendingDefectiveSteps, knownTableNames, parametersByProcedure, callGraph, ddlByProcedure, currentBrainstorming,
-                                specReturnCodes, specTargetTables, cancellationToken, repeatedDefects,
+                                specReturnCodes, specTargetTables, attemptJournal, attempt, cancellationToken, repeatedDefects,
                                 pendingSkeletonRevision);
 
                             if (split != null)
@@ -2149,7 +2159,7 @@ namespace ReSet.Core.Services
                         $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                     currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                        outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                        attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState, cancellationToken);
                     RestoreAdoptedGenerationState(
                         adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                     finalAiResult = rescued.Generation ?? finalAiResult;
@@ -2464,7 +2474,7 @@ namespace ReSet.Core.Services
                                 $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                             currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                                outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                                attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState, cancellationToken);
                             RestoreAdoptedGenerationState(
                                 adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                             finalAiResult = rescued.Generation ?? finalAiResult;
@@ -2524,6 +2534,10 @@ namespace ReSet.Core.Services
                     // TryRecord는 NormalizedScore만 읽으므로 HasDefects를 덮어써도
                     // 최고점 판정은 흔들리지 않는다.
                     EnforceScoreThreshold(l2Result, jobName, attempt);
+
+                    // 채점이 확정되는 유일한 자리다 - 축 게이트가 HasDefects 를 덮은
+                    // 뒤라 AxisThresholdForced 까지 확정된 값이 남는다.
+                    attemptJournal.RecordReview(attempt, l2Result);
                 }
 
                 // 불합격 여부와 무관하게 후보로 등록한다.
@@ -2537,6 +2551,7 @@ namespace ReSet.Core.Services
                         // 후보가 교체되는 바로 그 자리에서 그 후보를 만든 상태를
                         // 통째로 붙잡는다. 다른 곳에서 갱신하면 어긋나는 순간이 생긴다.
                         adoptedState = new AdoptedGenerationState(
+                            attempt,
                             currentPlanStructure,
                             lastSkeleton,
                             lastSkeletonResult,
@@ -2561,7 +2576,7 @@ namespace ReSet.Core.Services
                         // "현재==채택본"으로 보고 아무 일도 하지 않아 파일에는 채택되지
                         // 않은 재수립 목차가 그대로 남는다(실측: 재현된 회귀).
                         currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                            outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                            attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState, cancellationToken);
                         RestoreAdoptedGenerationState(
                             adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
 
@@ -2692,7 +2707,7 @@ namespace ReSet.Core.Services
                                 // PlanStructure.md와 실제로 쓰이는 목차를 어긋나게 두지 않는다.
                                 if (redrafted != null &&
                                     await TryCommitPlanStructureAsync(
-                                        "목차 재설계 결과", outputRoot, jobName, currentPlanStructure, redrafted, cancellationToken))
+                                        attemptJournal, "목차 재설계 결과", "structure-redraft", outputRoot, jobName, currentPlanStructure, redrafted, cancellationToken))
                                 {
                                     currentPlanStructure = redrafted;
                                     // 목차가 바뀌면 단계 목록도 바뀐다. 낡은 골격·섹션을
@@ -2774,7 +2789,7 @@ namespace ReSet.Core.Services
                                     $"({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                                 currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                                    outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                                    attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState, cancellationToken);
                                 RestoreAdoptedGenerationState(
                                     adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                                 finalAiResult = rescued.Generation ?? finalAiResult;
@@ -2885,7 +2900,7 @@ namespace ReSet.Core.Services
                         if (rescued != null)
                         {
                             currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                                outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                                attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState, cancellationToken);
                             RestoreAdoptedGenerationState(
                                 adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                         }
@@ -2915,7 +2930,7 @@ namespace ReSet.Core.Services
                             $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                         currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                            outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                            attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState, cancellationToken);
                         RestoreAdoptedGenerationState(
                             adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                         finalAiResult = rescued.Generation ?? finalAiResult;
@@ -3111,6 +3126,8 @@ namespace ReSet.Core.Services
                             currentBrainstorming,
                             specReturnCodes,
                             specTargetTables,
+                            attemptJournal,
+                            attempt,
                             cancellationToken);
 
                         if (split != null)
@@ -3189,7 +3206,7 @@ namespace ReSet.Core.Services
                     {
                         // 새 목차가 실제로 본문을 만들어 냈으니 이제 기록을 확정한다.
                         if (!await TryCommitPlanStructureAsync(
-                                "목차 재설계 결과", outputRoot, jobName, currentPlanStructure, pendingPlanStructure, cancellationToken))
+                                attemptJournal, "목차 재설계 결과", "structure-redraft", outputRoot, jobName, currentPlanStructure, pendingPlanStructure, cancellationToken))
                         {
                             // 기록에 실패한 재수립은 없었던 일로 친다. 그 목차에서 나온
                             // 본문까지 함께 버려야 산출물과 기록이 어긋나지 않는다.
@@ -3597,8 +3614,24 @@ namespace ReSet.Core.Services
         /// RunConsolidatedPipeline_L3FeedbackAfterRescue_ReusesTheAdoptedAttemptsStepSections가
         /// 관찰한다 — L3 지목 재생성이 이 값들을 읽기 시작하면서(그 값을 읽는
         /// 캐시 재사용 로직) 이 세 값도 더 이상 블랙박스가 아니게 됐다.
+        ///
+        /// <paramref name="Attempt"/> — [FINAL FIX - Critical] 이 상태가 후보(최고점)로
+        /// 등록된 시도 번호. 구제 채택이 재설계 이전 목차로 되돌아갈 때 새로 여는
+        /// 판에 골격·섹션을 다시 기록하려면(<c>AdoptPlanStructureForRescueAsync</c>)
+        /// 이 값을 <c>PlanAttemptArtifact.Attempt</c>에 실어야 한다.
+        ///
+        /// [정정 2026-09-10 — 최종 리뷰 Minor] 정확한 것은 "이 상태가 등록된 시도"까지다
+        /// - <c>StepSections</c>의 각 섹션을 "몇 차 시도가 실제로 만들었는가"와는
+        /// 다를 수 있다. 지목 재생성은 지목되지 않은 단계를 동결한 채 넘기므로,
+        /// 이 상태가 나중 시도에서 갱신될 때도 동결된 옛 섹션은 그대로 딸려 온다.
+        /// 구제 재기록은 <c>StepSections</c> 전량을 이 <c>Attempt</c> 하나로 적으므로,
+        /// 그 회차가 실제로 만들지 않은(동결돼 넘어온) 섹션·재사용된 골격의
+        /// <c>Attempt</c>는 과대 표기될 수 있다 — 본문·<c>Sha256</c>은 옳고 영향은
+        /// 감사 정확도에 한정된다. 섹션마다 출처 회차를 따로 들고 다니려면 반경이
+        /// 커 고치지 않는다(사람 결정).
         /// </summary>
         private sealed record AdoptedGenerationState(
+            int Attempt,
             string PlanStructure,
             string? Skeleton,
             AiResult? SkeletonResult,
@@ -3819,6 +3852,8 @@ namespace ReSet.Core.Services
             // 만들 수 없다.
             IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure,
             IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,
+            PlanAttemptJournal journal,
+            int attempt,
             CancellationToken cancellationToken,
             // 같은 단계가 같은 결함으로 연속 몇 회 지목됐는지(§3-8 에스컬레이션).
             // null이면 에스컬레이션을 절대 걸지 않는다 - L3 사용자 피드백 재생성
@@ -3881,6 +3916,7 @@ namespace ReSet.Core.Services
 
                     skeleton = skeletonResult.Content;
                     generation = skeletonResult;
+                    journal.RecordSkeleton(attempt, skeleton);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -3959,9 +3995,15 @@ namespace ReSet.Core.Services
                     var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
                         step, steps, conventions, specs, targetLanguage, jobName,
                         knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, callGraph,
-                        ddlByProcedure, cancellationToken, PreviousBodyFor(step.Code));
+                        ddlByProcedure, journal, attempt, cancellationToken, PreviousBodyFor(step.Code));
 
                     progressScope.CompleteTask(taskKey);
+
+                    // 병합 루프(Task.WhenAll 뒤)가 아니라 여기서 쓴다 - 거기서 쓰면
+                    // 회차 도중에 죽는 경우를 못 건지는데, 그게 이 기능의 목적이다.
+                    // violation을 그대로 넘긴다 - 2단계가 "이 섹션을 재사용해도
+                    // 되는가"를 manifest만으로 물을 수 있어야 한다(설계서 §4-3).
+                    journal.RecordStepSection(attempt, step.Code, markdown, violation);
                     return new StepSectionResult(step.Code, markdown, violation);
                 }
                 finally
@@ -4228,6 +4270,8 @@ namespace ReSet.Core.Services
             IReadOnlyDictionary<string, IReadOnlyList<string>> callGraph,
             // [N5] 조인 짝 대조의 기준값 - GenerateBySplitAsync 가 받은 것을 그대로 내려받는다.
             IReadOnlyDictionary<string, string> ddlByProcedure,
+            PlanAttemptJournal journal,
+            int attempt,
             CancellationToken cancellationToken,
             // 직전 회차가 이 단계에 대해 채택했던 본문(§3-8). null이면 백지에서
             // 새로 쓴다. 재시도(tries) 전체에 걸쳐 같은 값을 쓴다 - floorFeedback은
@@ -4349,6 +4393,20 @@ namespace ReSet.Core.Services
                 _userInteraction.NotifyStatus(
                     $"  [grey]* {step.Code} 단계가 하한 검사를 통과하지 못해 다시 생성합니다: {adoptedErrors}[/]");
                 floorFeedback = stepResult.SuggestedPromptFix;
+
+                // 다음 시도를 부르기 전에 이번 시도의 본문을 남긴다 - RunStepAsync의
+                // 최종 기록은 이 재시도 루프가 전부 끝난 뒤에야 실행되므로, 재시도
+                // 도중에 죽으면(혹은 다음 시도가 예외를 던지면) 최종 기록 자체가
+                // 없다. 하한 미달로 판정된 본문도 재개 재료로는 값이 있다.
+                //
+                // 이 중간본은 하한 미달이 확정된 시점에 쓰인다 - 결함 칸에도 그
+                // 사실을 남긴다. 최종 사유(floorReason, 아래)와 같은 규약을 쓴다.
+                var midFloorReason = string.IsNullOrWhiteSpace(adoptedErrors)
+                    ? "하한 미달"
+                    : $"하한 미달: {adoptedErrors}";
+                journal.RecordStepSection(
+                    attempt, step.Code, content,
+                    new StepDefect(StepDefectKind.QualityFloor, $"{step.Code} ({midFloorReason})"));
             }
 
             if (adopted == null)
@@ -4382,7 +4440,13 @@ namespace ReSet.Core.Services
         /// 기록 실패로 파이프라인을 죽이지는 않는다.
         /// </summary>
         private async Task<bool> TryCommitPlanStructureAsync(
+            PlanAttemptJournal journal,
             string operationLabel,
+            // [FINAL FIX - Critical] 호출부가 정한다 - 구제 채택(AdoptPlanStructureForRescueAsync)과
+            // 목차 재설계는 계기가 다르고, 그 계기가 감사에서 "이 판이 왜 생겼나"에
+            // 답하는 유일한 값이다(설계서 §4-3). 이 메서드 자신이 "structure-redraft"로
+            // 고정해 적으면 구제 채택이 여는 판에도 재설계라고 거짓을 남긴다.
+            string openedBy,
             string outputRoot,
             string jobName,
             string supersededStructure,
@@ -4393,6 +4457,10 @@ namespace ReSet.Core.Services
             {
                 await WritePlanStructureFilesAsync(
                     outputRoot, jobName, supersededStructure, finalStructure, cancellationToken);
+
+                // 목차가 바뀌면 기존 섹션은 전부 무효다. 판을 새로 열어 그 무효화를
+                // 디렉터리 전환으로 표현한다 - 그러면 지울 것이 없다(설계서 §5).
+                journal.OpenRun(finalStructure, openedBy);
                 return true;
             }
             // 취소는 실패가 아니라 사용자의 지시이므로 전파한다.
@@ -4452,26 +4520,61 @@ namespace ReSet.Core.Services
         /// 번씩). 이 메서드의 부작용(파일 쓰기·superseded 처리)도 그만큼 자주
         /// 반복될 수 있다는 뜻이다 - 여기에 비싸거나 되돌릴 수 없는 부작용을 더할
         /// 때는 그 빈도를 먼저 가정해야 한다.
+        ///
+        /// [FINAL FIX - Critical] 재수립 이후 이 되돌리기가 실제로 판을 새로 열면
+        /// (아래 <c>adoptedStructure != currentStructure</c>), 그 판은 열린 직후엔
+        /// 비어 있다 - <c>RestoreAdoptedGenerationState</c>가 골격·섹션을 메모리로
+        /// 복원해도 그건 이 판이 아니라 살아있는 지역 변수에만 미친다. 재사용 키는
+        /// 목차 해시만 보므로, 그대로 두면 같은 해시를 가리키는 더 오래된 판(재료가
+        /// 있다)과 방금 연 이 판(재료가 없다) 사이에서 2단계의 "최신 판" 판 고르기가
+        /// 빈 판을 고른다. 그래서 여기서 <paramref name="adopted"/>가 이미 들고 있는
+        /// 골격·섹션을 그 자리에서 곧바로 다시 적는다 - "판을 열지 않는다"는 고르지
+        /// 않는다: 그러면 직전 판(재설계로 연 판)이 계속 쓰이는데 그 판의 manifest는
+        /// 재설계 목차를 전제한다고 적고 있어 재사용 키 자체가 거짓이 된다.
         /// </summary>
         private async Task<string> AdoptPlanStructureForRescueAsync(
+            PlanAttemptJournal journal,
             string outputRoot,
             string jobName,
             string currentStructure,
-            string adoptedStructure,
+            AdoptedGenerationState adopted,
             CancellationToken cancellationToken)
         {
             // 재수립이 없었거나 채택본이 현행 목차에서 나왔으면 되돌릴 것이 없다.
-            if (string.IsNullOrEmpty(adoptedStructure) || adoptedStructure == currentStructure)
+            if (string.IsNullOrEmpty(adopted.PlanStructure) || adopted.PlanStructure == currentStructure)
             {
                 return currentStructure;
             }
 
             // 버려지는 목차도 superseded로 남긴다. 어떤 목차가 시도됐고 왜 채택되지
             // 않았는지가 raw/ 디렉터리만 보고 재구성되어야 한다.
-            return await TryCommitPlanStructureAsync(
-                "채택된 시도의 목차", outputRoot, jobName, currentStructure, adoptedStructure, cancellationToken)
-                ? adoptedStructure
-                : currentStructure;
+            var committed = await TryCommitPlanStructureAsync(
+                journal, "채택된 시도의 목차", "rescue-adopt", outputRoot, jobName,
+                currentStructure, adopted.PlanStructure, cancellationToken);
+
+            if (!committed)
+            {
+                return currentStructure;
+            }
+
+            // 새로 연 판에 채택된 시도의 재료를 곧바로 다시 적는다 - 위 docstring 참고.
+            // adopted.Attempt는 이 골격·섹션을 실제로 만든 시도 번호다(§4-3의
+            // Attempt 칸이 거짓 시도 번호를 싣지 않도록).
+            if (adopted.Skeleton != null)
+            {
+                journal.RecordSkeleton(adopted.Attempt, adopted.Skeleton);
+            }
+
+            if (adopted.StepSections != null)
+            {
+                foreach (var (code, markdown) in adopted.StepSections)
+                {
+                    adopted.FloorViolations.TryGetValue(code, out var defect);
+                    journal.RecordStepSection(adopted.Attempt, code, markdown, defect);
+                }
+            }
+
+            return adopted.PlanStructure;
         }
 
         /// <summary>
