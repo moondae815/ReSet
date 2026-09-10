@@ -2534,6 +2534,10 @@ namespace ReSet.Core.Services
                     // TryRecord는 NormalizedScore만 읽으므로 HasDefects를 덮어써도
                     // 최고점 판정은 흔들리지 않는다.
                     EnforceScoreThreshold(l2Result, jobName, attempt);
+
+                    // 채점이 확정되는 유일한 자리다 - 축 게이트가 HasDefects 를 덮은
+                    // 뒤라 AxisThresholdForced 까지 확정된 값이 남는다.
+                    attemptJournal.RecordReview(attempt, l2Result);
                 }
 
                 // 불합격 여부와 무관하게 후보로 등록한다.

@@ -2805,6 +2805,102 @@ namespace ReSet.Core.Tests
             Assert.NotNull(skeletonAtOuterAttemptTwo);
         }
 
+        /// <summary>
+        /// 사용자 질문의 나머지 절반 — 「피드백이 저장되는가」. feedbackHistory 는
+        /// 메모리이고 최근 3라운드만 남으므로(CriticFeedbackLog.MaxRetainedRounds),
+        /// 거부된 회차의 지적은 디스크에 없으면 사라진다.
+        ///
+        /// 이 시험은 목차가 단계 목록(Steps JSON)을 내지 않는 판을 쓴다 - 그래서
+        /// <c>RunConsolidatedPipelineAsync</c>는 분할 경로(<c>GenerateBySplitAsync</c>)로
+        /// 들어가지 않고 단일 호출 폴백(<c>GenerateConsolidatedBatchPlanAsync</c>)만
+        /// 쓴다. 이 폴백 경로에는 Task 4가 걸렸던 함정("같은 attempt 안의 내부
+        /// 재시도")이 구조적으로 없다: 골격도 없고(하한 재시도 대상이 없다),
+        /// Critic이 결함을 신고했는데 자리를 못 대 공짜로 재검토하는 경로
+        /// (<c>reviewRetriedThisAttempt</c>)도 <c>currentSteps != null</c>을
+        /// 전제하는데 여기서는 <c>currentSteps</c>가 항상 null이라 그 경로 자체가
+        /// 닫혀 있다. 그래서 <c>GenerateConsolidatedBatchPlanAsync</c> 호출 수는
+        /// 외부 <c>attempt</c> 값과 1:1로 대응한다 - 그래도 그 대응 자체를
+        /// 우연이 아니라 사실로 못박기 위해, <c>NotifyL2Defects</c>가 회차 1로
+        /// 호출됐다는 것도 별도로 단언한다(그 두 번째 인자가 회차 번호다 - 회차가
+        /// 실제로 거부되어 넘어가려 한다는 직접 증거).
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenAnAttemptIsRejected_ItsReviewIsOnDiskBeforeTheNextAttempt()
+        {
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+
+            var journalDir = Path.Combine(
+                _consolidatedOutputRoot, "Jobs", "Job_Test", "raw", "attempts", "run-001");
+            string? firstReviewAtSecondAttempt = null;
+            var generateCalls = 0;
+
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    generateCalls++;
+                    if (generateCalls > 1 && firstReviewAtSecondAttempt == null)
+                    {
+                        // 회차 2의 첫(이 폴백 경로에서는 유일한) AI 호출 시점 -
+                        // 파이프라인이 끝난 뒤가 아니라 아직 회차 2가 진행 중일 때
+                        // 디스크를 들여다본다.
+                        var path = Path.Combine(journalDir, "reviews", "attempt-01.json");
+                        firstReviewAtSecondAttempt = File.Exists(path) ? File.ReadAllText(path) : null;
+                    }
+                    return Task.FromResult(new AiResult { Content = plan });
+                });
+
+            var reviewCalls = 0;
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    reviewCalls++;
+                    return Task.FromResult(reviewCalls == 1
+                        ? new ReviewResult
+                        {
+                            HasDefects = true,
+                            FeedbackComment = "회차 1의 지적 - 이것이 디스크에 남아야 한다",
+                            ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5,
+                            ScoreException = 5, ScoreReadability = 5
+                        }
+                        : new ReviewResult
+                        {
+                            HasDefects = false,
+                            ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10,
+                            ScoreException = 10, ScoreReadability = 10
+                        });
+                });
+
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            await _orchestrator.RunConsolidatedPipelineAsync(
+                new List<(string, string)> { ("dbo.USP_Test1", "내용") }, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            // 호출 횟수만으로는 회차 전환을 증명하지 못한다(Task 4가 이 함정에
+            // 걸렸다) - 여기서는 NotifyL2Defects(jobName, attempt=1, ...)가 실제로
+            // 불렸다는 직접 증거를 함께 요구한다. 이 알림은 회차 1의 리뷰가
+            // HasDefects=true를 내고 canRetry가 참일 때만(즉 attempt가 실제로
+            // 2로 오르기 직전에만) 불린다.
+            _userInteraction.Received(1).NotifyL2Defects("Job_Test", 1, Arg.Any<int>(), Arg.Any<string>());
+
+            Assert.Equal(2, generateCalls);
+            Assert.Equal(2, reviewCalls);
+            Assert.NotNull(firstReviewAtSecondAttempt);
+
+            var review = JsonDocument.Parse(firstReviewAtSecondAttempt!).RootElement;
+            Assert.Equal(1, review.GetProperty("Attempt").GetInt32());
+            Assert.True(review.GetProperty("HasDefects").GetBoolean());
+            Assert.Equal(
+                "회차 1의 지적 - 이것이 디스크에 남아야 한다",
+                review.GetProperty("FeedbackComment").GetString());
+            Assert.Equal(50, review.GetProperty("NormalizedScore").GetInt32());
+        }
+
         // Task 18 - I2 배선. GenerateStepSectionWithFloorRetryAsync가
         // ValidateBatchStep에 allSteps(=steps)를 넘기지 않으면, 같은 레거시 SP를
         // 나눠 담당하는 두 단계 모두가 그 SP의 DML 범위 표 전체를 요구받아
