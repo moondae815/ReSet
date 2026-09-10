@@ -126,6 +126,53 @@ namespace ReSet.Core.Tests
             Assert.True(routing.AllowFallbacks);
         }
 
+        // 폐쇄 가중치 모델은 벤더가 직접 서빙해 /endpoints가 양자화를 unknown으로만
+        // 보고한다. 그래서 Default의 fp8 하한을 그대로 물려받으면 후보가 0이 되어
+        // 404 "No endpoints found"로 죽는다(실측 2026-09-10, routing_funnel).
+        // 이 두 항목의 Quantizations 재정의를 지우면 그 모델 호출만 조용히 그 404로
+        // 돌아가고, 설정 파일에는 아무 이상도 남지 않는다 - 그 되돌림을 여기서 잡는다.
+        [Theory]
+        [InlineData("src/ReSet.Cli/appsettings.json", "openai/gpt-5.6-sol", "openai", "azure")]
+        [InlineData("src/ReSet.Validator.Cli/appsettings.json", "openai/gpt-5.6-sol", "openai", "azure")]
+        [InlineData("src/ReSet.Cli/appsettings.json", "qwen/qwen3.8-max-0902", "alibaba", null)]
+        [InlineData("src/ReSet.Validator.Cli/appsettings.json", "qwen/qwen3.8-max-0902", "alibaba", null)]
+        public void AppSettings_ClosedWeightModels_LowerQuantizationFloorToUnknown(
+            string relativePath, string modelId, string firstBackend, string? secondBackend)
+        {
+            var routing = ReSet.Cli.Program.ReadOpenRouterRouting(
+                Load(relativePath), "OpenRouter", modelId);
+
+            Assert.NotNull(routing);
+            Assert.Equal(
+                new[] { "unknown" },
+                routing!.Quantizations);
+
+            var expectedOrder = secondBackend is null
+                ? new[] { firstBackend }
+                : new[] { firstBackend, secondBackend };
+            Assert.Equal(expectedOrder, routing.Order);
+
+            // 하한만 내리고 폴백까지 닫아 버리면 Order 밖으로 못 나가 가용성이 사라진다.
+            Assert.True(routing.AllowFallbacks);
+        }
+
+        // 열린 가중치 모델에서는 하한이 그대로 의미가 있다. kimi-k3은 백엔드 19개 중
+        // fp8이 baseten 하나뿐이라, Default를 물려받는 것만으로 후보가 그 하나로 정해진다.
+        // 여기에 Quantizations를 적어 넣는 "일관성" 수정이 들어오면 하한이 풀린다.
+        [Theory]
+        [InlineData("src/ReSet.Cli/appsettings.json")]
+        [InlineData("src/ReSet.Validator.Cli/appsettings.json")]
+        public void AppSettings_OpenWeightPinnedModel_KeepsInheritedQuantizationFloor(string relativePath)
+        {
+            var routing = ReSet.Cli.Program.ReadOpenRouterRouting(
+                Load(relativePath), "OpenRouter", "moonshotai/kimi-k3");
+
+            Assert.NotNull(routing);
+            Assert.Equal(new[] { "baseten/fp8" }, routing!.Order);
+            Assert.Equal(new[] { "fp8" }, routing.Quantizations);
+            Assert.True(routing.AllowFallbacks);
+        }
+
         // AllowFallbacks=false는 "이 목록 밖으로 넘어가지 말라"는 뜻이므로 목록이 비어
         // 있으면 갈 곳을 말하지 않고 길만 막는 요청이 된다. 두 설정 파일 어느 쪽에서든
         // Order를 지우면서 이 값을 false로 남겨 두는 조합을 막는다.
