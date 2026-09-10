@@ -23,6 +23,12 @@ public sealed record L1AttemptLogAppendSite(string RelativePath, int Line, bool 
 /// ·<see cref="CancellationPolicyScanner"/> 와 같은 관례로 싸게 선다.
 ///
 /// 시맨틱 모델(컴파일 필요)을 쓰지 않고 구문 트리만 본다 - 같은 이유로 충분하다.
+///
+/// [알려진 한계 - 2026-09-10 재리뷰 실측] 호출의 존재와 가드 모양만 본다 - 인자와
+/// 도달성은 못 본다. <c>l1Result.Firings</c> 를 빈 리스트로 바꾸면 이 잠금은 초록인
+/// 채 코퍼스가 영영 안 자란다(리뷰가 직접 재현했다). 반대로 변수명을 바꾸는 것(예:
+/// <c>l1Result</c> → <c>mechResult</c>)은 옳게 버틴다 - 이 스캐너가 보는 것은
+/// 호출·가드의 <b>모양</b>이지 특정 이름이 아니다.
 /// </summary>
 public static class L1AttemptLogWiringScanner
 {

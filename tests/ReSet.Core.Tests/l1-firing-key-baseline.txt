@@ -8,24 +8,31 @@
 # ReSet.Core/Services/MechanicalValidator.cs=37 인 이유(2026-09-09 실측, 리뷰
 # Fix Round 1 에서 서술 정정):
 #
+# [행 번호 대신 심볼로 인용한다 - 2026-09-10 재리뷰 발견] 이 파일의 위치 인용이
+# 이 브랜치에서만 세 커밋 연속(:12213→:12222→:12224) 무효가 됐다 - 편집 하나가
+# 뒤 클래스를 밀 때마다 낡는다. 심볼은 안 밀린다. 아래는 전부 행 번호 대신
+# 클래스·메서드 이름으로 가리킨다.
+#
 # 이 37 은 부채이고, 그 부채의 정체는 「다른 C# 타입이라서」가 아니라 「그 갈래
 # 전체가 자기강화 게이트 밖이라서」다. `perl -pi -e
 # 's/result\.Errors\.Add\(/result.Report(/g'` 를 97 자리에 돌리자 37 곳에서
-# `dotnet build --no-incremental` 이 CS1061 을 냈다 - `StepValidationResult`
-# (:12224, 2026-09-10 최종 리뷰에서 실측 재확인 - grep -n "public class
-# StepValidationResult" src/ReSet.Core/Services/MechanicalValidator.cs)는
-# `Report`/`Firings`/`DetailedErrors` 통로가 없는 별개 타입이라 손으로
-# `result.Errors.Add(` 로 되돌렸다(38 번째는 `AddRange(:625)` 로, 정규식이 애초에
-# `Add\(` 뒤 즉시 괄호를 요구해 안 건드렸다 - 37+1=38 이 이 타입 소속 전체다).
+# `dotnet build --no-incremental` 이 CS1061 을 냈다 - `MechanicalValidator.cs`
+# 의 `StepValidationResult` 클래스는 `Report`/`Firings`/`DetailedErrors` 통로가
+# 없는 별개 타입이라 손으로 `result.Errors.Add(` 로 되돌렸다(38 번째는
+# `ValidateBatchStep` 메서드 안의 `result.Errors.AddRange(result.PlanDefects)`
+# 호출로, 정규식이 애초에 `Add\(` 뒤 즉시 괄호를 요구해 안 건드렸다 -
+# 37+1=38 이 이 타입 소속 전체다).
 #
 # 그런데 타입이 다른 것은 증상이지 원인이 아니다. 이 타입을 쓰는
-# `ValidateBatchStep` 재시도 루프(VerificationPipelineOrchestrator.cs 약
-# 4311행)는 `L1AttemptLog.Append(...)` 를 한 번도 부르지 않는다 - 그건 오직
-# 문서 단위 `_validator.Validate(...)` 갈래(약 1045행 근방, 1059행에서 Append)
-# 에서만 난다. 즉 이 38 곳은 `Firings`에도 안 실리고 `raw/l1-attempts.json`
-# 에도 안 남으므로, `SelfReinforcingCheckTests` 가 재는 코퍼스에 이 갈래의
-# 발화가 원천적으로 들어오지 않는다 - CheckErrorCodeUniquenessClaim 이 낸
-# 재시도 6 회짜리 반복 발화 사고가 여기서 나면 자동 탐지가 없다.
+# `VerificationPipelineOrchestrator.cs` 의 `GenerateStepSectionWithFloorRetryAsync`
+# (그 안에서 `_validator.ValidateBatchStep(...)` 를 부른다)는
+# `L1AttemptLog.Append(...)` 를 한 번도 부르지 않는다 - 그건 오직 같은 파일의
+# `RunCodeObjectPipelineCoreAsync`(`_validator.Validate(...)` 를 부르고, 그
+# 실패 가드 안에서 Append 한다) 갈래에서만 난다. 즉 이 38 곳은 `Firings`에도
+# 안 실리고 `raw/l1-attempts.json` 에도 안 남으므로, `SelfReinforcingCheckTests`
+# 가 재는 코퍼스에 이 갈래의 발화가 원천적으로 들어오지 않는다 -
+# CheckErrorCodeUniquenessClaim 이 낸 재시도 6 회짜리 반복 발화 사고가
+# 여기서 나면 자동 탐지가 없다.
 #
 # 0 으로 가는 길은 하나가 아니라 **두 가지를 한 커밋에서** 해야 닫힌다:
 #   1. `StepValidationResult` 에도 `Report()`/`Firings` 를 놓아 이 37(+1) 곳을
