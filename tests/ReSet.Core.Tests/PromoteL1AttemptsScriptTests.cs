@@ -71,6 +71,119 @@ namespace ReSet.Core.Tests
             }
         }
 
+        /// <summary>
+        /// 가짜 저장소를 짓고 스크립트를 돌린다. 스크립트가 자기 위치(<c>BASH_SOURCE</c>)로
+        /// <c>repo_root</c> 를 잡으므로 실물 코퍼스·<c>output/</c> 은 안 건드린다.
+        /// </summary>
+        private static (int ExitCode, string Stdout, string Stderr, string CorpusFile) RunInFakeRepo(
+            Action<string> seedRawDir,
+            string? existingCorpusContent = null)
+        {
+            var repoRoot = RepoPaths.FindRepoRoot();
+            var realScript = Path.Combine(repoRoot, "scripts", "promote-l1-attempts.sh");
+            var fakeRepo = Path.Combine(Path.GetTempPath(), "promote-guard-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var corpusDir = Path.Combine(fakeRepo, "tests", "ReSet.Core.Tests", "Fixtures", "rejected-attempts");
+                Directory.CreateDirectory(Path.Combine(fakeRepo, "scripts"));
+                Directory.CreateDirectory(corpusDir);
+
+                var copied = Path.Combine(fakeRepo, "scripts", "promote-l1-attempts.sh");
+                File.Copy(realScript, copied);
+#pragma warning disable CA1416
+                File.SetUnixFileMode(copied,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+#pragma warning restore CA1416
+
+                var rawDir = Path.Combine(fakeRepo, "output", "Procedures", "dbo.FAKE_PROC", "raw");
+                Directory.CreateDirectory(rawDir);
+                seedRawDir(rawDir);
+
+                var corpusFile = Path.Combine(corpusDir, "dbo.FAKE_PROC", "attempts.json");
+                if (existingCorpusContent != null)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(corpusFile)!);
+                    File.WriteAllText(corpusFile, existingCorpusContent);
+                }
+
+                var (exit, stdout, stderr) = RunBash(copied);
+                var landed = File.Exists(corpusFile) ? File.ReadAllText(corpusFile) : string.Empty;
+                return (exit, stdout, stderr, landed);
+            }
+            finally { TryDelete(fakeRepo); }
+        }
+
+        private const string RunOne = """[{"Run":1,"Attempt":1,"CheckKey":"K","Message":"1 판"}]""";
+        private const string RunTwo = """[{"Run":1,"Attempt":1,"CheckKey":"K","Message":"2 판"}]""";
+
+        [SkippableFact]
+        public void RefusesToOverwriteACorpusFileThatHasDifferentContent()
+        {
+            Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "bash 전용 시나리오다.");
+
+            // [감사 §4(a)] 종전에는 그냥 cp 였다. 덮어도 게이트는 안 빨개진다 -
+            // unrecorded = found - recorded 라 found 가 줄면 조용하고, 원장 줄만 근거를
+            // 잃는다. 그러니 데이터가 사라지는 자리에서 승격기가 직접 서야 한다.
+            var (exit, _, stderr, landed) = RunInFakeRepo(
+                raw => File.WriteAllText(Path.Combine(raw, "l1-attempts.json"), RunTwo),
+                existingCorpusContent: RunOne);
+
+            Assert.Equal(1, exit);
+            Assert.Contains("이미 다른 내용이 있습니다", stderr, StringComparison.Ordinal);
+            Assert.Equal(RunOne, landed);   // 앞 판이 그대로 남아 있다
+        }
+
+        [SkippableFact]
+        public void SaysWhatToDoWhenItRefuses()
+        {
+            Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "bash 전용 시나리오다.");
+
+            // [부작용 축] 「실패했습니다」만 남기면 사람이 파일을 지워서 통과시킨다 -
+            // 그러면 이 가드가 데이터 손실의 원인이 된다.
+            var (_, _, stderr, _) = RunInFakeRepo(
+                raw => File.WriteAllText(Path.Combine(raw, "l1-attempts.json"), RunTwo),
+                existingCorpusContent: RunOne);
+
+            Assert.Contains("할 일:", stderr, StringComparison.Ordinal);
+        }
+
+        [SkippableFact]
+        public void RefusesWhenTheRawDirectoryHoldsARunTheScriptCannotSee()
+        {
+            Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "bash 전용 시나리오다.");
+
+            // [★ 조건이 둘이어야 하는 이유] dest 존재 검사만으로는 2026-09-10 상태에서
+            // 안 걸린다 - 코퍼스에 1 판이 있고 output 에는 2 판만 보이니 그대로 덮는다.
+            // 사람이 앞 판을 l1-attempts.run1-20260910.json 으로 개명해 뒀고 find 는
+            // 'l1-attempts.json' 만 본다.
+            var (exit, stdout, stderr, _) = RunInFakeRepo(raw =>
+            {
+                File.WriteAllText(Path.Combine(raw, "l1-attempts.json"), RunTwo);
+                File.WriteAllText(Path.Combine(raw, "l1-attempts.run1-20260910.json"), RunOne);
+            });
+
+            Assert.Equal(1, exit);
+            Assert.Contains("안 보는 판이 1 개", stderr, StringComparison.Ordinal);
+            Assert.Contains("l1-attempts.run1-20260910.json", stderr, StringComparison.Ordinal);
+            Assert.Contains("안 보이던 판 1 개", stdout, StringComparison.Ordinal);
+        }
+
+        [SkippableFact]
+        public void PromotesAgainWhenTheContentIsIdentical()
+        {
+            Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "bash 전용 시나리오다.");
+
+            // 멱등이어야 한다. 같은 판을 두 번 승격하는 것까지 막으면 사람이 가드를
+            // 꺼 버릴 이유가 생긴다.
+            var (exit, stdout, _, landed) = RunInFakeRepo(
+                raw => File.WriteAllText(Path.Combine(raw, "l1-attempts.json"), RunOne),
+                existingCorpusContent: RunOne);
+
+            Assert.Equal(0, exit);
+            Assert.Contains("승격한 객체 1 개", stdout, StringComparison.Ordinal);
+            Assert.Equal(RunOne, landed);
+        }
+
         private static (int ExitCode, string Stdout, string Stderr) RunBash(string scriptPath)
         {
             var psi = new ProcessStartInfo
