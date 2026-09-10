@@ -180,7 +180,7 @@ ReSet의 산출물은 전부 AI가 만든 것이 아니다. **어느 주체가 �
 | `raw/PlanStructure.superseded-N.md` | 🤖 AI | 목차를 다시 짤 때마다 | 폐기된 이전 목차. **덮어쓰지 않고 번호를 늘려 보존한다** — 목차가 왜 바뀌었는지는 이전 판이 있어야 알 수 있으므로 |
 | `raw/prompt-context.md` | ⚙️ 조립 | 3/3 성공 시 | 계획서를 만든 프롬프트 원문 |
 | `raw/ddl/*.md` | 🗄 DB 조회 → ⚙️ 표 포매팅 | 번들 생성 시 | Job 전체가 건드리는 참조 테이블의 스키마 표 |
-| `raw/attempts/run-NNN/manifest.json` | ⚙️ 조립 | 판을 열 때(실행 시작·목차 재작성)와 골격·단계·리뷰가 새로 쓰일 때마다 | 그 판이 무엇을 전제로 도는가(목차 해시·명세서 해시·provider·model·effort·대상 언어)와 무엇이 어느 시도에 쓰였는가. **이 파일이 진실이고 디렉터리의 파일 존재는 진실이 아니다** — 키는 `SchemaVersion`·`Run`·`Job`·`StartedAt`·`OpenedBy`·`ReuseKey`·`Skeleton`·`Steps`, 전부 **PascalCase**로 직렬화한다 |
+| `raw/attempts/run-NNN/manifest.json` | ⚙️ 조립 | 판을 열 때(실행 시작·목차 재작성)와 골격·단계가 새로 쓰일 때마다 | 그 판이 무엇을 전제로 도는가(목차 해시·명세서 해시·provider·model·effort·대상 언어)와 무엇이 어느 시도에 쓰였는가. **이 파일이 진실이고 디렉터리의 파일 존재는 진실이 아니다** — 키는 `SchemaVersion`·`Run`·`Job`·`StartedAt`·`OpenedBy`·`ReuseKey`·`Skeleton`·`Steps`, 전부 **PascalCase**로 직렬화한다. **리뷰 기록은 이 파일을 갱신하지 않는다** — `RecordReview`는 `reviews/attempt-NN.json`만 쓰고 `FlushManifest()`를 부르지 않는다 |
 | `raw/attempts/run-NNN/skeleton.md` | 🤖 AI | 골격이 확정될 때마다 | 그 판의 최신 공통 규약. 회차별로 쌓지 않고 **최신 하나**로 덮는다 — 언제 어느 시도가 덮었는지는 manifest의 `Skeleton`이 안다 |
 | `raw/attempts/run-NNN/steps/[코드].md` | 🤖 AI | 단계 본문이 나올 때마다 — **단계 생성이 끝난 직후 한 번, 하한 미달로 다음 시도에 넘어가기 직전에 또 한 번**(하한 재시도 루프가 별개 층이라 두 자리에서 같은 코드를 덮어쓴다) | **거부된 회차의 것도, 하한 미달로 판정된 중간본도 남는다.** 중단됐을 때 다시 뽑지 않아도 되는 유일한 재료. 여기도 최신 하나로 덮는다 |
 | `raw/attempts/run-NNN/reviews/attempt-NN.json` | 🤖 AI(채점) + ⚙️ 조립 | 회차 채점이 끝날 때마다 | 그 회차의 점수와 Critic 지적. 메모리의 `feedbackHistory`는 최근 3라운드만 들고 있어 **디스크가 더 오래 기억한다** — 골격·섹션과 달리 최신 하나로 덮지 않고 회차마다 별개 파일이다(누적이 아니라 시계열) |
