@@ -184,7 +184,11 @@ namespace ReSet.Core.Services
 
         public static string ComputeSha256(string input)
         {
-            if (string.IsNullOrEmpty(input)) return string.Empty;
+            // null 만 가드한다 - 빈 문자열은 "미계산" sentinel 이 아니라 실제 빈
+            // 내용이므로 그 다이제스트(e3b0c442...)를 돌려준다. 여기서 ""를
+            // 돌리면 "미계산"과 "빈 내용"이 같은 값이 되어 재사용 키가 둘을
+            // 구분 못 한다(리뷰 라운드 1).
+            if (input is null) return string.Empty;
 
             var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input));
             var sb = new StringBuilder(bytes.Length * 2);

@@ -72,6 +72,23 @@ namespace ReSet.Core.Tests
             Assert.Equal("run-002", Path.GetFileName(second.CurrentRunDirectory));
         }
 
+        // 빈 내용의 해시는 "미계산" sentinel 과 달라야 한다 - 둘 다 "" 면 2단계
+        // 재개가 "빈 목차끼리 일치"와 "둘 다 미계산"을 구분 못 한다.
+        [Fact]
+        public void ComputeSha256_EmptyString_ReturnsTheRealDigestNotASentinel()
+        {
+            Assert.Equal(
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                PlanAttemptJournal.ComputeSha256(string.Empty));
+        }
+
+        // null 은 계산할 내용이 없으므로 미계산을 뜻하는 "" 로 남는다.
+        [Fact]
+        public void ComputeSha256_Null_ReturnsEmptyString()
+        {
+            Assert.Equal(string.Empty, PlanAttemptJournal.ComputeSha256(null!));
+        }
+
         // 소프트페일 - 관측이 파이프라인을 죽이면 안 된다.
         [Fact]
         public void OpenRun_WhenOutputRootIsAFile_StaysInactiveAndDoesNotThrow()
