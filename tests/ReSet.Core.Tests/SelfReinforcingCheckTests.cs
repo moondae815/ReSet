@@ -21,23 +21,22 @@ namespace ReSet.Core.Tests
     /// [왜 개수가 아니라 서명인가] 발화 수·통과 수는 활동이지 효력이 아니다. 그날
     /// 「3 자리가 2 자리로 줄었다」가 실제로는 「같은 문장이 그대로 남고 하나 더 늘었다」였다.
     ///
-    /// [알려진 한계 - 미리 적어 둔다, 2026-09-10 재리뷰 지목] <c>raw/l1-attempts.json</c>
-    /// 에는 <b>판 경계</b>가 없다. 같은 객체를 두 번(또는 그 이상) 재생성하면
-    /// <c>L1AttemptLog.Append</c> 가 판마다 시도 번호를 이어 누적하므로, 서로 다른 판의
-    /// 시도 계열이 한 파일에 합쳐진다(예: 1 판 시도 1~6 뒤에 2 판 시도 1~6 이 이어지면
-    /// 겉으로는 "시도 7~12"처럼 보인다). 판 사이에 <c>raw/</c> 를 지우는 코드가 없어
-    /// 실제로 도달 가능하다.
+    /// [판 경계 - 2026-09-10 감사 §4(a)에서 닫았다] <c>raw/l1-attempts.json</c> 에는 판
+    /// 경계가 <b>없었다.</b> 같은 객체를 두 번 재생성하면 <c>L1AttemptLog.Append</c> 가 판마다
+    /// 시도 번호를 이어 누적하므로 서로 다른 판의 계열이 한 파일에 합쳐졌다(1 판 시도 1~6 뒤에
+    /// 2 판 시도 1~5 가 붙으면 겉으로는 "시도 7~11"처럼 보인다). 판 사이에 <c>raw/</c> 를 지우는
+    /// 코드가 없어 실제로 도달 가능했고, 2026-09-10 에는 <b>사람이 앞 판 파일을 손으로 개명해</b>
+    /// 그 경로를 비켜 갔다 - 다음번에 반복된다는 보장이 없었다.
     ///
-    /// <b>그래도 안전한 방향이다</b> - 합침은 원소를 <b>더할</b> 뿐 지우지 않으므로,
-    /// <c>FindSelfReinforcing</c> 이 이미 찾은 <c>gap == 1</c> 쌍을 절대 지우지 못한다.
-    /// 최악의 경우 서로 다른 판의 우연한 시도 번호 인접이 <b>새 후보를 늘릴 뿐</b>이고
-    /// (오탐 후보 증가는 사람이 원장에서 걸러낸다), 진짜 자기강화 신호를 <b>가리는
-    /// 방향으로는 절대 안 움직인다</b> - fail-loud 다.
+    /// 지금은 <c>L1AttemptFiring.Run</c> 이 붙는다. <c>Append</c> 가 「들어온 시도가 마지막
+    /// 시도를 넘지 않으면 새 판」으로 경계를 유도하므로, 이어 붙어도 판이 갈린다. 이 게이트는
+    /// <c>(객체, 판, 검사키)</c> 로 묶어 <b>판 경계를 가로지르는 인접을 후보로 내지 않는다.</b>
     ///
-    /// 다만 이 자리에서 후보가 나오면, 원장에 적을 근거에는 그 사실 - <b>판이 섞인
-    /// 계열</b>이라 시도 번호가 실제 재시도 순서와 안 맞을 수 있다는 것 - 을 함께
-    /// 적어야 한다. 그렇지 않으면 다음 사람이 "시도 7 에서 또 발화했다"를 문자
-    /// 그대로 읽고 엉뚱한 판을 찾는다.
+    /// 원장 키도 판을 담는다(<c>&lt;객체&gt; run&lt;N&gt; &lt;검사키&gt;</c>). 판정은 그 판의
+    /// 증거를 보고 내린 것이므로 다음 판에 자동으로 옮겨 가지 않는다 - <b>「고쳤다고 판정했는데
+    /// 다음 판에서 또 났다」가 이 코퍼스가 낼 수 있는 가장 센 신호</b>이고, 판 무관 키는 그것을
+    /// 조용히 흡수한다.
+    ///
     /// </summary>
     public class SelfReinforcingCheckTests
     {
@@ -55,7 +54,9 @@ namespace ReSet.Core.Tests
 
             foreach (var (objectName, firings) in corpus)
             {
-                foreach (var group in firings.GroupBy(f => f.CheckKey, StringComparer.Ordinal))
+                foreach (var group in firings
+                    .GroupBy(f => (f.Run, f.CheckKey))
+                    .OrderBy(g => g.Key.Run).ThenBy(g => g.Key.CheckKey, StringComparer.Ordinal))
                 {
                     // [Distinct() 없음 - 2026-09-10 되돌림으로 확인, 09-10 리뷰에서
                     // 일반화] 원래 여기 있던 .Distinct() 를 지우고 다시 돌려도 4 개
@@ -67,7 +68,7 @@ namespace ReSet.Core.Tests
                     var attempts = group.Select(f => f.Attempt).OrderBy(a => a).ToList();
                     if (attempts.Zip(attempts.Skip(1), (a, b) => b - a).Any(gap => gap == 1))
                     {
-                        found.Add($"{objectName} {group.Key}");
+                        found.Add($"{objectName} run{group.Key.Run} {group.Key.CheckKey}");
                     }
                 }
             }
@@ -124,12 +125,12 @@ namespace ReSet.Core.Tests
             {
                 ("dbo.UP_X", (IReadOnlyList<L1AttemptFiring>)new[]
                 {
-                    new L1AttemptFiring(1, "CheckA", "…"),
-                    new L1AttemptFiring(2, "CheckA", "…"),
+                    new L1AttemptFiring(1, 1, "CheckA", "…"),
+                    new L1AttemptFiring(1, 2, "CheckA", "…"),
                 })
             };
 
-            Assert.Equal(new[] { "dbo.UP_X CheckA" }, FindSelfReinforcing(corpus));
+            Assert.Equal(new[] { "dbo.UP_X run1 CheckA" }, FindSelfReinforcing(corpus));
         }
 
         [Fact]
@@ -140,7 +141,7 @@ namespace ReSet.Core.Tests
             {
                 ("dbo.UP_X", (IReadOnlyList<L1AttemptFiring>)new[]
                 {
-                    new L1AttemptFiring(1, "CheckA", "…"),
+                    new L1AttemptFiring(1, 1, "CheckA", "…"),
                 })
             };
 
@@ -155,8 +156,8 @@ namespace ReSet.Core.Tests
             {
                 ("dbo.UP_X", (IReadOnlyList<L1AttemptFiring>)new[]
                 {
-                    new L1AttemptFiring(1, "CheckA", "…"),
-                    new L1AttemptFiring(3, "CheckA", "…"),
+                    new L1AttemptFiring(1, 1, "CheckA", "…"),
+                    new L1AttemptFiring(1, 3, "CheckA", "…"),
                 })
             };
 
@@ -170,12 +171,53 @@ namespace ReSet.Core.Tests
             {
                 ("dbo.UP_X", (IReadOnlyList<L1AttemptFiring>)new[]
                 {
-                    new L1AttemptFiring(1, "CheckA", "…"),
-                    new L1AttemptFiring(2, "CheckB", "…"),
+                    new L1AttemptFiring(1, 1, "CheckA", "…"),
+                    new L1AttemptFiring(1, 2, "CheckB", "…"),
                 })
             };
 
             Assert.Empty(FindSelfReinforcing(corpus));
+        }
+
+        [Fact]
+        public void FindSelfReinforcing_DoesNotMergeAcrossRuns()
+        {
+            // ★ 판 경계. 1 판 시도 6 과 2 판 시도 1 은 인접이 아니다 - 사이에 재생성이
+            // 통째로 있었다. Run 이 없던 시절에는 이 둘이 "6, 1" 로 한 계열에 섞였고,
+            // 파일이 이어 붙으면 "6, 7" 로 보여 없던 후보를 냈다.
+            var corpus = new[]
+            {
+                ("dbo.UP_X", (IReadOnlyList<L1AttemptFiring>)new[]
+                {
+                    new L1AttemptFiring(1, 6, "CheckA", "…"),
+                    new L1AttemptFiring(2, 1, "CheckA", "…"),
+                    new L1AttemptFiring(2, 2, "CheckA", "…"),
+                })
+            };
+
+            // 2 판 안의 1·2 만 후보다. 판을 가로지르는 6→1 은 아니다.
+            Assert.Equal(new[] { "dbo.UP_X run2 CheckA" }, FindSelfReinforcing(corpus));
+        }
+
+        [Fact]
+        public void FindSelfReinforcing_KeysTheCandidateByRun()
+        {
+            // 같은 검사가 두 판에서 각각 자기강화면 **줄이 둘**이다. 하나로 접으면
+            // 1 판 판정이 2 판을 조용히 덮는다.
+            var corpus = new[]
+            {
+                ("dbo.UP_X", (IReadOnlyList<L1AttemptFiring>)new[]
+                {
+                    new L1AttemptFiring(1, 1, "CheckA", "…"),
+                    new L1AttemptFiring(1, 2, "CheckA", "…"),
+                    new L1AttemptFiring(2, 1, "CheckA", "…"),
+                    new L1AttemptFiring(2, 2, "CheckA", "…"),
+                })
+            };
+
+            Assert.Equal(
+                new[] { "dbo.UP_X run1 CheckA", "dbo.UP_X run2 CheckA" },
+                FindSelfReinforcing(corpus));
         }
 
         [SkippableFact]
@@ -246,7 +288,7 @@ namespace ReSet.Core.Tests
             {
                 var line = raw.Trim();
                 if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
-                // 형식: "<객체> <검사키>  # 판정과 근거"
+                // 형식: "<객체> run<N> <검사키>  # 판정과 근거"
                 var withoutComment = line.Split('#', 2)[0].Trim();
                 if (withoutComment.Length > 0) recorded.Add(withoutComment);
             }

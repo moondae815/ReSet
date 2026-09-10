@@ -1,50 +1,60 @@
 [
   {
+    "Run": 1,
     "Attempt": 1,
     "CheckKey": "ReportTableShapeBreaks",
     "Message": "`### 오류 코드 (기계 확정 — 수정 금지)` 표의 4번째 행이 8칸인데 헤더 행은 5칸입니다. 셀 수가 다르면 표로 렌더링되지 않아 확정값이 평문으로 무너집니다. 해당 행: \n| UPDATE 2 | -102 | @po_intRetVal | UPDATE 3 | -1 | @po_intRetVal |\n두 행이 한 줄로 붙었습니다 - 줄바꿈이 빠진 것이지 칸이 남는 것이 아닙니다. 칸을 지우지 마십시오(확정된 행이 사라집니다). 아래 2줄로 나누십시오:\n| UPDATE 2 | -102 | @po_intRetVal |\n| UPDATE 3 | -1 | @po_intRetVal |"
   },
   {
+    "Run": 1,
     "Attempt": 1,
     "CheckKey": "AddUpdateMappingError",
     "Message": "`## CRUD 분석`에 UPDATE 대상 테이블 `SETTLE_POQ_DB.dbo.TSettleMst`의 매핑 표가 없습니다. 정적 파서가 확정한 SET 대상 컬럼: DiscountFlag, DiscountAmt, PGComm, PGVT, CLCOMM, CLVT, CLCOMMTYPE, PGCOMMTYPE, PGETC, CLIntComm, CLETC, PGVTTYPE, PGIntRealComm, ProcState, CardAmt, CouponAmt, MoneyAmt, PointAmt, OUTSTATE"
   },
   {
+    "Run": 1,
     "Attempt": 1,
     "CheckKey": "CheckErrorCodeUniquenessClaim",
     "Message": "명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 중복된 코드 -1, -2이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 특정할 수 없습니다. 공유 관계: -1→UPDATE 3·UPDATE 4 · -2→UPDATE 5·UPDATE 6. 고치는 법: 그 문장에서 「고유」·「서로 다른」을 빼고, 위 공유 관계를 그대로 적어 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. 해당 서술 3자리 - 하나만 고치고 끝내지 마십시오: \"오류 발생 시 문장별 고유 음수 코드가 대입되며, 정상 종료(COMMIT) 경로에서는 프로시저 내부에서 값이 대입되지 않음 |\" · \"…→ `@po_intRetVal`에 해당 문장 고유 코드 대입 → `RETURN`으로 즉시 종료합니다\" · \"…부분의 코드가 서로 다르더라도 이 코드들을 \"고유\", \"고유한\", \"서로 다른\" 값이라고 서술해서는 안 됩니다\""
   },
   {
+    "Run": 1,
     "Attempt": 2,
     "CheckKey": "AddUpdateMappingError",
     "Message": "`## CRUD 분석`에 UPDATE 대상 테이블 `SETTLE_POQ_DB.dbo.TSettleMst`의 매핑 표가 없습니다. 정적 파서가 확정한 SET 대상 컬럼: DiscountFlag, DiscountAmt, PGComm, PGVT, CLCOMM, CLVT, CLCOMMTYPE, PGCOMMTYPE, PGETC, CLIntComm, CLETC, PGVTTYPE, PGIntRealComm, ProcState, CardAmt, CouponAmt, MoneyAmt, PointAmt, OUTSTATE"
   },
   {
+    "Run": 1,
     "Attempt": 2,
     "CheckKey": "CheckErrorCodeUniquenessClaim",
     "Message": "명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 중복된 코드 -1, -2이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 특정할 수 없습니다. 공유 관계: -1→UPDATE 3·UPDATE 4 · -2→UPDATE 5·UPDATE 6. 고치는 법: 그 문장에서 「고유」·「서로 다른」을 빼고, 위 공유 관계를 그대로 적어 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. 해당 서술 1자리 - 하나만 고치고 끝내지 마십시오: \"…후 `@po_intRetVal`에 해당 구문 고유의 음수 코드를 대입하고 `RETURN` 합니다\""
   },
   {
+    "Run": 1,
     "Attempt": 3,
     "CheckKey": "CheckErrorCodeUniquenessClaim",
     "Message": "명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 중복된 코드 -1, -2이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 특정할 수 없습니다. 공유 관계: -1→UPDATE 3·UPDATE 4 · -2→UPDATE 5·UPDATE 6. 고치는 법: 그 문장에서 「고유」·「서로 다른」을 빼고, 위 공유 관계를 그대로 적어 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. 해당 서술 2자리 - 하나만 고치고 끝내지 마십시오: \"… `@po_intRetVal`에 해당 문장의 고유 오류 코드를 대입하고 `RETURN` 합니다\" · \"…TRAN` → `@po_intRetVal`에 고유 오류 코드 대입 → `RETURN`으로 즉시 종료합니다\""
   },
   {
+    "Run": 1,
     "Attempt": 4,
     "CheckKey": "CheckErrorCodeUniquenessClaim",
     "Message": "명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 중복된 코드 -1, -2이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 특정할 수 없습니다. 공유 관계: -1→UPDATE 3·UPDATE 4 · -2→UPDATE 5·UPDATE 6. 고치는 법: 그 문장에서 「고유」·「서로 다른」을 빼고, 위 공유 관계를 그대로 적어 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. 해당 서술 1자리 - 하나만 고치고 끝내지 마십시오: \"대부분의 코드는 서로 다르지만, 위 두 쌍이 코드를 공유하므로 반환 코드 전체를 \"고유하다\"거나 \"서로 다르다\"고 서술해서는 안 됩니다\""
   },
   {
+    "Run": 1,
     "Attempt": 5,
     "CheckKey": "AddUpdateMappingError",
     "Message": "`## CRUD 분석`에 UPDATE 대상 테이블 `SETTLE_POQ_DB.dbo.TSettleMst`의 매핑 표가 없습니다. 정적 파서가 확정한 SET 대상 컬럼: DiscountFlag, DiscountAmt, PGComm, PGVT, CLCOMM, CLVT, CLCOMMTYPE, PGCOMMTYPE, PGETC, CLIntComm, CLETC, PGVTTYPE, PGIntRealComm, ProcState, CardAmt, CouponAmt, MoneyAmt, PointAmt, OUTSTATE"
   },
   {
+    "Run": 1,
     "Attempt": 5,
     "CheckKey": "CheckErrorCodeUniquenessClaim",
     "Message": "명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 중복된 코드 -1, -2이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 특정할 수 없습니다. 공유 관계: -1→UPDATE 3·UPDATE 4 · -2→UPDATE 5·UPDATE 6. 고치는 법: 그 문장에서 「고유」·「서로 다른」을 빼고, 위 공유 관계를 그대로 적어 「같은 코드를 쓰는 문장이 있어 반환 코드만으로는 실패 지점을 특정할 수 없다」는 사실을 서술하십시오. 「각 문장이 자기 코드를 대입한다」는 뜻으로 쓴 것이라도 「고유」라는 낱말은 유일성 주장으로 읽히므로 쓰지 마십시오. 해당 서술 1자리 - 하나만 고치고 끝내지 마십시오: \"…후 `@po_intRetVal`에 해당 문장 고유의 음수 코드를 대입하고 값 없는 `RETURN`으로 종료한다\""
   },
   {
+    "Run": 1,
     "Attempt": 6,
     "CheckKey": "AddUpdateMappingError",
     "Message": "`## CRUD 분석`에 UPDATE 대상 테이블 `SETTLE_POQ_DB.dbo.TSettleMst`의 매핑 표가 없습니다. 정적 파서가 확정한 SET 대상 컬럼: DiscountFlag, DiscountAmt, PGComm, PGVT, CLCOMM, CLVT, CLCOMMTYPE, PGCOMMTYPE, PGETC, CLIntComm, CLETC, PGVTTYPE, PGIntRealComm, ProcState, CardAmt, CouponAmt, MoneyAmt, PointAmt, OUTSTATE"

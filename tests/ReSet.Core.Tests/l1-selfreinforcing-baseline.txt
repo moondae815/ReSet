@@ -1,6 +1,12 @@
 # 「한 객체의 연속한 두 시도에서 같은 검사키가 발화」한 자리 중, 사람이 판정한 것.
 #
-# 형식: <객체> <검사키>  # 판정과 근거(커밋 해시 포함)
+# 형식: <객체> run<N> <검사키>  # 판정과 근거(커밋 해시 포함)
+#
+# ★ 판(run)이 키의 일부다 — 2026-09-10 감사 §4(a). 판정은 그 판의 증거를 보고 내린 것이라
+# 다음 판으로 자동으로 옮겨 가지 않는다. 2 판에서 같은 검사가 또 발화하면 게이트가 빨개지고,
+# 그때 새 줄을 근거와 함께 적어야 한다 — 「고쳤다고 판정했는데 다음 판에서 또 났다」가 이
+# 코퍼스가 낼 수 있는 가장 센 신호이고, 판 무관 키는 그것을 조용히 흡수한다.
+# 아래 두 줄이 run1 인 이유도 그것이다 — 판정 본문이 1 판의 시도 번호를 직접 인용한다.
 #
 # 여기 적는 것은 「봐줬다」가 아니라 「봤고 이렇게 판정했다」이다. 근거 없이 적지 마라 -
 # 근거 없는 줄은 화이트리스트가 조용히 넓어지는 자리가 된다.
@@ -20,7 +26,7 @@
 # 다음 사람이 이 파일을 훑고 「연속 발화 = 전부 자기강화 결함」이라고 일반화하면 안
 # 된다. 서명은 후보를 내리는 것까지고, 원인 판정은 그 아래 근거를 읽어야 나온다.
 
-dbo.UP_UTIL_SETTLE_EXCEPTION_PROC CheckErrorCodeUniquenessClaim  # 오탐 — 고쳤다(be43d19f).
+dbo.UP_UTIL_SETTLE_EXCEPTION_PROC run1 CheckErrorCodeUniquenessClaim  # 오탐 — 고쳤다(be43d19f).
   # [2026-09-10 Fix Round 1 정정] 최초 판정(위 커밋 이전 버전)은 원인을
   # 「UniquenessDenialTokens 에 선행 부정 「안」이 없다」로 적었다 — 이 진단은
   # 실증적으로 틀렸다. UniquenessDenialTokens 에 "안"을 넣어도 같은 문장이 여전히
@@ -49,7 +55,7 @@ dbo.UP_UTIL_SETTLE_EXCEPTION_PROC CheckErrorCodeUniquenessClaim  # 오탐 — �
   # "고유"·"서로 다른"을 유일성 주장으로 쓴 진짜 결함 — 그 넷은 이 게이트가 옳게
   # 잡은 것이고 고치지 않는다.
 
-dbo.UP_UTIL_SETTLE_EXCEPTION_PROC AddUpdateMappingError  # 진짜 결함(모델이 헤딩 레벨을 틀렸다) — 별건으로 닫아야 한다.
+dbo.UP_UTIL_SETTLE_EXCEPTION_PROC run1 AddUpdateMappingError  # 진짜 결함(모델이 헤딩 레벨을 틀렸다) — 별건으로 닫아야 한다.
   # 기계적 원인: raw/prompt-context.md 20행이 정확히 "### UPDATE 대상 테이블: …"
   # (헤딩 레벨 3)을 예시로 준다. MechanicalValidator.cs:2456 의 UpdateHeadingPrefix
   # = "### UPDATE 대상 테이블:" 도 같은 레벨을 요구한다. 그런데 실제 배송본

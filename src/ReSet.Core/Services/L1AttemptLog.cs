@@ -7,8 +7,14 @@ using Serilog;
 
 namespace ReSet.Core.Services
 {
-    /// <summary>시도 하나에서 난 발화 하나.</summary>
-    public sealed record L1AttemptFiring(int Attempt, string CheckKey, string Message);
+    /// <summary>
+    /// 시도 하나에서 난 발화 하나.
+    ///
+    /// <paramref name="Run"/> 은 <b>재생성 판</b>이다. 같은 객체를 두 번 재생성하면 시도
+    /// 번호가 1 부터 다시 시작하므로, 이 항이 없으면 두 판의 계열이 한 파일에서 구분되지
+    /// 않는다(2026-09-10 감사 §4(a)).
+    /// </summary>
+    public sealed record L1AttemptFiring(int Run, int Attempt, string CheckKey, string Message);
 
     /// <summary>
     /// 시도별 L1 발화를 객체 산출물(<c>raw/l1-attempts.json</c>)에 <b>누적</b>해 남긴다.
@@ -62,13 +68,40 @@ namespace ReSet.Core.Services
                     ? Read(path).ToList()
                     : new List<L1AttemptFiring>();
 
-                accumulated.AddRange(list.Select(f => new L1AttemptFiring(attempt, f.CheckKey, f.Message)));
+                var run = ResolveRun(accumulated, attempt);
+                accumulated.AddRange(list.Select(f => new L1AttemptFiring(run, attempt, f.CheckKey, f.Message)));
                 File.WriteAllText(path, JsonSerializer.Serialize(accumulated, Options));
             }
             catch (Exception ex)
             {
                 Log.Debug(ex, "[L1AttemptLog] 시도별 발화 기록에 실패했습니다 - 파이프라인은 계속합니다.");
             }
+        }
+
+        /// <summary>
+        /// 이 시도가 어느 판에 속하는지 정한다.
+        ///
+        /// [왜 유도하는가 - 2026-09-10] 판 번호를 넘겨줄 자리가 <b>없다.</b> 유일한 쓰기
+        /// 경로(<c>VerificationPipelineOrchestrator</c>)가 아는 것은 <c>attempt</c> 하나이고,
+        /// 재생성마다 1 부터 다시 센다. 파이프라인에 판 식별자를 새로 만들어 배선하는 것보다
+        /// 이미 있는 신호에서 읽는 편이 반경이 작다.
+        ///
+        /// [규칙] 한 판 안에서 시도는 1·2·3… 으로 <b>단조 증가</b>한다(재시도 루프가
+        /// <c>attempt++</c> 로만 움직인다). 그래서 <b>들어온 시도가 마지막 시도를 넘지
+        /// 않으면 새 판</b>이다. 빈 파일이면 1 판이다.
+        ///
+        /// [이 규칙이 무엇을 고치는가] 판 사이에 <c>raw/</c> 를 지우는 코드가 이 저장소에
+        /// 없다. 그래서 두 판이 한 파일에 이어 붙을 수 있고, 그러면 겉으로는 시도 7~11 처럼
+        /// 보여 <c>FindSelfReinforcing</c> 이 판 경계를 가로지르는 인접을 후보로 낸다.
+        /// 2026-09-10 에는 사람이 앞 판 파일을 손으로 개명해 그 경로를 비켜 갔다 - 그것이
+        /// 다음번에 반복된다는 보장이 없으므로 코드가 대신한다.
+        /// </summary>
+        private static int ResolveRun(IReadOnlyList<L1AttemptFiring> accumulated, int attempt)
+        {
+            if (accumulated.Count == 0) return 1;
+
+            var last = accumulated[^1];
+            return attempt > last.Attempt ? last.Run : last.Run + 1;
         }
 
         public static IReadOnlyList<L1AttemptFiring> Read(string jsonPath)
@@ -87,11 +120,15 @@ namespace ReSet.Core.Services
                 // 없음」을 조용히 보고하는 것과 같다. Attempt 는 실물에서 언제나 1
                 // 이상이고 CheckKey 는 언제나 있다 - 이 계약을 어기면 다른 손상 파일과
                 // 같게(빈 목록) 취급한다.
-                if (deserialized.Any(f => f.Attempt <= 0 || string.IsNullOrEmpty(f.CheckKey)))
+                // [2026-09-10] Run 도 이 계약에 잇는다. 안 이으면 Run 이 없는 옛 파일이
+                // Run=0 으로 **조용히** 역직렬화되고, 판 경계가 통째로 0 으로 접힌다 -
+                // camelCase 가 Attempt=0 으로 조용히 읽히던 그 침묵을 같은 함수에서 두
+                // 번째로 만드는 것이다. Run 은 실물에서 언제나 1 이상이다.
+                if (deserialized.Any(f => f.Run <= 0 || f.Attempt <= 0 || string.IsNullOrEmpty(f.CheckKey)))
                 {
                     throw new JsonException(
-                        $"{jsonPath} 의 레코드가 명명 계약(PascalCase: Attempt·CheckKey·Message)을 " +
-                        "어깁니다 - Attempt<=0 이거나 CheckKey 가 비었습니다.");
+                        $"{jsonPath} 의 레코드가 명명 계약(PascalCase: Run·Attempt·CheckKey·Message)을 " +
+                        "어깁니다 - Run<=0 이거나 Attempt<=0 이거나 CheckKey 가 비었습니다.");
                 }
 
                 return deserialized;
