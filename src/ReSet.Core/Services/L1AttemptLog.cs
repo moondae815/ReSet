@@ -63,8 +63,26 @@ namespace ReSet.Core.Services
         {
             try
             {
-                return JsonSerializer.Deserialize<List<L1AttemptFiring>>(File.ReadAllText(jsonPath))
+                var deserialized = JsonSerializer.Deserialize<List<L1AttemptFiring>>(File.ReadAllText(jsonPath))
                        ?? new List<L1AttemptFiring>();
+
+                // [명명 계약 - 2026-09-10 최종 리뷰 발견] Deserialize 는 기본 옵션(대소문자
+                // 구분)이라 camelCase 로 쓰인 파일에 예외를 안 던지고 Attempt=0·CheckKey
+                // 없음인 레코드를 그대로 낸다(실측: Pascal 파일 count=1 Attempt=2
+                // CheckKey=K, camel 파일 count=1 Attempt=0 CheckKey=<null>). 나중에
+                // Append 의 쓰기 옵션이 바뀌면 FindSelfReinforcing 이 모든 시도를 0 으로
+                // 보고 gap==1 을 하나도 못 찾는다 - 통째로 망가진 코퍼스에 대해 「발견
+                // 없음」을 조용히 보고하는 것과 같다. Attempt 는 실물에서 언제나 1
+                // 이상이고 CheckKey 는 언제나 있다 - 이 계약을 어기면 다른 손상 파일과
+                // 같게(빈 목록) 취급한다.
+                if (deserialized.Any(f => f.Attempt <= 0 || string.IsNullOrEmpty(f.CheckKey)))
+                {
+                    throw new JsonException(
+                        $"{jsonPath} 의 레코드가 명명 계약(PascalCase: Attempt·CheckKey·Message)을 " +
+                        "어깁니다 - Attempt<=0 이거나 CheckKey 가 비었습니다.");
+                }
+
+                return deserialized;
             }
             catch (Exception ex)
             {

@@ -57,6 +57,48 @@ namespace ReSet.Core.Tests
             return found;
         }
 
+        /// <summary>
+        /// 코퍼스 객체 디렉터리 이름 중, 읽을 수 있는 발화가 하나도 안 나온(=코퍼스에서
+        /// 빠진) 이름을 낸다.
+        ///
+        /// [왜 필요한가 - 2026-09-10 최종 리뷰 발견] <c>NoUnrecordedSelfReinforcingCheckInTheCorpus</c>
+        /// 의 종전 정박은 <c>corpus.Count &gt; 0</c>(하나라도 읽히면 통과)이었다. 객체가
+        /// 하나뿐인 지금은 우연히 물지만, 객체가 둘 이상이 되는 순간 하나가 깨져도
+        /// 살아남은 하나로 단언이 통과해 정박이 조용히 만료된다. <c>corpus.Count ==
+        /// objectDirs.Count</c> 로 바꾸되, 어느 이름이 빠졌는지 지목하려면 집합 차를
+        /// 별도로 계산해야 한다 - 이 메서드가 그 계산이다.
+        /// </summary>
+        public static IReadOnlyList<string> FindUnreadableObjects(
+            IReadOnlyList<string> objectDirNames, IReadOnlyList<string> readableObjectNames)
+        {
+            var readable = new HashSet<string>(readableObjectNames, StringComparer.Ordinal);
+            return objectDirNames.Where(name => !readable.Contains(name)).ToList();
+        }
+
+        [Fact]
+        public void FindUnreadableObjects_FlagsAnObjectMissingFromTheReadableSet()
+        {
+            // 객체 둘 중 하나(dbo.UP_B)의 attempts.json 이 깨져 읽을 수 있는 발화가
+            // 없으면 - .Where(Firings.Count > 0) 이 그것을 조용히 걸러낸다 -
+            // corpus.Count > 0 은 여전히 참이라(dbo.UP_A 가 살아 있으므로) 예전 정박은
+            // 못 잡는다. 이 시험은 그 자리를 직접 잠근다.
+            var objectDirNames = new[] { "dbo.UP_A", "dbo.UP_B" };
+            var readableObjectNames = new[] { "dbo.UP_A" };
+
+            Assert.Equal(
+                new[] { "dbo.UP_B" },
+                FindUnreadableObjects(objectDirNames, readableObjectNames));
+        }
+
+        [Fact]
+        public void FindUnreadableObjects_EmptyWhenEveryObjectIsReadable()
+        {
+            var objectDirNames = new[] { "dbo.UP_A", "dbo.UP_B" };
+            var readableObjectNames = new[] { "dbo.UP_A", "dbo.UP_B" };
+
+            Assert.Empty(FindUnreadableObjects(objectDirNames, readableObjectNames));
+        }
+
         [Fact]
         public void FindSelfReinforcing_FlagsConsecutiveAttempts()
         {
@@ -138,6 +180,7 @@ namespace ReSet.Core.Tests
             Skip.If(objectDirs.Count == 0,
                 "거부된 시도 코퍼스가 아직 비어 있습니다(부트스트랩) - Task 6 이 채우면 이 건너뜀은 사라집니다.");
 
+            var objectDirNames = objectDirs.Select(d => Path.GetFileName(d)!).ToList();
             var corpus = objectDirs
                 .OrderBy(d => d, StringComparer.Ordinal)
                 .Select(d => (
@@ -147,9 +190,19 @@ namespace ReSet.Core.Tests
                 .Where(entry => entry.Firings.Count > 0)
                 .ToList();
 
-            Assert.True(corpus.Count > 0,
-                "코퍼스 객체 디렉터리는 " + objectDirs.Count + "개 있는데 읽을 수 있는 발화가"
-                + " 하나도 없습니다 - attempts.json 이 비었거나 깨졌을 수 있습니다."
+            // [2026-09-10 최종 리뷰 정정] 예전 단언은 corpus.Count > 0(하나라도 읽히면
+            // 통과)이었다. 객체가 하나뿐인 지금은 우연히 물지만, 다음 승격으로 객체가
+            // 둘이 되는 순간 하나가 깨져도 살아남은 하나로 이 단언이 통과해 정박이
+            // 조용히 만료된다. corpus.Count == objectDirs.Count 로 바꾼다 - 모든 객체
+            // 디렉터리가 읽을 수 있는 발화를 최소 하나는 냈어야 한다.
+            var unreadable = FindUnreadableObjects(
+                objectDirNames, corpus.Select(c => c.ObjectName).ToList());
+
+            Assert.True(unreadable.Count == 0,
+                "코퍼스 객체 디렉터리 " + objectDirs.Count + "개 중 "
+                + unreadable.Count + "개에서 읽을 수 있는 발화가 하나도 없습니다: "
+                + string.Join(", ", unreadable)
+                + " - attempts.json 이 비었거나 깨졌거나 명명 계약을 어겼을 수 있습니다."
                 + " 조용히 건너뛰지 않습니다.");
 
             var found = FindSelfReinforcing(corpus);

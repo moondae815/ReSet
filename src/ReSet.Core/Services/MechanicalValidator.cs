@@ -4035,7 +4035,9 @@ namespace ReSet.Core.Services
         ///      <see cref="ExcerptAroundUniquenessWord"/>. 코드를 「음수값」이라 부르면
         ///      지시어에 안 걸렸고, <c>FirstOrDefault</c> 라 둘 중 하나만 잡았다.
         /// 회귀는 <c>ErrorCodeUniquenessClaimRegressionTests</c> 가 잠근다 — 픽스처는
-        /// 실행 로그(시도 5·6 응답)와 배송본에서 한 글자도 고치지 않고 오려 왔다.
+        /// 실행 로그와 배송본에서 오려 왔다, 우리가 지어낸 것이 하나도 없다(2026-09-10
+        /// 최종 리뷰가 지목한 대로, Attempt4 픽스처 하나만 독립 문장으로 성립시키려고
+        /// 끝에 마침표를 붙였고 그 밖에는 글자가 같다 - 그 시험 클래스 주석 참고).
         ///
         /// [알려진 한계 - 미리 적어 둔다] 한국어 「고유」는 「유일한」과 「자신의」 둘 다로 쓰인다.
         /// <c>UP_Util_Settle_Summary</c> 의 「자신의 <b>고유</b> 코드(-1~-8)」는 후자이고 지금은

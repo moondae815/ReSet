@@ -12,7 +12,9 @@
 # 전체가 자기강화 게이트 밖이라서」다. `perl -pi -e
 # 's/result\.Errors\.Add\(/result.Report(/g'` 를 97 자리에 돌리자 37 곳에서
 # `dotnet build --no-incremental` 이 CS1061 을 냈다 - `StepValidationResult`
-# (:12213)는 `Report`/`Firings`/`DetailedErrors` 통로가 없는 별개 타입이라 손으로
+# (:12224, 2026-09-10 최종 리뷰에서 실측 재확인 - grep -n "public class
+# StepValidationResult" src/ReSet.Core/Services/MechanicalValidator.cs)는
+# `Report`/`Firings`/`DetailedErrors` 통로가 없는 별개 타입이라 손으로
 # `result.Errors.Add(` 로 되돌렸다(38 번째는 `AddRange(:625)` 로, 정규식이 애초에
 # `Add\(` 뒤 즉시 괄호를 요구해 안 건드렸다 - 37+1=38 이 이 타입 소속 전체다).
 #

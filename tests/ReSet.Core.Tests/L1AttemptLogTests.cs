@@ -54,6 +54,28 @@ namespace ReSet.Core.Tests
             Assert.Equal(new[] { 1, 2 }, read.Select(f => f.Attempt).ToArray());
         }
 
+        // [명명 계약 - 2026-09-10 최종 리뷰 발견] Read 는 기본 옵션(대소문자 구분)으로
+        // 역직렬화한다. camelCase 로 쓰인 파일을 먹이면 예외를 안 던지고 Attempt=0·
+        // CheckKey=null 인 레코드를 그대로 낸다 - 실측: Pascal(count=1 Attempt=2
+        // CheckKey=K) vs camel(count=1 Attempt=0 CheckKey=<null>). 나중에 쓰기 쪽
+        // 명명 정책이 바뀌면 FindSelfReinforcing 이 모든 시도를 0 으로 보고 gap==1 을
+        // 하나도 못 찾아 - 통째로 망가진 코퍼스에 대해 「발견 없음」을 보고한다.
+        // Attempt 는 실물에서 언제나 1 이상이고 CheckKey 는 언제나 있다 - 이 계약을
+        // 어기면 이 파일을 다른 손상 케이스와 같게(빈 목록) 취급해야 한다.
+        [Fact]
+        public void Read_DoesNotSilentlyZeroOutWhenTheFileUsesCamelCase()
+        {
+            var dir = NewTempDir();
+            var rawDir = Path.Combine(dir, "raw");
+            Directory.CreateDirectory(rawDir);
+            var path = Path.Combine(rawDir, "l1-attempts.json");
+            File.WriteAllText(path, "[{\"attempt\":2,\"checkKey\":\"K\",\"message\":\"m\"}]");
+
+            var read = L1AttemptLog.Read(path);
+
+            Assert.Empty(read);
+        }
+
         [Fact]
         public void Append_DoesNotThrowWhenTheDirectoryCannotBeWritten()
         {

@@ -6,11 +6,22 @@ namespace ReSet.Core.Tests
     /// <summary>
     /// L1 발화마다 검사 키가 붙는지 본다.
     ///
-    /// [왜 필요한가 - 2026-09-09 실측] `result.Errors.Add` 97 자리 중
-    /// `result.DetailedErrors.Add` 로 타입 키가 붙는 것은 57 자리뿐이고, 키가 하나도
-    /// 없는 검사가 30 개(발화 자리 40)다. 그 30 안에 재시도 6 회를 태운
-    /// `CheckErrorCodeUniquenessClaim` 이 있다 — 키 없이 만든 수렴 탐지기는 정확히
-    /// 사고를 낸 검사들에 눈이 먼 채 초록을 찍는다.
+    /// [왜 필요한가 - 2026-09-09 실측, 2026-09-10 최종 리뷰에서 관할 정정]
+    /// 리팩터 전 `result.Errors.Add` 는 97 자리였다. 그중 `result.DetailedErrors.Add`
+    /// 로 타입 키가 붙는 것은 57 자리뿐이고, 키가 하나도 없는 검사가 30 개(발화
+    /// 자리 40)였다. 그 30 안에 재시도 6 회를 태운 `CheckErrorCodeUniquenessClaim`
+    /// 이 있다 — 키 없이 만든 수렴 탐지기는 정확히 사고를 낸 검사들에 눈이 먼 채
+    /// 초록을 찍는다.
+    ///
+    /// **「97 자리 치환」은 일어나지 않았다** - 관할이 갈린다(HEAD 실측):
+    ///   `ValidationResult` 59 자리 - 전부 `Report()` 로 옮겨 이 시험이 잠근다.
+    ///   `StepValidationResult` 38 자리(`Errors.Add` 37 + `AddRange` 1) - 그대로
+    ///   남았다. 이 타입엔 애초 `Report`/`Firings` 통로가 없고(`ValidateBatchStep`
+    ///   재시도 루프가 `L1AttemptLog.Append` 를 부르지도 않는다), 자기강화 게이트의
+    ///   관할 밖으로 명시적으로 남겨졌다(자세한 근거는
+    ///   `tests/ReSet.Core.Tests/l1-firing-key-baseline.txt` 와
+    ///   `StepValidationResult` 클래스 요약 참고). 59+38=97 로 총수는 그대로다 -
+    ///   숫자가 틀린 게 아니라 「전부 옮겨졌다」는 서술이 틀렸었다.
     /// </summary>
     public class L1FiringKeyPolicyTests
     {

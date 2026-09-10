@@ -20,7 +20,7 @@
 # 다음 사람이 이 파일을 훑고 「연속 발화 = 전부 자기강화 결함」이라고 일반화하면 안
 # 된다. 서명은 후보를 내리는 것까지고, 원인 판정은 그 아래 근거를 읽어야 나온다.
 
-dbo.UP_UTIL_SETTLE_EXCEPTION_PROC CheckErrorCodeUniquenessClaim  # 오탐 — 고쳤다(8ae36da1).
+dbo.UP_UTIL_SETTLE_EXCEPTION_PROC CheckErrorCodeUniquenessClaim  # 오탐 — 고쳤다(be43d19f).
   # [2026-09-10 Fix Round 1 정정] 최초 판정(위 커밋 이전 버전)은 원인을
   # 「UniquenessDenialTokens 에 선행 부정 「안」이 없다」로 적었다 — 이 진단은
   # 실증적으로 틀렸다. UniquenessDenialTokens 에 "안"을 넣어도 같은 문장이 여전히
@@ -37,7 +37,7 @@ dbo.UP_UTIL_SETTLE_EXCEPTION_PROC CheckErrorCodeUniquenessClaim  # 오탐 — �
   # 수정 8019ecfc)을 본문에 그대로 옮겨 쓴 것 — 규칙 층 수정이 L1 오탐의 새 입력을
   # 만든 사례다.
   #
-  # 처방(8ae36da1): PredicativeUniquenessRegex 를 걷어냈다. 그 가지를 잠그던 합성
+  # 처방(be43d19f): PredicativeUniquenessRegex 를 걷어냈다. 그 가지를 잠그던 합성
   # 시험(WhenTheClaimIsPredicative_ShouldStillReport)도 함께 걷어냈다. 되돌림으로
   # 확인: 가지를 되살리면 실물 오라클 시험(Attempt4_WhenHedgedDenialSplitsAcrossAClauseBoundary_ShouldStaySilent,
   # l1-attempts.json 시도 4 메시지의 인용 부분 문자열에서 오려 온 것 - 실질적으로
@@ -45,7 +45,7 @@ dbo.UP_UTIL_SETTLE_EXCEPTION_PROC CheckErrorCodeUniquenessClaim  # 오탐 — �
   # 나머지(같은 파일의 "…ShouldStillReportTheRealClaims" 등, 진짜 거짓 주장 포착 시험)는
   # 전부 그대로 초록 — 그 가지가 사 주던 커버리지가 합성 픽스처 하나뿐이었다는 뜻이다.
   #
-  # 시도 1·2·3·5(HEAD 20ac803c 기준 재확인, 8ae36da1 이후에도 여전히 발화)는 실제로
+  # 시도 1·2·3·5(HEAD 20ac803c 기준 재확인, be43d19f 이후에도 여전히 발화)는 실제로
   # "고유"·"서로 다른"을 유일성 주장으로 쓴 진짜 결함 — 그 넷은 이 게이트가 옳게
   # 잡은 것이고 고치지 않는다.
 
