@@ -1736,6 +1736,15 @@ namespace ReSet.Core.Services
                 throw new ArgumentException("출력 디렉터리가 필요합니다.", nameof(outputRoot));
             }
 
+            // 회차 도중에 만든 것을 그 자리에서 남긴다 - 쿼터 소진으로 중단돼도
+            // 단계 생성 비용이 사라지지 않게(설계서 2026-09-10). 열기에 실패해도
+            // 객체는 돌아오고 모든 기록이 no-op 이 된다.
+            var attemptJournal = PlanAttemptJournal.Create(
+                outputRoot, jobName, provider, _consolidatorService.ModelName,
+                _consolidatorEffort, targetLanguage,
+                PlanAttemptJournal.ComputeSha256(
+                    string.Join("\n", specs.Select(s => s.FileName + "\n" + s.Content))));
+
             // 미지 테이블 검사의 재료. definitions가 없으면 빈 집합이 되고,
             // 검증기는 그때 검사를 건너뛴다(소프트 스킵). 조립 근거는
             // StepInterfaceFacts.CollectSchemaCatalog에 있다 - 의존 대상뿐 아니라
@@ -2040,6 +2049,7 @@ namespace ReSet.Core.Services
                             currentPlanStructure = planEnrichment.Markdown;
                             NotifyDroppedTableDeclarations(jobName, planEnrichment);
                             await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "PlanStructure.md"), currentPlanStructure);
+                            attemptJournal.OpenRun(currentPlanStructure, "run-start");
                         }
 
                         // 목차가 단계 목록을 냈을 때만 분할한다. 못 냈으면 단일 호출로
