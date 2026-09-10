@@ -4884,9 +4884,10 @@ namespace ReSet.Core.Services
             // L1을 통과하지 못한다 - 이 가드 없이 검사를 먼저 넣어 실측으로 확인했다.
             if (expectations.ReferencedFunctionCalls.Count == 0) return;
 
-            // Validate의 catch-all은 검사 하나가 던지면 Errors를 통째로 지우고 소프트
-            // 패스시킨다 - 이 검사의 예외가 다른 표의 판정을 삼키지 않도록 자기 가드를 둔다
-            // (CheckExecutionSemantics·CheckCaseBranches와 같은 관례).
+            // [2026-09-10 갱신] 종전에는 Validate의 catch-all이 Errors를 통째로 지우고
+            // 소프트 패스시켰고, 이 가드가 그것을 막고 있었다. 지금은 catch-all이 지우지
+            // 않고 호출부가 SafeCheck로 감싼다(감사 [4]). 이 가드는 이중이지만 남겨 둔다 -
+            // 걷어내면 그것이 우연히 사 주던 커버리지를 함께 버린다.
             try
             {
                 CheckReferencedFunctionsCore(markdown, expectations, result);
@@ -5431,8 +5432,9 @@ namespace ReSet.Core.Services
         /// 칸까지 요구하는 것은 "표는 채웠는데 값이 틀린" 부류를 잡기 위해서다.
         ///
         /// [자기 try/catch를 두는 이유] Validate의 catch-all은 검사 하나가 던지면
-        /// Errors를 통째로 지우고 IsValid = true로 통과시킨다. 새 검사의 실패가 기존
-        /// 검사 15개의 판정까지 삼키면 안 된다.
+        /// [2026-09-10 갱신] 종전에는 Errors를 통째로 지우고 IsValid = true로 통과시켰고,
+        /// 이 가드가 그것을 막고 있었다. 지금은 catch-all이 지우지 않고 호출부가
+        /// <c>SafeCheck</c>로 감싼다(감사 [4]). 이중이지만 남겨 둔다.
         /// </summary>
         private static void CheckExecutionSemantics(
             string markdown, SpecExpectations expectations, ValidationResult result)
@@ -5508,8 +5510,9 @@ namespace ReSet.Core.Services
         /// 정상이기 때문이다 - 조건까지 일치하면 행은 이미 특정된다.
         ///
         /// [자기 try/catch를 두는 이유] Validate의 catch-all은 검사 하나가 던지면
-        /// Errors를 통째로 지우고 IsValid = true로 통과시킨다. 새 검사의 실패가 기존
-        /// 검사들의 판정까지 삼키면 안 된다.
+        /// [2026-09-10 갱신] 종전에는 Errors를 통째로 지우고 IsValid = true로 통과시켰고,
+        /// 이 가드가 그것을 막고 있었다. 지금은 catch-all이 지우지 않고 호출부가
+        /// <c>SafeCheck</c>로 감싼다(감사 [4]). 이중이지만 남겨 둔다.
         /// </summary>
         private static void CheckCaseBranches(
             string markdown, SpecExpectations expectations, ValidationResult result)
@@ -5716,8 +5719,9 @@ namespace ReSet.Core.Services
         /// 흔들림에 거짓 양성만 는다.
         ///
         /// [자기 try/catch를 두는 이유] CheckCaseBranches와 같다 - Validate의
-        /// catch-all은 검사 하나가 던지면 Errors를 통째로 지우고 IsValid = true로
-        /// 통과시킨다. 이 catch는 메서드 전체 입도이므로(형제 검사들의 관례) 한
+        /// catch-all이 [2026-09-10 갱신] 종전에는 Errors를 통째로 지우고 IsValid = true로
+        /// 통과시켰고 이 가드가 그것을 막았다. 지금은 지우지 않고 호출부가 <c>SafeCheck</c>로
+        /// 감싼다(감사 [4]). 이 catch는 메서드 전체 입도이므로(형제 검사들의 관례) 한
         /// 행에서 던지면 나머지 행도 대조되지 않는다.
         /// </summary>
         private static void CheckTransactionBoundaries(
@@ -5774,9 +5778,9 @@ namespace ReSet.Core.Services
             }
             catch (Exception ex)
             {
-                // 작성 계약 6: Validate의 catch-all은 Errors를 통째로 지우고 소프트
-                // 패스시킨다. 가드가 없으면 이 검사의 예외가 기존 검사 전부의 판정을
-                // 삼킨다.
+                // 작성 계약 6 [2026-09-10 갱신]: 종전에는 Validate의 catch-all이 Errors를
+                // 통째로 지우고 소프트 패스시켰다. 지금은 지우지 않고 호출부가 SafeCheck로
+                // 감싼다(감사 [4]) - 이 가드는 이중이지만 남겨 둔다.
                 Log.Warning(ex, "[MechanicalValidator] 트랜잭션 경계 표 대조 실패 - 이 검사만 건너뜁니다.");
             }
         }
@@ -5873,9 +5877,10 @@ namespace ReSet.Core.Services
         /// 처음부터 양방향으로 둔다. <b>이것이 기존 셋의 역방향을 닫지는 않는다</b> -
         /// 그쪽은 넣는 순간 실제 위반이 발화해 재생성이 함께 필요하다.
         ///
-        /// [자기 try/catch를 두는 이유] Validate의 catch-all은 검사 하나가 던지면
-        /// Errors를 통째로 지우고 통과시킨다. 새 검사의 실패가 기존 검사의 판정까지
-        /// 삼키면 안 된다(CheckMachineTableShape와 같은 근거).
+        /// [자기 try/catch를 두는 이유 - 2026-09-10 갱신] 종전에는 Validate의 catch-all이
+        /// Errors를 통째로 지우고 통과시켰고, 이 가드가 그것을 막았다. 지금은 지우지 않고
+        /// 호출부가 <c>SafeCheck</c>로 감싼다(감사 [4]). 이중이지만 남겨 둔다
+        /// (CheckMachineTableShape와 같은 근거).
         ///
         /// [2026-08-29 리뷰 FIX - 왜 CollectTableMatchRows로 창을 좁히는가] 옛
         /// 구현은 헤딩부터 다음 `##`/`###`까지의 모든 `|` 줄을 블록 구분 없이 모았다.
@@ -6102,9 +6107,9 @@ namespace ReSet.Core.Services
         /// [왜 expectations를 받지 않는가] 재료 없이 마크다운만으로 판정되므로
         /// 재료가 없는 갈래에서도 돈다.
         ///
-        /// [자기 try/catch를 두는 이유] Validate의 catch-all은 검사 하나가 던지면
-        /// Errors를 통째로 지우고 통과시킨다. 새 검사의 실패가 기존 검사의 판정까지
-        /// 삼키면 안 된다.
+        /// [자기 try/catch를 두는 이유 - 2026-09-10 갱신] 종전에는 Validate의 catch-all이
+        /// Errors를 통째로 지우고 통과시켰고, 이 가드가 그것을 막았다. 지금은 지우지 않고
+        /// 호출부가 <c>SafeCheck</c>로 감싼다(감사 [4]). 이중이지만 남겨 둔다.
         /// </summary>
         private static void CheckMachineTableShape(string markdown, ValidationResult result)
         {

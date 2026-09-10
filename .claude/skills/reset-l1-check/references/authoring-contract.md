@@ -58,15 +58,58 @@ L1을 아예 안 받던 명세서 부류가 이제 모든 검사를 받는다. �
 현재 산출물에서 모델은 그 들여쓰기를 떨어뜨리지만(실측 0칸), 어느 회차에 보존하면
 접두사 비교가 실패해 **검사가 절을 한 번도 못 찾고 조용히 죽는다.** 둘 다 견디게 하라.
 
-## 6. 자기 `try/catch`를 반드시 둬라
+## 6. 호출부를 `SafeCheck`로 감싸라 — 검사를 직접 부르지 마라
 
-`Validate`의 catch-all은 검사 하나가 던지면 `Errors`를 **통째로 지우고** `IsValid = true`로
-소프트 패스시킨다(`MechanicalValidator.cs`의 `catch (Exception ex)` 블록:
-`result.Errors.Clear(); result.DetailedErrors.Clear();`). 가드가 없으면 새 검사의 예외가
-기존 검사 전부의 판정을 삼킨다.
+**새 검사를 `Validate` 계열에 배선할 때는 `SafeCheck(() => CheckX(...))` 로 감싼다.**
+직접 호출하면 `CheckGuardPolicyTests` 가 자리를 지목해 빨개진다.
+
+```csharp
+SafeCheck(() => CheckMyNewThing(cleansed, expectations, result));   // ✔
+CheckMyNewThing(cleansed, expectations, result);                    // ✘ 스캐너가 잡는다
+```
+
+### 왜 — 2026-09-10 감사 [4]
+
+종전 규약은 **검사마다 자기 `try/catch`** 였다. `Validate` 의 catch-all이
+`Errors.Clear()` + `DetailedErrors.Clear()` + `IsValid = true` 로 소프트 패스시켰기
+때문에, 가드가 없으면 새 검사의 예외가 **이미 찾은 결함까지 지우고 통과**시켰다.
+「조용히 통과」가 아니라 **「찾은 것을 지우고 통과」**다.
+
+**그 규약을 아무도 재지 않았다** — 실측하니 `Validate` 가 부르는 30 자리 중 자기 가드가
+있는 것이 **13**, 없는 것이 17 이었다. 자기 가드는 30 개 메서드 본문을 각각 열어야
+확인되기 때문이다. 그래서 관례를 **호출부 `SafeCheck`** 로 단일화했다 —
+`ValidateBatchStep` 이 이미 쓰던 쪽이고, 무엇보다 **한 자리에서 스캔할 수 있다.**
+
+### 지금 코드는 이렇다 (2026-09-10)
+
+```
+catch-all 은 더 이상 지우지 않는다
+  Log.Error(...) · result.Report("검증기 자체 오류로 일부 검사를 끝내지 못했습니다: …")
+  result.IsValid = false     ← 종전의 Errors.Clear() · IsValid = true 는 없다
+호출부 감쌈
+  Validate 31 · ValidateConsolidated 9 · ValidateBatchStep 26   미보호 0
+강제
+  CheckGuardPolicyTests — 미보호 호출을 자리까지 지목한다. 감싼 자리 수(31·9·26)도
+  함께 잠근다(「위반 0」만 재면 정규식이 조용히 죽어도 초록이라서).
+  검사를 하나 더하면 그 수를 함께 올려야 한다.
+SafeCheck 는 죽은 검사의 이름을 남긴다
+  CallerArgumentExpression 으로 람다 원문을 로그에 싣는다 — 안 그러면 「지우고 통과」가
+  「어느 것이 안 돌았는지 모른 채 통과」로 옮겨갈 뿐이다.
+```
+
+### 자기 가드는 걷어내지 않았다 — 14 자리가 남아 있다
+
+이중이지만 무해하다. 걷어내는 것은 **그 가드가 우연히 사 주던 커버리지를 함께 버리는**
+별개의 위험이라 하지 않았다. 새 검사에 자기 가드를 **더 두어도 된다** — 다만 그것만으로는
+계약을 만족하지 않는다. 스캐너가 보는 것은 호출부다.
 
 `Log.Warning`으로 남기고 다시 던지지 마라. catch의 입도는 메서드 전체가 관례다 —
 한 표에서 던지면 나머지 표도 건너뛴다는 뜻이니 로그 문구를 그에 맞게 써라.
+
+> **되돌림으로 재라.** 감싸기를 걷어내도 아무것도 안 빨개지면 그 자리는 시험이 없는
+> 가지다 — 2026-09-10 에 `ValidateConsolidated` 아홉 자리가 정확히 그랬다. 발화를 재는
+> 시험과 **배선을 재는 시험은 다른 축**이고, 앞의 것만으로는 감싸기가 안 잠긴다.
+> 판독: `docs/audit-reports/2026-09-10-L1-예외격리-판독.md`
 
 ## 7. 귀속이 불가능하면 침묵하라
 
