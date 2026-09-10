@@ -85,16 +85,19 @@ graph TD
 
 ```mermaid
 graph TD
-    %% 1단계: 이미 저장된 명세서를 모은다 - 이 경로는 SP를 다시 분석하지 않는다.
-    %% 사람/--target이 고른 것은 진입점일 뿐이다 - 두 분기 모두 그 진입점이
-    %% 부르는 프로시저 타입 참조의 명세를 CloseOverProcedureReferences로 재료에
-    %% 더한다(함수 참조는 안 더한다).
+    %% 1단계: 계획 수립의 재료는 이미 저장된 명세서다. 갈래는 셋이고, 앞의 SP 분석을
+    %% 함께 도는가만 다르다 - TUI와 --plan-only는 저장된 것만 읽고, --all/--sp는 방금
+    %% 분석한 것을 이어받는다. 사람/인자가 고른 것은 어느 쪽이든 진입점일 뿐이며, 셋 다
+    %% 그 진입점이 부르는 프로시저 타입 참조의 명세를 CloseOverProcedureReferences로
+    %% 재료에 더한다(함수 참조는 안 더한다).
     subgraph Collect ["1. 대상 명세서 수집 (Collection)"]
-        EnterB["통합 배치 마이그레이션 설계 경로 진입"] --> ModeB{"배치 모드 여부?"}
-        ModeB -- "아니오 (TUI)" --> PickSpecs["순차 단일 선택 루프로 저장된 Spec.md를 큐에 적재<br/>(물리 선택 순서 보장, 5.2절)"]
-        ModeB -- "예 (--job-name)" --> AutoSpecs["BatchStepCatalog으로 스텝 후보 선별 및<br/>스텝별 분석 메타데이터 복원"]
+        EnterB["통합 배치 마이그레이션 설계 경로 진입"] --> ModeB{"진입 경로?"}
+        ModeB -- "TUI (2번 메뉴)" --> PickSpecs["순차 단일 선택 루프로 저장된 Spec.md를 큐에 적재<br/>(물리 선택 순서 보장, 5.2절)"]
+        ModeB -- "무인: SP 분석에 이어서<br/>(--all/--sp + --job-name)" --> AutoSpecs["방금 분석한 SP들의 명세서를<br/>분석 순서대로 재료에 적재"]
+        ModeB -- "무인: 저장된 명세서만으로<br/>(--plan-only)" --> PlanOnly["PlanOnlyMaterialLoader가 --sp 나열 순서로<br/>진입점 명세서를 해석<br/>(못 찾으면 종료 코드 1)"]
         PickSpecs --> CloseTui["CloseOverProcedureReferences로 참조 프로시저 명세를<br/>재료에 추가(closure.SpecPaths 순서 그대로 사용)"]
         AutoSpecs --> CloseBatch["CloseOverProcedureReferences로 재료 추가 후<br/>ReorderByClosure로 폐포 순서에 맞게 재정렬"]
+        PlanOnly --> CloseTui
         CloseTui & CloseBatch --> JobName["Job 이름 확정 및 출력 루트 결정<br/>(output/Jobs 하위)"]
     end
 
@@ -134,8 +137,8 @@ graph TD
     end
 
     subgraph ExportB ["4. 산출물 저장 및 지시서 번들 (Export)"]
-        OutL1 & OutNR & OutQR & OutPass --> L3B{"배치 모드인가?"}
-        L3B -- "예 (Batch)" --> SavePlan["BatchMigrationPlan.md 저장<br/>(종료 상태와 점수를 헤더에 기록)"]
+        OutL1 & OutNR & OutQR & OutPass --> L3B{"무인 모드인가?"}
+        L3B -- "예 (--all/--sp 또는 --plan-only)" --> SavePlan["BatchMigrationPlan.md 저장<br/>(종료 상태와 점수를 헤더에 기록)"]
         L3B -- "아니오 (TUI)" --> Human{"L3 사용자 결정?"}
         Human -- "1. 승인" --> SavePlan
         Human -- "2. 피드백" --> Regen["구조 변경이면 목차부터 재수립,<br/>아니면 사용자가 지목한 단계만 분할 재생성<br/>(지목이 없거나 골격을 고르면 전 단계)<br/>L2를 다시 거치지 않으므로<br/>종료 상태를 리뷰 미수행으로 되돌림"]
@@ -151,7 +154,8 @@ graph TD
 
 ### 3.2. 실행 모드 분기
 * **대화형 TUI 모드**: 개발자가 직접 화면을 보며 분석할 SP를 원하는 순서대로 골라 담은 후 배치 전환 계획을 수립하고, AI 검증 결과와 피드백을 실시간 조율하며 승인 및 DB 동기화를 제어합니다.
-* **무인 배치 모드 (CI/CD)**: `--job-name` 인자가 공급되면 사용자의 대화형 개입 단계를 생략하고 L1/L2 검증을 통과한 산출물을 자동 생성 및 병합하며, 외부 코딩 에이전트 기동까지 파이프라인을 무정지로 실행합니다. 단, Actor/Critic/Consolidator 중 하나라도 CLI 기반 AI 제공자(`claude-cli` | `codex-cli` | `agy-cli`)로 지정되어 있으면 `CliProviderBatchGuard`가 DB 연결 전에 실행을 즉시 중단시킵니다. `AiSettings:AllowCliProviderInBatch`(기본 `false`)를 켜면 `claude-cli`·`codex-cli`에 한해 차단을 열 수 있으며, 이때는 위험을 감수한 실행임을 알리는 경고를 남기고 진행합니다. `agy-cli`는 옵트인 대상이 아닙니다.
+* **무인 배치 모드 (CI/CD)**: `--all`·`--sp`·`--policy`·`--plan-only` 중 하나가 공급되면 사용자의 대화형 개입 단계를 생략하고 L1/L2 검증을 통과한 산출물을 자동 생성 및 병합하며, 외부 코딩 에이전트 기동까지 파이프라인을 무정지로 실행합니다. 단, Actor/Critic/Consolidator 중 하나라도 CLI 기반 AI 제공자(`claude-cli` | `codex-cli` | `agy-cli`)로 지정되어 있으면 `CliProviderBatchGuard`가 DB 연결 전에 실행을 즉시 중단시킵니다. `AiSettings:AllowCliProviderInBatch`(기본 `false`)를 켜면 `claude-cli`·`codex-cli`에 한해 차단을 열 수 있으며, 이때는 위험을 감수한 실행임을 알리는 경고를 남기고 진행합니다. `agy-cli`는 옵트인 대상이 아닙니다. `--job-name`은 그 자체로 이 모드를 켜지 않습니다 — 계획서를 놓을 이름일 뿐이라 단독으로 주면 TUI로 진입합니다.
+* **계획 전용 모드 (`--plan-only`)**: 무인 모드의 한 갈래로, SP를 다시 분석하지 않고 **DB에 연결하지도 않은 채** 이미 저장된 명세서만으로 계획서와 지시서 번들을 만듭니다. 재료는 `--sp`에 적은 순서가 실행 순서가 되며, 진입점의 명세서를 하나라도 찾지 못하면 조용히 빼지 않고 종료 코드 1로 끝냅니다. 재료를 모으는 방식만 다르고 계획 수립부터 코딩 에이전트 기동까지는 위 갈래와 같은 코드를 탑니다. DB 연결을 건너뛸 수 있는 근거는 통합 배치 파이프라인과 지시서 번들 생성이 DB를 부르지 않는다는 것이며, 그 전제는 테스트가 되돌림으로 못박습니다(`ConsolidatedPipelineDbIndependenceTests`). AI는 무인으로 부르므로 `CliProviderBatchGuard`는 이 갈래에도 그대로 적용됩니다.
 
 ### 3.3. 외부 코딩 에이전트 자가 수정 및 TDD 검증 흐름 (Codegen Self-Correction Flow)
 ReSet이 외부 코딩 에이전트를 가동하고 TDD 선제 검증(L0) 및 L1/L2 피드백 루프를 통해 코드를 고품질로 자가 교정하는 시퀀스 흐름은 다음과 같습니다.

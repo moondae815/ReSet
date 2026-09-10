@@ -55,6 +55,7 @@
     *   [SpExecutionService.cs](./src/ReSet.Validator.Core/Services/SpExecutionService.cs)의 연결·실행 오류는 테스트 케이스를 `FAIL`로 만들고 예외 메시지를 `ErrorCode`에 기록해 직렬화하십시오(`SpExecutionService_ShouldSoftFail_OnInvalidConnectionString`).
     *   [DependencyAnalysisOrchestrator.cs](./src/ReSet.Core/Services/DependencyAnalysisOrchestrator.cs)는 하위 실패만 `Failed`로 격리하고, 깊이 제한은 `SkippedDepth`, 미진입 외부 DB는 `SkippedExternal`, 활성 조회 실패는 `Failed`로 기록하며 최소 깊이 경로를 우선합니다(`DependencyAnalysisOrchestratorTests`).
     *   개별 SP 분석의 기동과 저장은 [DependencyAnalysisOrchestrator.cs](./src/ReSet.Core/Services/DependencyAnalysisOrchestrator.cs) 하나만 쓰십시오(참조분석을 꺼도 같습니다). CLI에서 파이프라인을 직접 부르거나 출력 경로를 손조립하지 말고 `OutputPathResolver`를 경유하십시오 — 손조립은 이름에 `.`이 있는 순간 캐시 조회 경로와 갈라져 산출물이 두 자리로 흩어집니다.
+    *   통합 배치 파이프라인(`RunConsolidatedPipelineAsync`)과 지시서 번들 생성에 DB 호출을 넣지 마십시오. `--plan-only`는 DB에 연결하지 않고 이 경로만 쓰므로, 한 번의 조회가 그 모드 전체를 죽입니다(`ConsolidatedPipelineDbIndependenceTests`).
     *   실패 객체에는 명세서 링크를 만들지 마십시오. 성공 객체의 Critic 점수·`Thinking.md`를 보존하고, 카탈로그 표기 대소문자를 사용하며, 객체 키와 경로는 충돌 없이 인코딩하십시오(`AnalyzeAsync_SpecWriteFailureMarksChildFailedAndParentDoesNotLinkIt` 등).
     *   설정된 `OfflineSnapshotPath`가 없으면 DB 프롬프트로 폴백하지 말고 즉시 실패하십시오.
     *   취소 가능한 `await`의 광범위 `catch`에는 `when (ex is not OperationCanceledException)`을 적용하십시오(`CancellationPolicyTests`). 취소 뒤에는 후속 생성을 중단하되 완료 산출물은 보존하고 미분석 참조를 문서에 표시하십시오(`DependencyAnalysisOrchestratorTests`).
@@ -117,7 +118,7 @@
     *   개별 SP 분석 직후 자동 기동하지 마십시오. 스탠드얼론 재개는 `agent/MigrationInstructions.md`를 찾은 뒤 단일 문서/회차 번들을 판정하고, 번들 복원 실패 시 전체 Job으로 폴백하지 말고 거부하십시오.
     *   [ExternalCliCodingEngine.cs](./src/ReSet.Core/Services/ExternalCliCodingEngine.cs)의 대화형 모드는 부모 콘솔을 상속하고 취소 시 프로세스 트리를 종료하십시오. 공백 포함 프롬프트는 하나의 인자로 전달하십시오.
     *   `Arguments`와 `BatchArguments`를 분리하고 무인 모드에서 대화형 인자로 폴백하지 마십시오. 빈 `BatchArguments`는 거부하며 `{jobDir}`·`{specRoot}`만 열고 출력 루트 전체는 허용하지 마십시오(`CodingEngineTests`, `ArgumentTemplateResolverTests`).
-    *   배치 `--job-name`은 L3를 건너뛰고 계획·번들 생성부터 외부 프로세스까지 연속 실행합니다.
+    *   무인 모드(`--all`/`--sp` + `--job-name`, 또는 `--plan-only`)는 L3를 건너뛰고 계획·번들 생성부터 외부 프로세스까지 연속 실행합니다. `--job-name` 단독은 무인 모드가 아닙니다.
     *   코드 생성은 0회차→단계 1..N→조립을 순차 실행합니다. 회차 실패는 기록 후 다음으로 진행하되 쿼터·인증·권한처럼 전역적인 실패면 중단하십시오.
     *   검증 대상을 못 찾은 회차는 실패로 닫고 재시도 상한 전에 사유를 지시서에 붙이십시오. 0회차는 산출물만 검사하고 조립 L2는 전 단계 통과 시에만 실행합니다(`CodegenStagedWorkflowTests`).
     *   회차별 코드→테스트→수정→리뷰→커밋의 L0 루프 뒤 L1·L2를 수행하고, 불일치 피드백은 해당 회차 지시서에 누적하십시오.
@@ -234,4 +235,4 @@ dotnet test
 - [ ] 신규 추가된 C# 타겟 러너 내 `DbTransaction`이 작업 결과와 관계없이 항상 `Rollback()` 되도록 누락 없이 명세했는가?
 - [ ] 작업 완료 후 수정 및 추가된 모든 코드가 솔루션 컴파일 및 아키텍처 규칙을 위반하지 않는지 재검토했는가?
 
-<!-- synced-through: bfab49f4 -->
+<!-- synced-through: d6904e80 -->

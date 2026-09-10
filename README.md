@@ -547,7 +547,7 @@ dotnet run --project src/ReSet.Cli
    * **`6. 프로그램 종료 (Exit)`**: 도구를 완전히 종료합니다.
 
 ### 2. 배치 모드 및 CLI 자동화 실행 (Batch Mode)
-명령줄 아규먼트(`--conn`, `--all`, `--sp`, `--policy`) 또는 환경 변수(`SP_ANALYZER_CONN_STR`)를 통해 로그인 및 TUI 메뉴 단계를 완전히 건너뛰고 무인 대량 일괄 처리가 가능합니다.
+명령줄 아규먼트(`--conn`, `--all`, `--sp`, `--policy`, `--plan-only`) 또는 환경 변수(`SP_ANALYZER_CONN_STR`)를 통해 로그인 및 TUI 메뉴 단계를 완전히 건너뛰고 무인 대량 일괄 처리가 가능합니다.
 
 - **명령줄 옵션**:
   - `--conn <연결문자열>`: 분석용 데이터베이스 연결 문자열을 직접 지정합니다. (생략 시 `SP_ANALYZER_CONN_STR` 환경 변수 값을 조회합니다.)
@@ -556,7 +556,8 @@ dotnet run --project src/ReSet.Cli
   - `--sp <SP이름1,SP이름2,...>`: 특정 Stored Procedure들만 지정하여 분석합니다. 쉼표(`,`)로 구분하며 스키마명을 포함(`dbo.USP_1`)하거나 생략(`USP_1`)할 수 있습니다. 약칭·부분 이름은 맞추지 않으며, 지정한 이름 중 하나라도 DB에 없으면 건너뛰지 않고 오류(종료 코드 1)로 끝납니다.
   - `--policy`: 정산 정책 문서 도출을 활성화합니다.
   - `--policy-sps <SP이름1,SP이름2,...>`: **폐기되었습니다.** 정책 도출 대상과 순서는 `output/settlement-process.md`가 정하며, 이 옵션을 주면 조용히 무시되지 않고 `ArgumentException`으로 중단합니다.
-  - `--job-name <작업이름>`: 배치 모드 실행 시 지정된 이름으로 개별 명세서들을 엮어 **통합 배치 전환 계획 및 통합 마이그레이션 지시서 번들을 자동으로 일괄 생성**하도록 지시합니다.
+  - `--job-name <작업이름>`: 배치 모드 실행 시 지정된 이름으로 개별 명세서들을 엮어 **통합 배치 전환 계획 및 통합 마이그레이션 지시서 번들을 자동으로 일괄 생성**하도록 지시합니다. 이 옵션 하나만으로는 무인 모드가 켜지지 않습니다 — `--all`, `--sp`, `--plan-only` 중 하나와 함께 써야 하며, 단독으로 주면 TUI 메뉴로 진입합니다.
+  - `--plan-only`: **SP를 다시 분석하지 않고 DB에도 연결하지 않은 채**, 이미 저장된 명세서만으로 통합 배치 전환 계획서와 지시서 번들을 만듭니다. `--job-name`과 `--sp`가 필수이며, `--sp`에 적은 순서가 곧 배치 스텝의 실행 순서입니다(`--all`은 순서를 정하지 못하므로 함께 쓸 수 없습니다). 진입점이 부르는 프로시저의 명세는 배치 모드와 똑같이 자동으로 재료에 더해집니다. 지정한 이름의 명세서가 하나라도 없으면 조용히 빼지 않고 종료 코드 1로 끝냅니다. (예: `--plan-only --job-name Settle_Daily --sp dbo.UP_A,dbo.UP_B`)
   - `--codegen`: (TUI 전용) 통합 배치 전환 계획 수립 최종 승인 완료 후, 자동으로 코딩 에이전트 브릿지 프로세스를 기동하여 소스 코드를 생성하도록 설정합니다. (배치 모드에서 `--job-name` 지정 시에도 함께 적용 가능합니다.)
   - `--engine <엔진명>`: 코딩 에이전트 종류를 명시적으로 지정합니다. (`claude` | `agy` | `codex`)
   - `--coverage-map <Job이름|객체이름>`: **DB·AI 연결 없이** `output/` 산출물만으로 커버리지 맵 HTML을 생성합니다. Job 이름을 주면 그 Job의 참조 폐포 전체를, 객체 이름을 주면 그 객체 하나를 대상으로 삼아 `docs/CoverageMap.html`로 냅니다. 재료를 읽지 못해 빠진 객체가 있으면 화면에 함께 알립니다. (예: `--coverage-map dbo.UP_UTIL_SETTLE_INS`)
@@ -570,6 +571,10 @@ dotnet run --project src/ReSet.Cli
   - **전체 SP 일괄 분석**:
     ```bash
     dotnet run --project src/ReSet.Cli -- --conn "Server=localhost;Database=my_db;User ID=sa;Password=my_password;TrustServerCertificate=true" --all
+    ```
+  - **이미 분석된 명세서만으로 계획 수립 (DB 연결 없음)**: 연결 문자열도 SP 재분석도 필요 없습니다. `--sp`에 적은 순서가 배치 스텝의 실행 순서가 됩니다.
+    ```bash
+    dotnet run --project src/ReSet.Cli -- --plan-only --job-name Settle_Daily --sp dbo.UP_UTIL_SETTLE_INS,dbo.UP_Util_Settle_Summary
     ```
   - **ReSet 정산 배치 소비 SP 12개를 4그룹 병렬 재생성**: 참조 UDF/SP 공유 관계와 최근 소요 시간(하위 UDF 캐시 히트 기준, 그룹당 중앙값 14~19분)을 기준으로 묶은 구성입니다. 연결 문자열은 `SP_ANALYZER_CONN_STR` 환경 변수로 두고 터미널 4개에서 한 줄씩 실행합니다.
     ```bash
@@ -666,4 +671,4 @@ dotnet run --project src/ReSet.Cli
 dotnet test
 ```
 
-<!-- synced-through: 47d1c052 -->
+<!-- synced-through: d6904e80 -->
