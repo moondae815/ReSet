@@ -428,7 +428,14 @@ namespace ReSet.Core.Services
             }
 
             rules.Add($"{ruleIndex++}. Include a Mermaid Flowchart diagram visualizing the business logic flow: ");
-            rules.Add("   - Always wrap the entire text of node labels in double quotes to prevent syntax errors (e.g., id1[\"Text (Extra)\"] --> id2[\"Return Result\"]).");
+            // [ID 와 라벨을 갈라 적는다 - 2026-09-10 실측]
+            // 종전에는 이 줄이 "라벨을 늘 따옴표로 감싸라"만 말하고 **ID 는 감싸지 말라는
+            // 말이 없었다**. 모델이 그 지시를 ID 에까지 적용해 `"시작"["함수 호출: …"]` 를
+            // 썼고, mermaid 는 ID 에 따옴표를 못 쓴다(`got 'STR'`). 캐시 v22 재생성 첫 판의
+            // mermaid 블록이 **정상 ID 0 · 따옴표 ID 40** 이었고 UF_GET_INCVTAXRATE 가
+            // 5 시도를 같은 오류로 태웠다. 틀린 예를 함께 주는 것이 요점이다 -
+            // 옳은 예만 주면 「따옴표를 감싸라」가 더 강하게 읽힌다.
+            rules.Add("   - Quotes belong ONLY inside the brackets, around the label text. The node ID that comes BEFORE the bracket must be bare alphanumeric - never quoted. Correct: id1[\"Text (Extra)\"] --> id2[\"Return Result\"] · CHK1{\"@@ERROR <> 0\"}. WRONG: \"시작\"[\"Text\"] or \"조건판단\"{\"...\"} - a quoted string cannot be an ID. Use the same bare ID on both sides of an arrow (START --> CHK1).");
             rules.Add("   - Node IDs must be unique alphanumeric characters (e.g., Node1, Node2). Do not use parentheses alone or Mermaid reserved keywords (graph, flowchart, subgraph, end) as node IDs.");
             rules.Add("   - Node IDs must be strictly identical between definition and reference. Do not mix formats like using NPRECHECK in one place and N_PRECHECK (with underscore) in another. Keep node IDs simple, using only uppercase alphanumeric characters (e.g., START, PRECHECK, BEGINTRAN, DELPG, INSPG, FAIL9, COMMIT).");
             rules.Add("   - When writing labels on arrows (e.g., -->|Label|), NEVER use double quotes, parentheses, or special characters inside the label.");
