@@ -2607,16 +2607,21 @@ namespace ReSet.Core.Tests
         }
 
         /// <summary>
-        /// 사용자가 물은 것이 이 질문이다 — 「결함으로 회차가 넘어갈 때 결함이
-        /// 있더라도 문서가 저장되는가」. 회차 1의 계획서가 L1 에 걸려 회차 2로
-        /// 넘어가는 판을 만들고, <b>회차 2의 단계 생성이 시작되는 시점에</b> 회차
-        /// 1의 섹션이 이미 디스크에 있는지 본다.
+        /// [FIX ROUND 1 정정] 이름·주석이 원래 "회차 1의 계획서가 L1에 걸려 회차 2로
+        /// 넘어가는 판"이라고 적었으나 <b>사실이 아니다</b> — 이 시험의 Critic mock은
+        /// 항상 <c>HasDefects=false</c>를 돌려주므로 <c>RunConsolidatedPipelineAsync</c>의
+        /// 외부 <c>while(true)</c> 루프(<c>attempt</c>)는 attempt=1에서 그대로
+        /// break한다. 실제로 이 시험이 재는 두 번째 호출은
+        /// <c>GenerateStepSectionWithFloorRetryAsync</c> <b>내부</b>의 하한 재시도
+        /// 루프(같은 attempt 안, maxTries=5)다 - 1차 시도 본문이 하한 미달로 판정돼
+        /// 2차 내부 시도로 넘어가기 <b>직전</b>에 그 본문이 이미 디스크에 있는지 본다.
         ///
-        /// 관찰 자리를 「파이프라인이 끝난 뒤」로 두면 안 된다 — 그러면 마지막에 한꺼번에
-        /// 써도 통과한다. 중단은 회차 도중에 나므로 그때 이미 있어야 한다.
+        /// 외부 attempt 루프가 실제로 넘어갈 때 저널이 살아남는지는 별개 시험
+        /// (<see cref="RunConsolidatedPipeline_WhenTheOuterAttemptAdvances_ThePriorAttemptsSectionsSurviveOnDisk"/>)
+        /// 이 돈다 - 이 시험만으로는 그 사실을 증명하지 못한다.
         /// </summary>
         [Fact]
-        public async Task RunConsolidatedPipeline_WhenAnAttemptIsRejected_ItsSectionsAreOnDiskBeforeTheNextAttempt()
+        public async Task RunConsolidatedPipeline_WhenAStepFailsItsInnerFloorRetry_ThePriorDraftIsOnDiskBeforeTheNextTry()
         {
             var stepsJson = "```json\n{\n  \"Steps\": [\n" +
                 "    { \"Code\": \"S01\", \"Name\": \"첫 단계\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] }\n" +
@@ -2690,6 +2695,114 @@ namespace ReSet.Core.Tests
             // 한다 - 그 마지막 기록을 지워도 위 어서션들은 여전히 통과한다.
             var s01Final = await File.ReadAllTextAsync(Path.Combine(journalDir, "steps", "S01.md"));
             Assert.DoesNotContain("하한 미달", s01Final);
+        }
+
+        /// <summary>
+        /// [FIX ROUND 1 - Critical] 이 시험이 사용자가 실제로 물은 것을 잰다 —
+        /// <c>RunConsolidatedPipelineAsync</c>의 외부 <c>while(true)</c> 루프가
+        /// <c>attempt</c>를 실제로 2로 올릴 때, 회차 1이 쓴 골격·섹션이 회차 2의
+        /// 첫 AI 호출 시점에 이미 디스크에 있는가.
+        ///
+        /// 외부 루프를 태우는 경로: 회차 1의 명세서가 원본 반환 코드 -9010을 선언하는데
+        /// 목차의 어느 단계도 그 코드를 ErrorCodes로 선언하지 않는다(귀속 불가). 회차
+        /// 1의 본문에도 "-9010"이 없으므로 <c>MechanicalValidator.FindMissingErrorCodes</c>가
+        /// 이를 잡고, <c>ErrorCodeAttribution.Attribute</c>가 귀속 실패(HasUnattributed)로
+        /// 판정해 L1이 무효가 된다. 귀속 실패는 L1 자기 예산이 아니라 채점 예산
+        /// (attempt)을 쓴다(:2419 이하 "else" 분기) - 이 분기는 <c>lastSkeleton</c>·
+        /// <c>lastStepSections</c>를 전부 null로 비운다(§3-2 전량 재생성). 그래서
+        /// 회차 2는 골격부터 완전히 다시 부른다 - 회차 2의 첫 AI 호출은 골격 생성이다.
+        ///
+        /// Critic(L2)은 여기 관여하지 않는다 - L1이 먼저 걸려 continue하므로 회차
+        /// 1에서는 <c>ReviewConsolidatedPlanAsync</c>가 아예 호출되지 않는다. 회차
+        /// 2는 본문에 "-9010"을 실어 L1을 통과시키고, Critic이 결함 없음을 내
+        /// 파이프라인이 종료한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenTheOuterAttemptAdvances_ThePriorAttemptsSectionsSurviveOnDisk()
+        {
+            // LegacyProcedures가 명세서 파일명(USP_Spec1)과 일부러 다르다 -
+            // PlanStructureEnricher가 legacy 프로시저 매칭으로 specReturnCodes의
+            // -9010을 이 단계의 ErrorCodes에 자동으로 채워 넣으면(실제로 그런다),
+            // 어느 단계도 그 코드를 "선언하지 않은" 상태를 만들 수 없다 - 귀속 실패
+            // 시나리오 자체가 성립하지 않는다.
+            var stepsJson = "```json\n{\n  \"Steps\": [\n" +
+                "    { \"Code\": \"S01\", \"Name\": \"첫 단계\", \"LegacyProcedures\": [\"USP_Unrelated\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] }\n" +
+                "  ]\n}\n```";
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.ModelName.Returns("gpt-4");
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + stepsJson });
+
+            var journalDir = Path.Combine(
+                _consolidatedOutputRoot, "Jobs", "Job_Test", "raw", "attempts", "run-001");
+
+            var skeletonCalls = 0;
+            string? s01AtOuterAttemptTwo = null;
+            string? skeletonAtOuterAttemptTwo = null;
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    skeletonCalls++;
+                    if (skeletonCalls == 2)
+                    {
+                        // 회차 2의 첫 AI 호출 시점 - 회차 1이 쓴 것이 이미 있어야 한다.
+                        var stepPath = Path.Combine(journalDir, "steps", "S01.md");
+                        var skeletonPath = Path.Combine(journalDir, "skeleton.md");
+                        s01AtOuterAttemptTwo = File.Exists(stepPath) ? File.ReadAllText(stepPath) : null;
+                        skeletonAtOuterAttemptTwo = File.Exists(skeletonPath) ? File.ReadAllText(skeletonPath) : null;
+                    }
+
+                    return new AiResult { Content = SkeletonMarkdown };
+                });
+
+            var stepCalls = 0;
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    stepCalls++;
+                    // 회차 1: -9010을 싣지 않는다(귀속 불가 유발). 회차 2: -9010을 실어
+                    // L1을 통과시킨다.
+                    var body = stepCalls == 1
+                        ? HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0])
+                        : HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) +
+                          "\n\n원본 반환 코드 -9010도 그대로 기록한다.";
+                    return new AiResult { Content = body };
+                });
+
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                userInteraction, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8);
+
+            // 명세서가 원본 반환 코드 -9010을 선언한다(SpecReturnCodeExtractor가
+            // 읽는 대입문 형태).
+            var specs = new List<(string, string)>
+            {
+                ("dbo.USP_Spec1", "## 개요\n\n실패 시 SET @po_intRetVal = -9010 후 반환한다.\n")
+            };
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // attempt가 실제로 외부 루프에서 2로 올랐다는 직접 증거 - 회차 1에서
+            // NotifyL1Errors가 attempt=1로 호출됐어야 한다. 내부 하한 재시도는
+            // 이 알림을 절대 부르지 않는다.
+            userInteraction.Received(1).NotifyL1Errors("Job_Test", 1, Arg.Any<int>(), Arg.Any<List<string>>());
+            Assert.Equal(2, skeletonCalls);
+            Assert.Equal(2, stepCalls);
+
+            // 회차 2의 첫 AI 호출(골격 재생성) 시점에 회차 1의 산출물이 이미 있었다.
+            Assert.NotNull(s01AtOuterAttemptTwo);
+            Assert.DoesNotContain("-9010", s01AtOuterAttemptTwo!);
+            Assert.NotNull(skeletonAtOuterAttemptTwo);
         }
 
         // Task 18 - I2 배선. GenerateStepSectionWithFloorRetryAsync가
