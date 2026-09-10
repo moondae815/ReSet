@@ -5,6 +5,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Serilog;
 
 namespace ReSet.Core.Services
@@ -180,6 +181,62 @@ namespace ReSet.Core.Services
             var temporary = path + ".tmp";
             File.WriteAllText(temporary, content, Encoding.UTF8);
             File.Move(temporary, path, overwrite: true);
+        }
+
+        /// <summary>
+        /// 파일명으로 안전한 단계 코드. <b>화이트리스트다</b> — 금지 문자 목록은
+        /// 플랫폼마다 다르고 Windows 예약 이름(CON·PRN…)까지 다루려면 목록이
+        /// 길어진다. 실물 코드는 <c>S01</c> 꼴이라 이 좁은 집합으로 충분하다.
+        /// </summary>
+        private static readonly Regex SafeStepCode =
+            new(@"^[A-Za-z0-9_-]{1,64}$", RegexOptions.Compiled);
+
+        public void RecordSkeleton(int attempt, string markdown)
+        {
+            lock (_gate)
+            {
+                if (_runDirectory == null || _manifest == null) return;
+                try
+                {
+                    WriteAtomic(Path.Combine(_runDirectory, "skeleton.md"), markdown);
+                    _manifest.Skeleton = new PlanAttemptArtifact(attempt, ComputeSha256(markdown));
+                    FlushManifest();
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "[PlanAttemptJournal] 골격을 남기지 못했습니다 - 파이프라인은 계속합니다.");
+                }
+            }
+        }
+
+        public void RecordStepSection(int attempt, string stepCode, string markdown)
+        {
+            lock (_gate)
+            {
+                if (_runDirectory == null || _manifest == null) return;
+
+                if (stepCode == null || !SafeStepCode.IsMatch(stepCode))
+                {
+                    // 판 전체를 버리지 않는다 - 나머지 단계의 기록은 여전히 값이 있다.
+                    Log.Debug(
+                        "[PlanAttemptJournal] 단계 코드가 파일명으로 안전하지 않아 건너뜁니다 - Code: {Code}",
+                        stepCode);
+                    return;
+                }
+
+                try
+                {
+                    var stepsDir = Path.Combine(_runDirectory, "steps");
+                    Directory.CreateDirectory(stepsDir);
+                    WriteAtomic(Path.Combine(stepsDir, stepCode + ".md"), markdown);
+                    _manifest.Steps[stepCode] = new PlanAttemptArtifact(attempt, ComputeSha256(markdown));
+                    FlushManifest();
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "[PlanAttemptJournal] 단계 섹션을 남기지 못했습니다 - Code: {Code}", stepCode);
+                }
+            }
         }
 
         public static string ComputeSha256(string input)

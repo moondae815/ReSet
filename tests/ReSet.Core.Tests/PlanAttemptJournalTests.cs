@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using Xunit;
 using ReSet.Core.Services;
@@ -108,6 +109,114 @@ namespace ReSet.Core.Tests
             {
                 File.Delete(filePath);
             }
+        }
+
+        [Fact]
+        public void RecordStepSection_WritesTheFileAndIndexesItInTheManifest()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+
+            journal.RecordStepSection(attempt: 1, stepCode: "S01", markdown: "S01 본문");
+
+            var dir = journal.CurrentRunDirectory!;
+            Assert.Equal("S01 본문", File.ReadAllText(Path.Combine(dir, "steps", "S01.md")));
+
+            var steps = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "manifest.json")))
+                .RootElement.GetProperty("Steps");
+            Assert.Equal(1, steps.GetProperty("S01").GetProperty("Attempt").GetInt32());
+            Assert.Equal(
+                PlanAttemptJournal.ComputeSha256("S01 본문"),
+                steps.GetProperty("S01").GetProperty("Sha256").GetString());
+        }
+
+        // 회차 2가 한 단계만 다시 만들면 그 단계만 덮이고 나머지는 회차 1의 것이
+        // 그대로 유효하다 - lastStepSections 가 들고 있는 누적 최신 상태와 같다.
+        [Fact]
+        public void RecordStepSection_OverwritesOnlyTheRewrittenStep()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+            journal.RecordStepSection(1, "S01", "회차1 S01");
+            journal.RecordStepSection(1, "S02", "회차1 S02");
+
+            journal.RecordStepSection(2, "S01", "회차2 S01");
+
+            var dir = journal.CurrentRunDirectory!;
+            Assert.Equal("회차2 S01", File.ReadAllText(Path.Combine(dir, "steps", "S01.md")));
+            Assert.Equal("회차1 S02", File.ReadAllText(Path.Combine(dir, "steps", "S02.md")));
+
+            var steps = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "manifest.json")))
+                .RootElement.GetProperty("Steps");
+            Assert.Equal(2, steps.GetProperty("S01").GetProperty("Attempt").GetInt32());
+            Assert.Equal(1, steps.GetProperty("S02").GetProperty("Attempt").GetInt32());
+        }
+
+        [Fact]
+        public void RecordSkeleton_WritesTheFileAndIndexesIt()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+
+            journal.RecordSkeleton(attempt: 2, markdown: "골격 본문");
+
+            var dir = journal.CurrentRunDirectory!;
+            Assert.Equal("골격 본문", File.ReadAllText(Path.Combine(dir, "skeleton.md")));
+
+            var skeleton = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "manifest.json")))
+                .RootElement.GetProperty("Skeleton");
+            Assert.Equal(2, skeleton.GetProperty("Attempt").GetInt32());
+        }
+
+        // 단계 코드는 모델이 목차에 채운 값이고 BatchStepPlanParser 는 빈 값과 중복만
+        // 본다 - 파일명 안전성은 아무도 안 본다. 그 단계만 건너뛰고 판은 살린다.
+        [Theory]
+        [InlineData("../escape")]
+        [InlineData("S01/S02")]
+        [InlineData("")]
+        [InlineData("S01 S02")]
+        public void RecordStepSection_UnsafeCode_SkipsThatStepAndKeepsTheRun(string unsafeCode)
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+            journal.RecordStepSection(1, "S01", "안전한 본문");
+
+            journal.RecordStepSection(1, unsafeCode, "위험한 본문");
+
+            var dir = journal.CurrentRunDirectory!;
+            Assert.Single(Directory.GetFiles(Path.Combine(dir, "steps"), "*.md"));
+
+            var steps = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "manifest.json")))
+                .RootElement.GetProperty("Steps");
+            Assert.Single(steps.EnumerateObject());
+        }
+
+        // 판이 안 열렸으면 조용히 아무것도 하지 않는다(Null Object).
+        [Fact]
+        public void RecordStepSection_WithoutAnOpenRun_DoesNothingAndDoesNotThrow()
+        {
+            var journal = NewJournal();
+
+            journal.RecordStepSection(1, "S01", "본문");
+
+            Assert.Null(journal.CurrentRunDirectory);
+        }
+
+        // 단계 생성은 StepConcurrency 만큼 병렬이다. 잃어버린 갱신이 나면
+        // 「섹션 파일은 있는데 manifest 가 모른다」가 된다.
+        [Fact]
+        public void RecordStepSection_ConcurrentWrites_AllLandInTheManifest()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+
+            System.Threading.Tasks.Parallel.For(0, 32, i =>
+                journal.RecordStepSection(1, $"S{i:D2}", $"본문 {i}"));
+
+            var steps = JsonDocument.Parse(
+                    File.ReadAllText(Path.Combine(journal.CurrentRunDirectory!, "manifest.json")))
+                .RootElement.GetProperty("Steps");
+            Assert.Equal(32, steps.EnumerateObject().Count());
         }
     }
 }
