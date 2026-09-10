@@ -28,6 +28,11 @@ namespace ReSet.Core.Services
         SessionOptionMissing,
         HeaderContractContradiction,
         PromptInstructionLeak,
+        // 명세서가 자기 작성자에게 지시하는 줄. PromptInstructionLeak과 짝이지만 축이
+        // 다르다 - 저쪽은 프롬프트가 심은 표지를 찾고, 이쪽은 문서의 모양을 본다.
+        // 프롬프트의 영어 지시를 모델이 번역해 실으면 표지가 남지 않으므로 저쪽은
+        // 원리적으로 못 잡는다(2026-09-10 실측 - 배송본 3편).
+        DocumentInstructsItsAuthor,
         DmlScopeTableMissing,
         DerivedTableDefinitionMissing,
         SetPredicateMismatch,
@@ -223,16 +228,19 @@ namespace ReSet.Core.Services
                 var cleansed = PostProcessMarkdown(markdown);
                 result.CleansedMarkdown = cleansed;
 
-                // [2026-09-10] 아래 30자리는 종전에 SafeCheck 없이 직접 호출됐다.
+                // [2026-09-10] 아래 31자리는 종전에 SafeCheck 없이 직접 호출됐다.
                 // 그 상태에서 검사 하나가 던지면 아래 catch-all이 Errors를 통째로
                 // 지우고 통과시킨다 - 「조용히 통과」가 아니라 「먼저 찾은 것을 지우고
                 // 통과」다. 작성 계약 §6이 자기 try/catch를 요구하지만 준수율이 13/30
                 // 이었고 그것을 재는 자가 없었다. 관례를 호출부 SafeCheck로 단일화한다
                 // (ValidateBatchStep이 이미 쓰던 쪽이고, 한 자리에서 스캔할 수 있다).
-                // 기존 자기 가드 13은 걷어내지 않는다 - 이중이지만 무해하고, 걷어내는
+                // 기존 자기 가드는 걷어내지 않는다 - 이중이지만 무해하고, 걷어내는
                 // 것은 그 가드가 우연히 사 주던 커버리지를 함께 버리는 별개의 위험이다.
                 SafeCheck(() => ValidateMarkdownStructure(cleansed, RequiredHeaders, result));
                 SafeCheck(() => CheckPromptInstructionLeak(cleansed, result));
+                // 표지가 남은 축자 유출은 위가, 표지가 사라진 번역 유출과 모델 자작은
+                // 아래가 잡는다 - CheckDocumentInstructsItsAuthor 주석 참고.
+                SafeCheck(() => CheckDocumentInstructsItsAuthor(cleansed, result));
                 SafeCheck(() => CheckMachineTableShape(cleansed, result));
 
                 if (expectations != null)
@@ -3710,6 +3718,118 @@ namespace ReSet.Core.Services
                 Type = ErrorType.PromptInstructionLeak,
                 Message = message
             });
+        }
+
+        // 명세서가 <b>자기 작성자에게 지시하는</b> 줄을 잡는다.
+        //
+        // [왜 「유출」이 아니라 「문서의 모양」인가 - 2026-09-10 전수]
+        // <see cref="CheckPromptInstructionLeak"/>은 프롬프트가 심은 표지를 찾는다. 그
+        // 축은 모델이 지시를 <b>번역해서</b> 실을 때 원리적으로 눈이 먼다 - 번역본에는
+        // 표지가 없다. 실물이 셋이다(UF_GET_OUTYMD4REFUND:26·:92,
+        // UF_GET_COMM4CLIENT4PARTIALCANCEL:40 - 영어 인트로가 한국어로 번역돼 실렸다).
+        // 그리고 번역본은 원문 귀속이 불가능하므로, 귀속을 요구하는 축이면 작성 계약 §7
+        // 대로 침묵해야 해서 그 셋을 영영 못 잡는다.
+        //
+        // 그래서 축을 바꾼다: <b>명세서는 SP를 서술하는 문서지 자기 작성자에게 지시하는
+        // 문서가 아니다.</b> 누가 썼는지 안 물어도 되고 앵커는 그 줄 자체다. 프롬프트에
+        // 없는 모델 자작(INS_EXTRA4PLCARD:204)도 이 축에서는 참 양성이다.
+        //
+        // [★ 인용줄을 지우지 않는다 - <see cref="QuoteLineRegex"/>와 정반대다]
+        // 참 양성 11 중 <b>6이 `&gt;` 인용줄</b>이다. 유출된 공지가 프롬프트에서
+        // `   &gt; …`로 렌더돼 인용줄로 오기 때문이다(AiService.BuildDmlScopeTableLines).
+        // <see cref="CheckErrorCodeUniquenessClaim"/>은 같은 `&gt;`를 통째로 지우는데
+        // 그쪽은 옳다 - 그 검사가 보는 인용은 L2가 남긴 지적이다. <b>두 검사는 `&gt;`에
+        // 정반대 정책을 가져야 한다. 통일하지 마라.</b>
+        //
+        // [★ 어미 목록을 넓히지 마라 - 지금이 상한이다]
+        // 축은 어미가 아니라 <b>수신자</b>다. 좁은 어미 목록은 수신자를 가르는 대리자일
+        // 뿐이다. 「해야 합니다」까지 넓히면 <b>호출자에게 하는 지시</b>가 들어오는데,
+        // 그것은 명세서의 본업이고 프롬프트 규칙이 <b>요구한다</b>("describe the calling
+        // responsibility or prerequisites"). 실측: 넓히면 배송본 11줄·8편 → 15줄·10편이
+        // 되고 새로 드는 것이 전부 정당한 서술이다(§8의 `IS NOT NULL` 사고와 같은 모양).
+        // Validate_WhenTheObligationIsOnTheCaller_ShouldStaySilent가 그 확장을 막는다.
+        //
+        // [검증 배너] 지금 파이프라인에서 이 검사는 배너를 볼 수 없다 - 모든 Validate
+        // 호출이 배너를 얹기 전에 돌고 디스크의 Spec.md를 재검증하는 경로도 없다. 그래도
+        // 배너를 관할에서 뺄 조항은 두지 않는다: 좁은 어미 목록이 배너의 어휘를 안 물어
+        // 코드가 필요 없기 때문이다(배송본 31편 중 배너는 1편, 오탐 0). 어미를 넓히면
+        // 이 면제가 함께 깨진다 - 위 두 별표가 한 쌍인 이유다.
+        /// <summary>
+        /// 시정 문구와 증거를 가르는 표지. 이 뒤는 발화 원문의 사본이라 트리거를 담아도
+        /// 되고, 이 앞(시정 문구)은 담으면 안 된다 -
+        /// <c>Validate_TheInstructionMessageMustNotTripItsOwnTrigger</c>가 못박는다.
+        /// </summary>
+        public const string AuthorInstructionEvidenceMarker = "[발화 근거]";
+
+        /// <summary>
+        /// 수신자가 <b>문서 자신</b>인 지시의 어미. 축은 어미가 아니라 수신자이고 이
+        /// 목록은 그 대리자일 뿐이다 - <see cref="CheckDocumentInstructsItsAuthor"/>의
+        /// 「어미 목록을 넓히지 마라」 문단이 그 이유를 실측으로 적어 두었다.
+        /// </summary>
+        private static readonly Regex AuthorInstructionRegex =
+            new(@"해서는 안 (?:됩니다|된다)|하지 마십시오|하지 마라|서술해야 합니다"
+                + @"|기재해 주십시오|적으십시오|기술하십시오|쓰지 마십시오",
+                RegexOptions.Compiled);
+
+        /// <summary>
+        /// 명세서가 <b>자기 작성자에게 지시하는</b> 줄을 잡는다. 판정 근거와 두 불변식은
+        /// 이 메서드 위의 주석 블록에 있다.
+        /// </summary>
+        private static void CheckDocumentInstructsItsAuthor(string markdown, ValidationResult result)
+        {
+            try
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                var fenceFlags = MarkdownSectionLocator.ComputeFenceFlags(lines);
+
+                for (var i = 0; i < lines.Count; i++)
+                {
+                    // 코드 펜스 안은 원본 SQL·의사코드다. 거기 든 한국어 주석까지
+                    // 문서의 서술로 세면 원본을 옮긴 죄가 된다.
+                    if (fenceFlags[i]) continue;
+
+                    var match = AuthorInstructionRegex.Match(lines[i]);
+                    if (!match.Success) continue;
+
+                    var line = lines[i].Trim();
+                    // [★ 시정 문구에 자기 트리거를 넣지 마라 - 2026-09-10]
+                    // 초안은 「…걷어내고 사실로 적으십시오」와 금지형 예시를 담았는데,
+                    // 그 둘이 AuthorInstructionRegex에 그대로 걸린다. L1 메시지는 재시도
+                    // 프롬프트로 되돌아가므로, 모델이 문구를 문서에 옮기면 같은 검사가
+                    // 다시 발화하고 고칠 것이 없는데 재시도가 소진된다 -
+                    // CheckErrorCodeUniquenessClaim이 2026-09-09~10에 세 번 겪은 그 루프다.
+                    // MessageMustNotTripItsOwnTrigger가 이 불변식을 못박는다.
+                    //
+                    // 그래서 시정 문구를 앞에, 증거(문제 표현·원문 줄)를 EvidenceMarker
+                    // 뒤에 둔다. 증거는 발화 원문의 사본이라 다시 걸려도 옳지만, 시정
+                    // 문구 자체는 어떤 트리거도 담지 않아야 한다.
+                    var message =
+                        $"명세서 {i + 1}번째 줄이 문서의 내용이 아니라 **작성 지시**입니다. "
+                        + "명세서는 이 SP가 무엇을 하는지 서술하는 문서이며, 문서를 어떻게 "
+                        + "쓸지 지시하는 자리가 아닙니다. 그 줄을 평서문으로 바꾸어, 그 "
+                        + "자리에서 참인 사실만 남기는 문장으로 다시 쓰기 바랍니다. "
+                        + "호출자·운영자가 지켜야 할 사항을 적는 문장은 이 대상이 아닙니다 - "
+                        + "그것은 명세서가 담아야 할 내용입니다. "
+                        + $"{AuthorInstructionEvidenceMarker} 문제 표현 「{match.Value}」 · "
+                        + $"해당 줄: {line}";
+
+                    result.Report(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.DocumentInstructsItsAuthor,
+                        Message = message,
+                        RawContext = line,
+                        // [작성 계약 §9] 메시지가 금지 어휘를 「」로 싣는다. 귀속 어휘를
+                        // 직접 실어, 고정 문구가 산문에서 되찾아져 멀쩡한 단계까지 여는
+                        // 것을 막는다.
+                        Lexemes = new[] { line }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[MechanicalValidator] 작성 지시 문장 대조 실패 - 이 검사만 건너뜁니다.");
+            }
         }
 
         private static void CheckHeaderContractContradiction(
