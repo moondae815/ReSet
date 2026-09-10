@@ -39,11 +39,13 @@ namespace ReSet.Core.Tests
             {
                 foreach (var group in firings.GroupBy(f => f.CheckKey, StringComparer.Ordinal))
                 {
-                    // [Distinct() 없음 - 2026-09-10 되돌림으로 확인] 원래 여기 있던
-                    // .Distinct() 를 지우고 다시 돌려도 4 개 시험이 그대로 통과했다 -
-                    // 시험이 없는 가지였다. 같은 시도에서 한 검사가 두 자리를 발화하면
-                    // 정렬 뒤 [2,2] 가 되어 gap == 0 이라 어차피 이 게이트에 안 걸리므로
-                    // Distinct() 는 결과를 바꾸지 않는다.
+                    // [Distinct() 없음 - 2026-09-10 되돌림으로 확인, 09-10 리뷰에서
+                    // 일반화] 원래 여기 있던 .Distinct() 를 지우고 다시 돌려도 4 개
+                    // 시험이 그대로 통과했다 - 시험이 없는 가지였다. 일반 불변식:
+                    // 정렬된 수열에서 중복을 지우는 것은 서로 다른 값 사이의 gap==1
+                    // 존재 여부를 절대 바꾸지 않는다 - 중복 원소끼리는 gap 이 0 이라
+                    // 애초에 이 조건에 기여하지 않고, 서로 다른 값끼리의 gap 은
+                    // 중복 개수와 무관하다. 그래서 Distinct() 유무는 결과를 안 바꾼다.
                     var attempts = group.Select(f => f.Attempt).OrderBy(a => a).ToList();
                     if (attempts.Zip(attempts.Skip(1), (a, b) => b - a).Any(gap => gap == 1))
                     {
@@ -119,10 +121,24 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void NoUnrecordedSelfReinforcingCheckInTheCorpus()
         {
-            Skip.IfNot(Directory.Exists(CorpusRoot), "거부된 시도 코퍼스가 아직 없습니다.");
+            // [정박 - 2026-09-10 리뷰 발견] CorpusRoot 는 .gitkeep 이 커밋돼 있어
+            // Directory.Exists 가 이 저장소의 어떤 체크아웃에서도 늘 참이다 - 예전
+            // Skip.IfNot(Directory.Exists(...)) 은 죽은 코드였다. 진짜 갈림은
+            // 「객체 디렉터리가 하나라도 있는가」다.
+            //
+            // 부트스트랩(Task 6 이 아직 코퍼스를 안 채움)이면 객체 디렉터리가 0 개이고,
+            // 그때는 건너뜀이 옳다 - 이 시험이 재료 없이 늘 빨개지면 버려진다.
+            //
+            // 그러나 한 번이라도 채워진 뒤(객체 디렉터리 ≥ 1)에는 attempts.json 이
+            // 비거나 깨져도(L1AttemptLog.Read 의 catch 가 조용히 삼키고
+            // .Where(Count>0) 이 걸러낸다) 조용히 건너뛰면 안 된다 - 이 저장소가 세
+            // 세션 연속 겪은 「부재를 건너뜀으로 접는」 바로 그 모양이다. 그래서
+            // 정박을 켠다: 디렉터리가 있는데 읽을 수 있는 발화가 하나도 없으면 실패.
+            var objectDirs = Directory.EnumerateDirectories(CorpusRoot).ToList();
+            Skip.If(objectDirs.Count == 0,
+                "거부된 시도 코퍼스가 아직 비어 있습니다(부트스트랩) - Task 6 이 채우면 이 건너뜀은 사라집니다.");
 
-            var corpus = Directory
-                .EnumerateDirectories(CorpusRoot)
+            var corpus = objectDirs
                 .OrderBy(d => d, StringComparer.Ordinal)
                 .Select(d => (
                     ObjectName: Path.GetFileName(d),
@@ -131,7 +147,10 @@ namespace ReSet.Core.Tests
                 .Where(entry => entry.Firings.Count > 0)
                 .ToList();
 
-            Skip.If(corpus.Count == 0, "거부된 시도 코퍼스가 비어 있습니다.");
+            Assert.True(corpus.Count > 0,
+                "코퍼스 객체 디렉터리는 " + objectDirs.Count + "개 있는데 읽을 수 있는 발화가"
+                + " 하나도 없습니다 - attempts.json 이 비었거나 깨졌을 수 있습니다."
+                + " 조용히 건너뛰지 않습니다.");
 
             var found = FindSelfReinforcing(corpus);
             var recorded = ReadLedger();

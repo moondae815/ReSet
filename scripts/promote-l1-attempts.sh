@@ -8,7 +8,22 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+output_dir="$repo_root/output"
 corpus="$repo_root/tests/ReSet.Core.Tests/Fixtures/rejected-attempts"
+
+# [왜 여기서 먼저 죽는가 - 2026-09-10 리뷰 발견] 이 저장소의 표준 워크트리에서
+# output/ 은 심링크다(재생성 산출물을 공유하려고 각 워크트리가 건다). BSD find
+# (이 저장소의 개발 플랫폼)는 -L 없이는 심링크인 시작 디렉터리를 따라가지 않고도
+# 종료 코드 0 을 낸다 - 그러면 진짜 데이터가 있어도 「승격한 객체 0 개」가 조용히
+# 성공으로 찍힌다. 「없다」와 「못 봤다」가 갈리게 두 가지를 고친다:
+#   1. output/ 자체가 없으면 여기서 큰 소리로 실패한다(2>/dev/null 로 삼키지 않는다).
+#   2. find 에 -L 을 붙여 심링크를 따라간다.
+if [ ! -d "$output_dir" ]; then
+  echo "오류: $output_dir 가 없습니다 - 이 워크트리에 산출물이 없습니다." >&2
+  echo "      (표준 설정이면 output 을 실물 산출물 디렉터리로 심링크하십시오.)" >&2
+  exit 1
+fi
+
 mkdir -p "$corpus"
 
 promoted=0
@@ -21,7 +36,7 @@ while IFS= read -r src; do
   cp "$src" "$dest_dir/attempts.json"
   echo "  승격: $object_name ($(wc -c < "$src") 바이트)"
   promoted=$((promoted + 1))
-done < <(find "$repo_root/output" -type f -name 'l1-attempts.json' 2>/dev/null | sort)
+done < <(find -L "$output_dir" -type f -name 'l1-attempts.json' | sort)
 
 echo "승격한 객체 $promoted 개 → $corpus"
 echo "다음: git add tests/ReSet.Core.Tests/Fixtures/rejected-attempts 후"
