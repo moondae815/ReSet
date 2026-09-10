@@ -57,7 +57,8 @@ namespace ReSet.Core.Tests
         {
             // DetailedErrors 는 RegenerationScopeSelector.FromL1Errors 와
             // BuildSuggestedPromptFix 가 소비해 **재생성 범위와 프롬프트 처방**을 정한다.
-            // 키를 달자고 없던 DetailedError 를 40 자리에 새로 넣으면 그 동작이 바뀐다 -
+            // 키를 달자고 없던 DetailedError 를 새로 넣으면 그 동작이 바뀐다(ValidationResult
+            // 검사 42 개 중 키가 하나도 없는 건 2 개뿐이다 - 위 클래스 주석 참고) -
             // 관측하려고 의미를 흔드는 셈이라 이 자리를 잠근다.
             var result = new ValidationResult();
 

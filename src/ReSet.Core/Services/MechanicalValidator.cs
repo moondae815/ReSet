@@ -131,14 +131,21 @@ namespace ReSet.Core.Services
     /// <summary>
     /// L1 발화 하나와 그것을 낸 검사의 키.
     ///
-    /// [왜 ErrorType 이 아닌가 - 2026-09-09 실측] <see cref="DetailedError"/> 는 관측용이
-    /// 아니라 <b>의미를 지닌 통로</b>다 - <c>RegenerationScopeSelector.FromL1Errors</c> 와
-    /// <c>BuildSuggestedPromptFix</c> 가 그것을 소비해 재생성 범위와 프롬프트 처방을 정한다.
-    /// 키를 달자고 없던 <c>DetailedError</c> 를 40 자리에 새로 넣으면 재생성 범위 선택
-    /// 동작이 바뀐다. 그래서 순수 관측용 통로를 따로 낸다.
+    /// [왜 ErrorType 이 아닌가 - 2026-09-09 실측, 2026-09-10 최종 리뷰에서 수 정정]
+    /// <see cref="DetailedError"/> 는 관측용이 아니라 <b>의미를 지닌 통로</b>다 -
+    /// <c>RegenerationScopeSelector.FromL1Errors</c> 와 <c>BuildSuggestedPromptFix</c> 가
+    /// 그것을 소비해 재생성 범위와 프롬프트 처방을 정한다. <c>ValidationResult</c> 의
+    /// 발화 자리 59·검사 42 개 중, 타입 키가 하나도 없는 검사는 <b>2 개</b>
+    /// (<c>CheckErrorCodeUniquenessClaim</c>·<c>CheckControlTotalProducer</c>)뿐이다 -
+    /// 종전 주석은 이 수를 <c>StepValidationResult</c>(별개 클래스, 발화 자리 38 -
+    /// <c>Errors.Add</c> 37 + <c>AddRange</c> 1, 이 관측 통로 밖)와 섞어 「40」으로
+    /// 부풀렸었다. 그 2 개에 키를 달자고 없던 <c>DetailedError</c> 를 새로 넣으면
+    /// 재생성 범위 선택 동작이 바뀐다. 그래서 순수 관측용 통로를 따로 낸다.
     ///
-    /// [왜 CallerMemberName 인가] 오늘 40 자리가 키를 못 단 이유는 <b>사람이 붙여야
-    /// 했기 때문</b>이다. 호출자 이름을 컴파일러가 채우면 빠뜨릴 방법이 없다.
+    /// [왜 CallerMemberName 인가] 키가 없던 그 2 개가 키를 못 단 이유는 <b>사람이
+    /// 붙여야 했기 때문</b>이다 - 우연이 아니라 구조다(하필 그중 하나가 재시도 6 회를
+    /// 태운 <c>CheckErrorCodeUniquenessClaim</c>). 호출자 이름을 컴파일러가 채우면
+    /// 빠뜨릴 방법이 없다.
     /// </summary>
     public sealed record L1Firing(string CheckKey, string Message);
 
