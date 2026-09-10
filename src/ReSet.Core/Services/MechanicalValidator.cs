@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Markdig;
@@ -221,49 +222,65 @@ namespace ReSet.Core.Services
                 // Mermaid 후처리 및 정화 적용
                 var cleansed = PostProcessMarkdown(markdown);
                 result.CleansedMarkdown = cleansed;
-                ValidateMarkdownStructure(cleansed, RequiredHeaders, result);
-                CheckPromptInstructionLeak(cleansed, result);
-                CheckMachineTableShape(cleansed, result);
+
+                // [2026-09-10] 아래 30자리는 종전에 SafeCheck 없이 직접 호출됐다.
+                // 그 상태에서 검사 하나가 던지면 아래 catch-all이 Errors를 통째로
+                // 지우고 통과시킨다 - 「조용히 통과」가 아니라 「먼저 찾은 것을 지우고
+                // 통과」다. 작성 계약 §6이 자기 try/catch를 요구하지만 준수율이 13/30
+                // 이었고 그것을 재는 자가 없었다. 관례를 호출부 SafeCheck로 단일화한다
+                // (ValidateBatchStep이 이미 쓰던 쪽이고, 한 자리에서 스캔할 수 있다).
+                // 기존 자기 가드 13은 걷어내지 않는다 - 이중이지만 무해하고, 걷어내는
+                // 것은 그 가드가 우연히 사 주던 커버리지를 함께 버리는 별개의 위험이다.
+                SafeCheck(() => ValidateMarkdownStructure(cleansed, RequiredHeaders, result));
+                SafeCheck(() => CheckPromptInstructionLeak(cleansed, result));
+                SafeCheck(() => CheckMachineTableShape(cleansed, result));
 
                 if (expectations != null)
                 {
-                    CheckUpdateMappings(cleansed, expectations, result);
-                    CheckInsertMappingTableNames(cleansed, expectations, result);
-                    CheckSchemaClaims(cleansed, expectations, result);
-                    CheckNullabilityClaims(cleansed, expectations, result);
-                    CheckParameterTableRows(cleansed, expectations, result);
-                    CheckParameterColumnClaims(cleansed, expectations, result);
-                    CheckTableIdentitySplit(cleansed, expectations, result);
-                    CheckIdentifierNotationClaims(cleansed, expectations, result);
-                    CheckSourceComments(cleansed, expectations, result);
-                    CheckRoundingSemantics(cleansed, expectations, result);
-                    CheckSessionOptions(cleansed, expectations, result);
-                    CheckHeaderContractContradiction(cleansed, expectations, result);
-                    CheckDmlScopeTable(cleansed, expectations, result);
-                    CheckDerivedTableDefinitions(cleansed, expectations, result);
-                    CheckSetPredicates(cleansed, expectations, result);
-                    CheckReferencedFunctions(cleansed, expectations, result);
-                    CheckLockHints(cleansed, expectations, result);
-                    CheckObjectDeclaration(cleansed, expectations, result);
-                    CheckOrderByExpressions(cleansed, expectations, result);
-                    CheckExecutionSemantics(cleansed, expectations, result);
-                    CheckMappingDescriptionPredicates(cleansed, expectations, result);
-                    CheckCaseBranches(cleansed, expectations, result);
-                    CheckTransactionBoundaries(cleansed, expectations, result);
-                    CheckSetAssignments(cleansed, expectations, result);
-                    CheckLocalVariableDeclarationTable(cleansed, expectations, result);
-                    CheckErrorCodes(cleansed, expectations, result);
-                    CheckErrorCodeUniquenessClaim(cleansed, expectations, result);
+                    SafeCheck(() => CheckUpdateMappings(cleansed, expectations, result));
+                    SafeCheck(() => CheckInsertMappingTableNames(cleansed, expectations, result));
+                    SafeCheck(() => CheckSchemaClaims(cleansed, expectations, result));
+                    SafeCheck(() => CheckNullabilityClaims(cleansed, expectations, result));
+                    SafeCheck(() => CheckParameterTableRows(cleansed, expectations, result));
+                    SafeCheck(() => CheckParameterColumnClaims(cleansed, expectations, result));
+                    SafeCheck(() => CheckTableIdentitySplit(cleansed, expectations, result));
+                    SafeCheck(() => CheckIdentifierNotationClaims(cleansed, expectations, result));
+                    SafeCheck(() => CheckSourceComments(cleansed, expectations, result));
+                    SafeCheck(() => CheckRoundingSemantics(cleansed, expectations, result));
+                    SafeCheck(() => CheckSessionOptions(cleansed, expectations, result));
+                    SafeCheck(() => CheckHeaderContractContradiction(cleansed, expectations, result));
+                    SafeCheck(() => CheckDmlScopeTable(cleansed, expectations, result));
+                    SafeCheck(() => CheckDerivedTableDefinitions(cleansed, expectations, result));
+                    SafeCheck(() => CheckSetPredicates(cleansed, expectations, result));
+                    SafeCheck(() => CheckReferencedFunctions(cleansed, expectations, result));
+                    SafeCheck(() => CheckLockHints(cleansed, expectations, result));
+                    SafeCheck(() => CheckObjectDeclaration(cleansed, expectations, result));
+                    SafeCheck(() => CheckOrderByExpressions(cleansed, expectations, result));
+                    SafeCheck(() => CheckExecutionSemantics(cleansed, expectations, result));
+                    SafeCheck(() => CheckMappingDescriptionPredicates(cleansed, expectations, result));
+                    SafeCheck(() => CheckCaseBranches(cleansed, expectations, result));
+                    SafeCheck(() => CheckTransactionBoundaries(cleansed, expectations, result));
+                    SafeCheck(() => CheckSetAssignments(cleansed, expectations, result));
+                    SafeCheck(() => CheckLocalVariableDeclarationTable(cleansed, expectations, result));
+                    SafeCheck(() => CheckErrorCodes(cleansed, expectations, result));
+                    SafeCheck(() => CheckErrorCodeUniquenessClaim(cleansed, expectations, result));
                 }
             }
             catch (Exception ex)
             {
-                // 소프트 페일 처리 (검증기 자체 오류 시 툴 중단 방지)
-                Log.Error(ex, "개별 명세서 검증기 실행 중 자체 오류가 발생하여 소프트 패스 처리합니다.");
-                result.Errors.Clear();
-                result.DetailedErrors.Clear();
-                result.IsValid = true;
+                // [2026-09-10 감사 [4]] 종전에는 여기서 Errors.Clear() + DetailedErrors.Clear()
+                // + IsValid = true 였다. 검사 셋째가 던지면 첫째·둘째가 **이미 찾은** 결함까지
+                // 지우고 통과시켰다 - 「조용히 통과」가 아니라 「찾은 것을 지우고 통과」다.
+                // 지우지 않는다. 툴 중단 방지는 여전히 지킨다(예외를 다시 던지지 않는다).
+                //
+                // 발화를 하나 더한다 - 안 그러면 「검증기가 자기 오류로 일부 검사를 못 돌렸다」는
+                // 사실이 아무 데도 안 남아, 그것이 다시 「값 0을 게이트 통과」가 된다.
+                // 백틱 토큰을 싣지 않는다(작성 계약 9: 백틱은 L1ViolationAttribution의 귀속
+                // 어휘가 되어 멀쩡한 단계까지 재생성으로 연다).
+                Log.Error(ex, "개별 명세서 검증기 실행 중 자체 오류가 발생했습니다 - 이미 찾은 결함은 그대로 둡니다.");
+                result.Report("검증기 자체 오류로 일부 검사를 끝내지 못했습니다: " + ex.Message);
                 result.CleansedMarkdown = markdown;
+                result.IsValid = false;
                 return result;
             }
 
@@ -310,11 +327,11 @@ namespace ReSet.Core.Services
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "통합 계획서 검증기 실행 중 자체 오류가 발생하여 소프트 패스 처리합니다.");
-                result.Errors.Clear();
-                result.DetailedErrors.Clear();
-                result.IsValid = true;
+                // Validate의 catch-all과 같은 이유로 지우지 않는다(2026-09-10 감사 [4]).
+                Log.Error(ex, "통합 계획서 검증기 실행 중 자체 오류가 발생했습니다 - 이미 찾은 결함은 그대로 둡니다.");
+                result.Report("검증기 자체 오류로 일부 검사를 끝내지 못했습니다: " + ex.Message);
                 result.CleansedMarkdown = markdown;
+                result.IsValid = false;
                 return result;
             }
 
@@ -8443,13 +8460,29 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 단계 검사 하나가 던져도 나머지 검사가 죽지 않게 한다.
+        /// 검사 하나가 던져도 나머지 검사가 죽지 않게 한다.
         ///
         /// 이 저장소의 L1 규약 - 개별 검사의 실패가 검사 전체를 무력화하면 결함이
         /// 조용히 통과한다. 뒤이어 붙는 검사들(축 B 감사 S07의 앵커·컬럼 대조 등)도
         /// 이 헬퍼를 한 줄씩 더 쓴다.
+        ///
+        /// [왜 검사 이름을 싣는가 - 2026-09-10] 종전 문구는 "단계 검사 하나가 실패해
+        /// 건너뜁니다."로 <b>어느 검사가 죽었는지 안 남겼다</b>. 감싸는 자리를 21에서
+        /// 44로 넓히면서 그대로 두면, 「찾은 것을 지우고 통과」를 「어느 것이 안 돌았는지
+        /// 모른 채 통과」로 옮기는 것뿐이다 - 값 0을 게이트 통과시키는 그 모양이다.
+        /// <c>CallerArgumentExpression</c>이 람다 원문을 그대로 실어 준다.
+        ///
+        /// [왜 <c>virtual</c>인가 - 2026-09-10 실측] 이 가드가 실제로 값을 하는지
+        /// 판정하려면 검사가 던져야 하는데 <b>실물 입력으로는 못 만든다</b>:
+        /// 배송 코퍼스 31편 × 변형 14가지 = 434회에서 발동 0이고, 실행 로그
+        /// 2,549,970줄(38일)에서도 catch-all·자기 가드·SafeCheck 발동이 전부 0이다.
+        /// 주입점이 없으면 이 가드는 영영 「없앴을 때 무엇이 지나가는가」로 판정할 수
+        /// 없다 - 발화 수는 활동이지 효력이 아니다. 그래서 시험이 한 검사만 던지게
+        /// 만들 수 있도록 열어 둔다. 제품 코드에는 시험 전용 상태를 두지 않는다.
         /// </summary>
-        private static void SafeCheck(Action check)
+        protected virtual void SafeCheck(
+            Action check,
+            [CallerArgumentExpression(nameof(check))] string? checkExpression = null)
         {
             try
             {
@@ -8457,7 +8490,7 @@ namespace ReSet.Core.Services
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "단계 검사 하나가 실패해 건너뜁니다.");
+                Log.Warning(ex, "[MechanicalValidator] 검사 하나가 실패해 건너뜁니다 - {Check}", checkExpression);
             }
         }
 
