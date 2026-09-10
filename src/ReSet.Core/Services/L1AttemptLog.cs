@@ -31,17 +31,17 @@ namespace ReSet.Core.Services
     /// [왜 소프트 페일인가] 관측이 파이프라인을 죽이면 안 된다. 이 저장소의
     /// <c>MechanicalValidator.Validate</c> 가 자기 오류에 소프트 패스하는 것과 같은 이유다.
     ///
-    /// [알려진 한계 - 2026-09-10 재리뷰 지목, 고치지 않기로 판단] <c>Append</c> 는 기존
-    /// 파일을 <c>Read</c> 로 읽어 누적하는데, <c>Read</c> 가 명명 계약 위반(위 참고)을
-    /// 만나면 빈 목록을 낸다 - 그 상태에서 <c>Append</c> 가 새 시도만 담아 <b>덮어쓰면</b>
-    /// 계약 위반 전의 시도들이 사라진다. 이 클래스 자신의 [왜 누적인가]와 정면으로
-    /// 어긋나는 모양이다. 고치지 않는다 - 지금 이 저장소의 유일한 쓰기 경로
-    /// (<c>VerificationPipelineOrchestrator</c>)는 이 클래스로만 파일을 쓰고 언제나
-    /// PascalCase 로 직렬화하므로, 계약을 어긴 파일이 생기려면 사람이나 다른 도구가
-    /// <c>raw/l1-attempts.json</c> 을 직접 건드려야 한다 - 지금 코드베이스의 쓰기
-    /// 경로로는 도달 불가다. 도달 경로가 생기면(예: 다른 프로세스가 이 파일에 쓰기
-    /// 시작하면) 이 문단을 다시 읽고 고쳐라 - 처방은 계약 위반이면 <c>Append</c> 도
-    /// 소프트 페일(새 시도를 버리고 기존 파일은 그대로 둔다)하는 것이다.
+    /// [닫힘 - 2026-09-10] 종전에는 <c>Append</c> 가 <c>Read</c> 로 읽어 누적했고,
+    /// <c>Read</c> 가 명명 계약 위반에 빈 목록을 내면 새 시도만 담아 <b>덮어썼다</b> -
+    /// 계약 위반 전의 시도들이 사라졌다. 그때는 「이 저장소의 쓰기 경로로는 도달 불가」라
+    /// 고치지 않기로 했는데, <b>같은 날 <c>Run</c> 을 명명 계약에 넣으면서 그 도달 경로가
+    /// 생겼다</b>(<c>Run</c> 항이 없는 기존 파일이 한꺼번에 계약 위반이 됐다). 실물에서
+    /// 났다 - <c>EXCEPTION_PROC</c> 의 아침 판 여섯 항목이 사라졌다.
+    ///
+    /// 지금은 <c>Append</c> 가 <c>TryRead</c> 로 읽고, 읽기에 실패하면 <b>아무것도 쓰지 않고</b>
+    /// <c>Log.Warning</c> 으로 남긴다. 잠금:
+    /// <c>L1AttemptLogOverwriteGuardTests</c>.
+    ///
     /// </summary>
     public static class L1AttemptLog
     {
@@ -64,9 +64,25 @@ namespace ReSet.Core.Services
                 Directory.CreateDirectory(rawDir);
                 var path = Path.Combine(rawDir, FileName);
 
-                var accumulated = File.Exists(path)
-                    ? Read(path).ToList()
-                    : new List<L1AttemptFiring>();
+                // [2026-09-10] 못 읽는 파일이면 **아무것도 쓰지 않는다.**
+                // 종전에는 Read 가 빈 목록을 내고 그 위에 새 시도만 얹어 덮어썼다 -
+                // 「없어서 비었다」와 「못 읽어서 비었다」가 구분되지 않았기 때문이다.
+                // 빈 배열("[]")은 계약 위반이 아니라 정상이므로 여기서 안 막힌다 -
+                // TryRead 가 참을 내고 accumulated 가 0 일 뿐이다.
+                var accumulated = new List<L1AttemptFiring>();
+                if (File.Exists(path))
+                {
+                    if (!TryRead(path, out var existing))
+                    {
+                        Log.Warning(
+                            "[L1AttemptLog] {Path} 를 읽지 못해 이번 시도를 버립니다 - "
+                            + "기존 기록을 덮어쓰지 않습니다. 형식이 바뀌었는지 보십시오.",
+                            path);
+                        return;
+                    }
+
+                    accumulated.AddRange(existing);
+                }
 
                 var run = ResolveRun(accumulated, attempt);
                 accumulated.AddRange(list.Select(f => new L1AttemptFiring(run, attempt, f.CheckKey, f.Message)));
@@ -104,7 +120,27 @@ namespace ReSet.Core.Services
             return attempt > last.Attempt ? last.Run : last.Run + 1;
         }
 
-        public static IReadOnlyList<L1AttemptFiring> Read(string jsonPath)
+        /// <summary>
+        /// 읽지 못하면 <b>빈 목록</b>을 낸다. 게이트는 그것이 옳은 동작이다 - 깨진 코퍼스
+        /// 파일 하나가 전체 판정을 죽이면 안 된다.
+        ///
+        /// <b>쓰기 경로는 이것을 쓰면 안 된다.</b> 「없어서 비었다」와 「못 읽어서 비었다」가
+        /// 구분되지 않기 때문이다 - <c>Append</c> 는 <c>TryRead</c> 를 쓴다.
+        /// </summary>
+        public static IReadOnlyList<L1AttemptFiring> Read(string jsonPath) =>
+            TryRead(jsonPath, out var firings) ? firings : new List<L1AttemptFiring>();
+
+        /// <summary>
+        /// <c>Read</c> 와 같되 <b>실패를 숨기지 않는다.</b>
+        ///
+        /// [왜 필요한가 - 2026-09-10] <c>Append</c> 가 기존 파일을 못 읽으면 빈 목록을 받고,
+        /// 거기에 새 시도만 담아 <b>덮어썼다</b> - 계약 위반 전의 시도들이 사라진다. 이 클래스
+        /// 주석이 그 자리를 미리 적어 두고 「도달 경로가 생기면 이 문단을 다시 읽고 고쳐라」고
+        /// 했는데, <c>Run</c> 을 명명 계약에 넣은 판이 바로 그 도달 경로를 만들었다
+        /// (<c>Run</c> 항이 없는 기존 파일이 한꺼번에 계약 위반이 됐다). 실물에서 실제로
+        /// 났다 - <c>EXCEPTION_PROC</c> 의 아침 판 여섯 항목이 사라졌다.
+        /// </summary>
+        private static bool TryRead(string jsonPath, out IReadOnlyList<L1AttemptFiring> firings)
         {
             try
             {
@@ -131,12 +167,14 @@ namespace ReSet.Core.Services
                         "어깁니다 - Run<=0 이거나 Attempt<=0 이거나 CheckKey 가 비었습니다.");
                 }
 
-                return deserialized;
+                firings = deserialized;
+                return true;
             }
             catch (Exception ex)
             {
                 Log.Debug(ex, "[L1AttemptLog] {Path} 를 읽지 못했습니다.", jsonPath);
-                return new List<L1AttemptFiring>();
+                firings = new List<L1AttemptFiring>();
+                return false;
             }
         }
     }
