@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Markdig;
@@ -128,6 +129,27 @@ namespace ReSet.Core.Services
         public IReadOnlyList<string>? Lexemes { get; set; }
     }
 
+    /// <summary>
+    /// L1 발화 하나와 그것을 낸 검사의 키.
+    ///
+    /// [왜 ErrorType 이 아닌가 - 2026-09-09 실측, 2026-09-10 최종 리뷰에서 수 정정]
+    /// <see cref="DetailedError"/> 는 관측용이 아니라 <b>의미를 지닌 통로</b>다 -
+    /// <c>RegenerationScopeSelector.FromL1Errors</c> 와 <c>BuildSuggestedPromptFix</c> 가
+    /// 그것을 소비해 재생성 범위와 프롬프트 처방을 정한다. <c>ValidationResult</c> 의
+    /// 발화 자리 59·검사 42 개 중, 타입 키가 하나도 없는 검사는 <b>2 개</b>
+    /// (<c>CheckErrorCodeUniquenessClaim</c>·<c>CheckControlTotalProducer</c>)뿐이다 -
+    /// 종전 주석은 이 수를 <c>StepValidationResult</c>(별개 클래스, 발화 자리 38 -
+    /// <c>Errors.Add</c> 37 + <c>AddRange</c> 1, 이 관측 통로 밖)와 섞어 「40」으로
+    /// 부풀렸었다. 그 2 개에 키를 달자고 없던 <c>DetailedError</c> 를 새로 넣으면
+    /// 재생성 범위 선택 동작이 바뀐다. 그래서 순수 관측용 통로를 따로 낸다.
+    ///
+    /// [왜 CallerMemberName 인가] 키가 없던 그 2 개가 키를 못 단 이유는 <b>사람이
+    /// 붙여야 했기 때문</b>이다 - 우연이 아니라 구조다(하필 그중 하나가 재시도 6 회를
+    /// 태운 <c>CheckErrorCodeUniquenessClaim</c>). 호출자 이름을 컴파일러가 채우면
+    /// 빠뜨릴 방법이 없다.
+    /// </summary>
+    public sealed record L1Firing(string CheckKey, string Message);
+
     public class MechanicalValidator
     {
         private static readonly string[] MermaidShapes = {
@@ -189,7 +211,7 @@ namespace ReSet.Core.Services
             if (string.IsNullOrWhiteSpace(markdown))
             {
                 result.IsValid = false;
-                result.Errors.Add("명세서 내용이 비어있습니다.");
+                result.Report("명세서 내용이 비어있습니다.");
                 result.DetailedErrors.Add(new DetailedError { Type = ErrorType.General, Message = "명세서 내용이 비어있습니다." });
                 Log.Warning("명세서 검증 실패 - 내용이 비어있습니다.");
                 return result;
@@ -200,49 +222,65 @@ namespace ReSet.Core.Services
                 // Mermaid 후처리 및 정화 적용
                 var cleansed = PostProcessMarkdown(markdown);
                 result.CleansedMarkdown = cleansed;
-                ValidateMarkdownStructure(cleansed, RequiredHeaders, result);
-                CheckPromptInstructionLeak(cleansed, result);
-                CheckMachineTableShape(cleansed, result);
+
+                // [2026-09-10] 아래 30자리는 종전에 SafeCheck 없이 직접 호출됐다.
+                // 그 상태에서 검사 하나가 던지면 아래 catch-all이 Errors를 통째로
+                // 지우고 통과시킨다 - 「조용히 통과」가 아니라 「먼저 찾은 것을 지우고
+                // 통과」다. 작성 계약 §6이 자기 try/catch를 요구하지만 준수율이 13/30
+                // 이었고 그것을 재는 자가 없었다. 관례를 호출부 SafeCheck로 단일화한다
+                // (ValidateBatchStep이 이미 쓰던 쪽이고, 한 자리에서 스캔할 수 있다).
+                // 기존 자기 가드 13은 걷어내지 않는다 - 이중이지만 무해하고, 걷어내는
+                // 것은 그 가드가 우연히 사 주던 커버리지를 함께 버리는 별개의 위험이다.
+                SafeCheck(() => ValidateMarkdownStructure(cleansed, RequiredHeaders, result));
+                SafeCheck(() => CheckPromptInstructionLeak(cleansed, result));
+                SafeCheck(() => CheckMachineTableShape(cleansed, result));
 
                 if (expectations != null)
                 {
-                    CheckUpdateMappings(cleansed, expectations, result);
-                    CheckInsertMappingTableNames(cleansed, expectations, result);
-                    CheckSchemaClaims(cleansed, expectations, result);
-                    CheckNullabilityClaims(cleansed, expectations, result);
-                    CheckParameterTableRows(cleansed, expectations, result);
-                    CheckParameterColumnClaims(cleansed, expectations, result);
-                    CheckTableIdentitySplit(cleansed, expectations, result);
-                    CheckIdentifierNotationClaims(cleansed, expectations, result);
-                    CheckSourceComments(cleansed, expectations, result);
-                    CheckRoundingSemantics(cleansed, expectations, result);
-                    CheckSessionOptions(cleansed, expectations, result);
-                    CheckHeaderContractContradiction(cleansed, expectations, result);
-                    CheckDmlScopeTable(cleansed, expectations, result);
-                    CheckDerivedTableDefinitions(cleansed, expectations, result);
-                    CheckSetPredicates(cleansed, expectations, result);
-                    CheckReferencedFunctions(cleansed, expectations, result);
-                    CheckLockHints(cleansed, expectations, result);
-                    CheckObjectDeclaration(cleansed, expectations, result);
-                    CheckOrderByExpressions(cleansed, expectations, result);
-                    CheckExecutionSemantics(cleansed, expectations, result);
-                    CheckMappingDescriptionPredicates(cleansed, expectations, result);
-                    CheckCaseBranches(cleansed, expectations, result);
-                    CheckTransactionBoundaries(cleansed, expectations, result);
-                    CheckSetAssignments(cleansed, expectations, result);
-                    CheckLocalVariableDeclarationTable(cleansed, expectations, result);
-                    CheckErrorCodes(cleansed, expectations, result);
-                    CheckErrorCodeUniquenessClaim(cleansed, expectations, result);
+                    SafeCheck(() => CheckUpdateMappings(cleansed, expectations, result));
+                    SafeCheck(() => CheckInsertMappingTableNames(cleansed, expectations, result));
+                    SafeCheck(() => CheckSchemaClaims(cleansed, expectations, result));
+                    SafeCheck(() => CheckNullabilityClaims(cleansed, expectations, result));
+                    SafeCheck(() => CheckParameterTableRows(cleansed, expectations, result));
+                    SafeCheck(() => CheckParameterColumnClaims(cleansed, expectations, result));
+                    SafeCheck(() => CheckTableIdentitySplit(cleansed, expectations, result));
+                    SafeCheck(() => CheckIdentifierNotationClaims(cleansed, expectations, result));
+                    SafeCheck(() => CheckSourceComments(cleansed, expectations, result));
+                    SafeCheck(() => CheckRoundingSemantics(cleansed, expectations, result));
+                    SafeCheck(() => CheckSessionOptions(cleansed, expectations, result));
+                    SafeCheck(() => CheckHeaderContractContradiction(cleansed, expectations, result));
+                    SafeCheck(() => CheckDmlScopeTable(cleansed, expectations, result));
+                    SafeCheck(() => CheckDerivedTableDefinitions(cleansed, expectations, result));
+                    SafeCheck(() => CheckSetPredicates(cleansed, expectations, result));
+                    SafeCheck(() => CheckReferencedFunctions(cleansed, expectations, result));
+                    SafeCheck(() => CheckLockHints(cleansed, expectations, result));
+                    SafeCheck(() => CheckObjectDeclaration(cleansed, expectations, result));
+                    SafeCheck(() => CheckOrderByExpressions(cleansed, expectations, result));
+                    SafeCheck(() => CheckExecutionSemantics(cleansed, expectations, result));
+                    SafeCheck(() => CheckMappingDescriptionPredicates(cleansed, expectations, result));
+                    SafeCheck(() => CheckCaseBranches(cleansed, expectations, result));
+                    SafeCheck(() => CheckTransactionBoundaries(cleansed, expectations, result));
+                    SafeCheck(() => CheckSetAssignments(cleansed, expectations, result));
+                    SafeCheck(() => CheckLocalVariableDeclarationTable(cleansed, expectations, result));
+                    SafeCheck(() => CheckErrorCodes(cleansed, expectations, result));
+                    SafeCheck(() => CheckErrorCodeUniquenessClaim(cleansed, expectations, result));
                 }
             }
             catch (Exception ex)
             {
-                // 소프트 페일 처리 (검증기 자체 오류 시 툴 중단 방지)
-                Log.Error(ex, "개별 명세서 검증기 실행 중 자체 오류가 발생하여 소프트 패스 처리합니다.");
-                result.Errors.Clear();
-                result.DetailedErrors.Clear();
-                result.IsValid = true;
+                // [2026-09-10 감사 [4]] 종전에는 여기서 Errors.Clear() + DetailedErrors.Clear()
+                // + IsValid = true 였다. 검사 셋째가 던지면 첫째·둘째가 **이미 찾은** 결함까지
+                // 지우고 통과시켰다 - 「조용히 통과」가 아니라 「찾은 것을 지우고 통과」다.
+                // 지우지 않는다. 툴 중단 방지는 여전히 지킨다(예외를 다시 던지지 않는다).
+                //
+                // 발화를 하나 더한다 - 안 그러면 「검증기가 자기 오류로 일부 검사를 못 돌렸다」는
+                // 사실이 아무 데도 안 남아, 그것이 다시 「값 0을 게이트 통과」가 된다.
+                // 백틱 토큰을 싣지 않는다(작성 계약 9: 백틱은 L1ViolationAttribution의 귀속
+                // 어휘가 되어 멀쩡한 단계까지 재생성으로 연다).
+                Log.Error(ex, "개별 명세서 검증기 실행 중 자체 오류가 발생했습니다 - 이미 찾은 결함은 그대로 둡니다.");
+                result.Report("검증기 자체 오류로 일부 검사를 끝내지 못했습니다: " + ex.Message);
                 result.CleansedMarkdown = markdown;
+                result.IsValid = false;
                 return result;
             }
 
@@ -260,7 +298,7 @@ namespace ReSet.Core.Services
             if (string.IsNullOrWhiteSpace(markdown))
             {
                 result.IsValid = false;
-                result.Errors.Add("계획서 내용이 비어있습니다.");
+                result.Report("계획서 내용이 비어있습니다.");
                 result.DetailedErrors.Add(new DetailedError { Type = ErrorType.General, Message = "계획서 내용이 비어있습니다." });
                 Log.Warning("통합 계획서 검증 실패 - 내용이 비어있습니다.");
                 return result;
@@ -271,13 +309,13 @@ namespace ReSet.Core.Services
                 // Mermaid 후처리 및 정화 적용
                 var cleansed = PostProcessMarkdown(markdown);
                 result.CleansedMarkdown = cleansed;
-                ValidateMarkdownStructure(cleansed, RequiredConsolidatedHeaders, result);
-                CheckVerificationCartesianComparison(cleansed, result);
-                CheckBatchRunRowCreation(cleansed, result);
-                CheckControlTotalProducer(cleansed, result);
-                // 자기 try/catch로 감싼다 - 이 catch-all은 검사 하나가 던지면 Errors를
-                // 통째로 지우고 소프트 패스시키므로(아래 catch 블록), 가드가 없으면 새
-                // 검사의 예외가 기존 검사 전부의 판정을 삼킨다.
+                // [2026-09-10 감사 [4]] 종전에 이 넷만 SafeCheck 밖에 있었다 - 바로 아래
+                // 주석이 「가드가 없으면 새 검사의 예외가 기존 검사 전부의 판정을 삼킨다」고
+                // 위험을 명시하면서 그 위의 넷을 안 감쌌다. 위험을 아는 자리가 더 위험했다.
+                SafeCheck(() => ValidateMarkdownStructure(cleansed, RequiredConsolidatedHeaders, result));
+                SafeCheck(() => CheckVerificationCartesianComparison(cleansed, result));
+                SafeCheck(() => CheckBatchRunRowCreation(cleansed, result));
+                SafeCheck(() => CheckControlTotalProducer(cleansed, result));
                 SafeCheck(() => CheckLegacyReturnCodeBinding(cleansed, result));
                 // SQL 거처 축(규칙 3-1·10). 조사 §5의 A급 셋이다 - 그때까지 이 세
                 // 규칙은 기계 강제가 0건이었고, 프롬프트와 Critic 두 층만으로 서
@@ -289,11 +327,11 @@ namespace ReSet.Core.Services
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "통합 계획서 검증기 실행 중 자체 오류가 발생하여 소프트 패스 처리합니다.");
-                result.Errors.Clear();
-                result.DetailedErrors.Clear();
-                result.IsValid = true;
+                // Validate의 catch-all과 같은 이유로 지우지 않는다(2026-09-10 감사 [4]).
+                Log.Error(ex, "통합 계획서 검증기 실행 중 자체 오류가 발생했습니다 - 이미 찾은 결함은 그대로 둡니다.");
+                result.Report("검증기 자체 오류로 일부 검사를 끝내지 못했습니다: " + ex.Message);
                 result.CleansedMarkdown = markdown;
+                result.IsValid = false;
                 return result;
             }
 
@@ -500,16 +538,21 @@ namespace ReSet.Core.Services
                 }
             }
 
-            CheckForbiddenShortcuts(stepMarkdown, step, result);
-            CheckNonCanonicalBatchSchema(stepMarkdown, step, result);
-            CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result, allSteps);
-            CheckMissingConditionColumns(stepMarkdown, step, conditionColumnsByProcedure, result);
-            CheckStepInterface(stepMarkdown, step, stepInterfaces, result);
-            CheckBatchControlVocabulary(stepMarkdown, step, result);
-            CheckBatchControlRowOrigin(stepMarkdown, step, result);
-            CheckFirstStepRowCreation(stepMarkdown, step, runRowOwnedTables, result);
-            CheckShadowBackupContract(stepMarkdown, step, result);
-            CheckCatchDiscardsReturnCode(stepMarkdown, step, result);
+            // [2026-09-10 감사 [4]] 아래 열은 종전에 SafeCheck 밖이었다. 이 메서드에는
+            // 지우는 catch-all이 없어(try/catch 자체가 없다) 고장 모양이 Validate와
+            // 다르다 - 던지면 예외가 호출자로 그대로 전파되고, 호출부
+            // (VerificationPipelineOrchestrator의 ValidateBatchStep 호출)는 그것을
+            // 감싸지 않는다. 나머지 16자리와 같은 관례로 맞춘다.
+            SafeCheck(() => CheckForbiddenShortcuts(stepMarkdown, step, result));
+            SafeCheck(() => CheckNonCanonicalBatchSchema(stepMarkdown, step, result));
+            SafeCheck(() => CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result, allSteps));
+            SafeCheck(() => CheckMissingConditionColumns(stepMarkdown, step, conditionColumnsByProcedure, result));
+            SafeCheck(() => CheckStepInterface(stepMarkdown, step, stepInterfaces, result));
+            SafeCheck(() => CheckBatchControlVocabulary(stepMarkdown, step, result));
+            SafeCheck(() => CheckBatchControlRowOrigin(stepMarkdown, step, result));
+            SafeCheck(() => CheckFirstStepRowCreation(stepMarkdown, step, runRowOwnedTables, result));
+            SafeCheck(() => CheckShadowBackupContract(stepMarkdown, step, result));
+            SafeCheck(() => CheckCatchDiscardsReturnCode(stepMarkdown, step, result));
             SafeCheck(() => CheckStepIdInitialValue(stepMarkdown, step, result));
             SafeCheck(() => CheckDuplicateProjectionNames(stepMarkdown, result));
             SafeCheck(() => CheckChunkUpperBoundProgress(stepMarkdown, result));
@@ -2475,7 +2518,9 @@ namespace ReSet.Core.Services
 
             foreach (var expectation in expectations.UpdateColumns)
             {
-                var body = ResolveSectionBody(expectation, expectations.UpdateColumns, sections, result);
+                var body = ResolveSectionBody(
+                    expectation, expectations.UpdateColumns, sections, result,
+                    lines, crudStart + 1, crudEnd);
                 if (body == null) continue; // 오류(누락 또는 모호)는 ResolveSectionBody가 이미 기록했다.
 
                 var missing = expectation.Columns.Where(column => !ContainsToken(body, column)).ToList();
@@ -2591,7 +2636,7 @@ namespace ReSet.Core.Services
                             $"테이블명 `{candidate}`이 파서가 확정한 표기 `{caseOnly}`와 대소문자가 다릅니다. " +
                             "실행은 무해하지만 이 표를 식별자 원천으로 삼는 이행·대조가 어긋납니다. " +
                             "원문 표기 그대로 옮기십시오.";
-                        result.Errors.Add(message);
+                        result.Report(message);
                         result.DetailedErrors.Add(new DetailedError
                         {
                             Type = ErrorType.InsertMappingTableNameMismatch,
@@ -2728,7 +2773,7 @@ namespace ReSet.Core.Services
                         var message =
                             $"명세서가 `{tableKey}`의 컬럼 `{candidate}`을(를) 존재하지 않는 것으로 기술했습니다. " +
                             "이 컬럼은 프롬프트의 스키마 표에 실제로 제공되었습니다.";
-                        result.Errors.Add(message);
+                        result.Report(message);
                         result.DetailedErrors.Add(new DetailedError
                         {
                             Type = ErrorType.SchemaClaimFalse,
@@ -2882,7 +2927,7 @@ namespace ReSet.Core.Services
                             + "(함수 인자로 함께 쓰이거나 다른 컬럼끼리 비교되는 자리는 연결이 아닙니다). "
                             + $"DDL이 `{variable}`와 결합하는 컬럼: {(actual.Count > 0 ? string.Join(", ", actual) : "(없음)")}. "
                             + "그 컬럼만 적거나 해당 토큰을 지우십시오.";
-                        result.Errors.Add(message);
+                        result.Report(message);
                         result.DetailedErrors.Add(new DetailedError
                         {
                             Type = ErrorType.ParameterColumnClaimMismatch,
@@ -2983,7 +3028,7 @@ namespace ReSet.Core.Services
                     + $"({string.Join(", ", expectations.ParameterNames.Select(x => $"`{x}`"))})만 행으로 가져야 합니다 - "
                     + string.Join(" / ", parts)
                     + ". DECLARE된 지역 변수·`@@ERROR` 같은 시스템 값은 이 표가 아니라 별도 표나 절에 적으십시오.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.ParameterTableRowMismatch,
@@ -3044,7 +3089,7 @@ namespace ReSet.Core.Services
                         $"명세서가 `{tableKey}`의 컬럼 `{column}`을(를) 널 불허로 단정했으나 의존성 " +
                         "스키마는 널 허용으로 확정했습니다. 이 단정을 근거로 제약을 세우거나 필터를 " +
                         "바꾸면 원본이 배제하던 NULL 행이 대상에 들어옵니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.NullabilityClaimMismatch,
@@ -3220,7 +3265,7 @@ namespace ReSet.Core.Services
                     "명세서가 3부 식별자 또는 크로스 데이터베이스 참조를 단언했으나, "
                     + "원본 DDL에는 3부 이상으로 표기된 테이블 참조가 없습니다. "
                     + "식별자 표기는 <sp-source-ddl>만 근거로 삼아야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.IdentifierNotationClaim,
@@ -3322,7 +3367,7 @@ namespace ReSet.Core.Services
                     $"원본 DDL {block.Line}행의 주석이 명세서에 기록되지 않았습니다: "
                     + $"`{block.Text}`. 조건식 원문·도입 일자·사유를 제약 절에 기술해야 합니다. "
                     + $"(대조 앵커: {string.Join(", ", block.Anchors)})";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.SourceCommentMissing,
@@ -3405,7 +3450,7 @@ namespace ReSet.Core.Services
             var message =
                 $"원본에 3인자 ROUND 호출이 {expectations.RoundingCalls.Count}건 있으나({lines}) "
                 + $"명세서가 절사 쪽 의미를 기술하지 않았습니다. {RoundingSemanticsExtractor.SemanticsSentence}";
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.RoundingSemanticsMissing,
@@ -3428,7 +3473,7 @@ namespace ReSet.Core.Services
                 var message =
                     $"프로시저 본문이 `SET {option}`을 설정하는데 명세서가 이를 기술하지 않았습니다. "
                     + "세션 옵션은 호출 계층의 동작을 바꿀 수 있으므로 기록해야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.SessionOptionMissing,
@@ -3659,7 +3704,7 @@ namespace ReSet.Core.Services
             const string message =
                 "프롬프트가 작성자에게 준 지시문이 명세서 본문에 그대로 실렸습니다. "
                 + "해당 줄은 문서의 내용이 아니라 작성 지시이므로 삭제해야 합니다.";
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.PromptInstructionLeak,
@@ -3685,7 +3730,7 @@ namespace ReSet.Core.Services
             const string message =
                 "헤더 주석이 내부 SP 호출을 NONE으로 선언했으나 실제로는 EXEC 호출이 있습니다. "
                 + "명세서가 이 모순(스테일 주석) 자체를 기록하지 않았습니다.";
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.HeaderContractContradiction,
@@ -3738,7 +3783,7 @@ namespace ReSet.Core.Services
                 var message =
                     $"기계 확정 DML 범위 표가 명세서에 없습니다. `{DmlScopeExtractor.DmlScopeTableHeading}` "
                     + $"헤딩과 {expectations.DmlScopeFacts.Count}개 행을 그대로 옮겨야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DmlScopeTableMissing,
@@ -3784,7 +3829,7 @@ namespace ReSet.Core.Services
                         $"DML 범위 표에 원본 DDL 라인 {fact.Line}의 {statementToken} 행이 없습니다 - "
                         + "문장 칸과 라인 칸이 둘 다 같은 행에 있어야 합니다. "
                         + "표는 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없고, 문장 번호를 바꿔 적을 수 없습니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.DmlScopeTableMissing,
@@ -3820,7 +3865,7 @@ namespace ReSet.Core.Services
                         $"DML 범위 표의 {statementToken} @ 라인 {fact.Line} 행에서 {label} 칸이 기계 확정값 "
                         + $"`{expectedCell}`과 다릅니다. 이 칸은 축자 전사 대상입니다 - 토큰을 더하거나 빼거나 "
                         + "순서를 바꿀 수 없습니다.";
-                    result.Errors.Add(cellMessage);
+                    result.Report(cellMessage);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.DmlScopeTableMissing,
@@ -3848,7 +3893,7 @@ namespace ReSet.Core.Services
                     $"DML 범위 표의 {fact.Operation} @ 라인 {fact.Line} 행에 GROUP BY 값(`{groupByToken}`)이 "
                     + "없습니다. GROUP BY 칸은 기계가 확정한 것이므로 그룹화 키를 그대로 옮겨야 합니다 - "
                     + "\"(없음)\"으로 적거나 일부만 옮기면 원본 그룹화 의미가 소실됩니다.";
-                result.Errors.Add(groupByMessage);
+                result.Report(groupByMessage);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DmlScopeTableMissing,
@@ -3929,7 +3974,7 @@ namespace ReSet.Core.Services
                     + "완전히 같아야 하며, 모델이 재서식한 헤딩은 일치로 보지 않습니다). 헤딩이 이미 있는데도 "
                     + "이 오류가 났다면 표를 새로 쓰지 말고 헤딩 문구를 원문 그대로 맞추십시오. "
                     + $"헤딩 아래에는 {expectations.DerivedColumns.Count}개 컬럼 정의를 그대로 옮겨야 합니다.";
-                result.Errors.Add(headingMessage);
+                result.Report(headingMessage);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DerivedTableDefinitionMissing,
@@ -3955,7 +4000,7 @@ namespace ReSet.Core.Services
                     + $"SET 우변이 `{definition.Alias}.{definition.Column}`에서 멈추면 "
                     + "그 값이 무엇으로 계산되는지가 소실됩니다. "
                     + $"(대조 앵커: {string.Join(", ", definition.Anchors)})";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DerivedTableDefinitionMissing,
@@ -4005,6 +4050,9 @@ namespace ReSet.Core.Services
         /// [발화 반경 실측 - 2026-09-09, 고친 뒤 다시 쟀다] 코퍼스 <b>객체 31 · 표에 중복이
         /// 있는 객체 2 · 발화 1</b>(EXCEPTION_PROC). 고치기 전 판정으로 재도 발화 1 이라
         /// 반경이 넓어지지 않았다 — 그래서 캐시 버전은 올리지 않는다.
+        /// 이 수는 <b>배송본 관할</b>이다. 거부된 시도 관할의 수는
+        /// <c>tests/ReSet.Core.Tests/Fixtures/rejected-attempts/</c> 에서 따로 재야 한다 -
+        /// 이 검사가 세 번 고쳐진 이유가 그 관할을 안 쟀기 때문이다.
         ///
         /// [판정부를 다시 세운 이유 - 2026-09-09 실측, 재시도 6 회 소진]
         /// 종전 판정부는 <c>sentence.Contains("코드") &amp;&amp; (Contains("고유") ||
@@ -4018,7 +4066,9 @@ namespace ReSet.Core.Services
         ///      <see cref="ExcerptAroundUniquenessWord"/>. 코드를 「음수값」이라 부르면
         ///      지시어에 안 걸렸고, <c>FirstOrDefault</c> 라 둘 중 하나만 잡았다.
         /// 회귀는 <c>ErrorCodeUniquenessClaimRegressionTests</c> 가 잠근다 — 픽스처는
-        /// 실행 로그(시도 5·6 응답)와 배송본에서 한 글자도 고치지 않고 오려 왔다.
+        /// 실행 로그와 배송본에서 오려 왔다, 우리가 지어낸 것이 하나도 없다(2026-09-10
+        /// 최종 리뷰가 지목한 대로, Attempt4 픽스처 하나만 독립 문장으로 성립시키려고
+        /// 끝에 마침표를 붙였고 그 밖에는 글자가 같다 - 그 시험 클래스 주석 참고).
         ///
         /// [알려진 한계 - 미리 적어 둔다] 한국어 「고유」는 「유일한」과 「자신의」 둘 다로 쓰인다.
         /// <c>UP_Util_Settle_Summary</c> 의 「자신의 <b>고유</b> 코드(-1~-8)」는 후자이고 지금은
@@ -4068,7 +4118,7 @@ namespace ReSet.Core.Services
                     .Where(f => string.Equals(f.Code, code, StringComparison.Ordinal))
                     .Select(f => $"{f.Operation} {f.StatementOrdinal}"))));
 
-            result.Errors.Add(
+            result.Report(
                 $"명세서가 오류 코드를 「고유」라 단정했으나 기계 확정 오류 코드 표에 "
                 + $"중복된 코드 {offenders}이(가) 있습니다 — 호출자는 그 코드로 실패 지점을 "
                 + $"특정할 수 없습니다. 공유 관계: {sharing}. "
@@ -4167,11 +4217,15 @@ namespace ReSet.Core.Services
         /// <see cref="UniquenessDenialTokens"/> 가 닫은 자기강화 루프가 한 겹 아래에서
         /// 다시 열린 것이다.
         ///
-        /// [알려진 한계 - 미리 적어 둔다] 관형 수식(「고유한 오류 코드」)만 본다. 서술
-        /// 용법(「오류 코드는 고유하다」)은 지시어가 낱말보다 <b>앞</b>에 오므로 이 함수로는
-        /// 못 잡고, <see cref="PredicativeUniquenessRegex"/> 가 그중 가장 좁은 모양 하나만
-        /// 따로 받는다. 그 모양은 <b>코퍼스에서 관측된 적이 없고</b> 예방으로 둔 것이다 -
-        /// 실물 발화 여섯은 전부 관형 용법이다. 넓히기 전에 실측부터 하라.
+        /// [알려진 한계 - 2026-09-10 갱신] 관형 수식(「고유한 오류 코드」)만 본다. 서술
+        /// 용법(「오류 코드는 고유하다」)을 절 경계와 무관하게 잡으려던 <c>PredicativeUniquenessRegex</c>
+        /// (예방용, 코퍼스에서 관측된 적이 없었다)를 Task 6 재작업에서 걷어냈다 - 실물
+        /// 시도 4에서 오탐을 냈다: 「대부분의 코드는 서로 다르<b>지만</b>, 위 두 쌍이
+        /// 코드를 공유하므로 …서술해서는 안 됩니다」가 <c>UniquenessClauseBoundaryRegex</c>의
+        /// 「지만」 경계에서 앞 절 "…코드는 서로 다르"만으로 잘려 그 정규식에 걸렸고,
+        /// 부정 표지("안")는 뒤 절에만 있어 같은 절 안에서 안 보였다. 서술 용법 자체를
+        /// 다시 잡으려면 절 경계를 넘나드는 문맥이 필요하다 - 실측 없이 좁은 정규식으로
+        /// 예방하면 이번처럼 조용히 오탐을 낸다. 넓히기 전에 실측부터 하라.
         /// </summary>
         private static bool ModifiesErrorCode(string clause, int claimEnd)
         {
@@ -4189,17 +4243,6 @@ namespace ReSet.Core.Services
             var stop = CaseParticleRegex.Match(rest);
             return !stop.Success || topic <= stop.Index;
         }
-
-        /// <summary>
-        /// 서술 용법 중 가장 좁은 모양 하나(「오류 코드<b>는</b> 고유하다」). 지시어와
-        /// 유일성 낱말이 조사 하나만 사이에 두고 맞붙은 경우만 받는다.
-        ///
-        /// 예방용이다 - 이 모양은 코퍼스에서 관측된 적이 없다.
-        /// <see cref="ModifiesErrorCode"/> 의 [알려진 한계] 참고.
-        /// </summary>
-        private static readonly Regex PredicativeUniquenessRegex =
-            new(@"(?:코드|음수값|값)\s*(?:은|는|이|가)\s*(?:서로 다르|서로 다른|고유)",
-                RegexOptions.Compiled);
 
         /// <summary>
         /// 주장을 무르는 한정·부정 표지. 같은 절에 하나라도 있으면 유일성 단정이 아니다.
@@ -4238,11 +4281,9 @@ namespace ReSet.Core.Services
             {
                 // 유일성 낱말이 오류 코드를 직접 꾸미는 자리가 하나라도 있어야 주장이다.
                 // 같은 절에 있기만 한 것으로는 부족하다 - ModifiesErrorCode 문서 참고.
-                var onErrorCodes =
-                    PredicativeUniquenessRegex.IsMatch(clause)
-                    || UniquenessClaimTokens.Any(token =>
-                        AllOccurrences(clause, token).Any(at =>
-                            ModifiesErrorCode(clause, at + token.Length)));
+                var onErrorCodes = UniquenessClaimTokens.Any(token =>
+                    AllOccurrences(clause, token).Any(at =>
+                        ModifiesErrorCode(clause, at + token.Length)));
                 if (!onErrorCodes) continue;
 
                 var denied = Array.Exists(UniquenessDenialTokens, token =>
@@ -4363,7 +4404,7 @@ namespace ReSet.Core.Services
                 var message =
                     $"기계 확정 집합 술어 표가 명세서에 없습니다. `{DmlScopeExtractor.SetPredicateTableHeading}` "
                     + $"헤딩과 {expectations.SetPredicates.Count}개 행을 그대로 옮겨야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.SetPredicateMismatch,
@@ -4464,7 +4505,7 @@ namespace ReSet.Core.Services
                         + "「술어 원문」 칸은 DDL 원문 그대로여야 합니다 - "
                         + "요약하거나 바꿔 쓸 수 없고, 행을 합치거나 생략할 수 없으며, "
                         + "범위(최상위 / 파생 테이블 X / 조인 ON T / 파생 테이블 X · 조인 ON T)도 사실대로 적어야 합니다.";
-                    result.Errors.Add(countMessage);
+                    result.Report(countMessage);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.SetPredicateMismatch,
@@ -4540,7 +4581,7 @@ namespace ReSet.Core.Services
                         + " 같은 컬럼의 각 IN은 별도 행으로, 원소를 정확히 옮겨야 AND/OR 의미가 보존됩니다.";
                 }
 
-                result.Errors.Add(mismatchMessage);
+                result.Report(mismatchMessage);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.SetPredicateMismatch,
@@ -4749,7 +4790,7 @@ namespace ReSet.Core.Services
                 var message =
                     $"기계 확정 참조 함수 표가 명세서에 없습니다. `{DmlScopeExtractor.ReferencedFunctionTableHeading}` "
                     + $"헤딩과 {expectations.ReferencedFunctionCalls.Count}개 행을 그대로 옮겨야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.ReferencedFunctionMismatch,
@@ -4821,7 +4862,7 @@ namespace ReSet.Core.Services
                     + $"인자 `{expectedCall}` 행이 {facts.Count}개 있어야 하는데 {matchingRows}개 있습니다. "
                     + "함수·호출 위치·인자 칸은 기계가 확정한 것이므로 행을 생략하거나 합칠 수 없고, "
                     + "문장 번호·라인을 바꿔 적을 수 없으며, 인자 원문을 요약할 수 없습니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.ReferencedFunctionMismatch,
@@ -4928,7 +4969,7 @@ namespace ReSet.Core.Services
                 var message =
                     $"기계 확정 잠금 힌트 표가 명세서에 없습니다. `{DmlScopeExtractor.LockHintTableHeading}` "
                     + $"헤딩과 {expectations.LockHints.Count}개 행을 그대로 옮겨야 합니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.LockHintTableMissing,
@@ -4969,7 +5010,7 @@ namespace ReSet.Core.Services
                     + $"(별칭 {fact.Alias}, 범위 {fact.Scope}) 행이 없거나 힌트 값이 다릅니다. "
                     + $"힌트는 `{hintsToken}`을 그대로 옮겨야 합니다 - 종류만 적고 값을 생략하면 "
                     + "원문에서 찾을 수 없습니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.LockHintTableMissing,
@@ -5030,7 +5071,7 @@ namespace ReSet.Core.Services
                 var headingMessage =
                     $"기계 확정 객체 선언 표가 명세서에 없습니다. `{ObjectDeclarationExtractor.ObjectDeclarationTableHeading}` "
                     + $"헤딩과 `{fact.QualifiedName}`의 WITH 옵션(`{expectedOptionsText}`) 행을 그대로 옮겨야 합니다.";
-                result.Errors.Add(headingMessage);
+                result.Report(headingMessage);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.ObjectDeclarationTableMissing,
@@ -5064,7 +5105,7 @@ namespace ReSet.Core.Services
                 $"객체 선언 표에 `{fact.QualifiedName}`의 WITH 옵션(`{expectedOptionsText}`) 행이 없거나 "
                 + "값이 다릅니다. 표는 기계가 확정한 것이므로 옵션 종류만 적고 값(EXECUTE AS의 주체,"
                 + " INLINE의 ON/OFF 등)을 생략할 수 없습니다.";
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.ObjectDeclarationTableMissing,
@@ -5134,7 +5175,7 @@ namespace ReSet.Core.Services
                     $"DML 범위 표의 {fact.Operation} @ 라인 {fact.Line} 행에 ORDER BY 값(`{joined}`)이 "
                     + "없습니다. ORDER BY 칸은 기계가 확정한 것이므로 정렬 대상과 방향(DESC/ASC)까지 "
                     + "그대로 옮겨야 합니다 - \"(없음)\"으로 적거나 일부만 옮기면 원본에서 찾을 수 없습니다.";
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.DmlScopeTableMissing,
@@ -5227,7 +5268,7 @@ namespace ReSet.Core.Services
                             + $"{headingOperation} {ordinal} 행에는 그 술어가 없습니다. "
                             + "설명 칸은 그 문장에 실재하는 조건만 적어야 합니다 - 다른 문장의 조건을 "
                             + "옮겨 적으면 이행이 대상 행 집합을 잘못 좁힙니다.";
-                        result.Errors.Add(message);
+                        result.Report(message);
                         result.DetailedErrors.Add(new DetailedError
                         {
                             Type = ErrorType.MappingDescriptionPredicateNotInStatement,
@@ -5289,7 +5330,7 @@ namespace ReSet.Core.Services
                     var missing =
                         $"기계 확정 실행 의미 표가 명세서에 없습니다. `{ExecutionSemanticsFacts.TableHeading}` "
                         + $"헤딩과 {expectations.ExecutionSemantics.Count}개 행을 그대로 옮겨야 합니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.ExecutionSemanticsTableMissing,
@@ -5323,7 +5364,7 @@ namespace ReSet.Core.Services
                         $"실행 의미 표에 `{fact.Kind}`(라인 {fact.Line}, 대상 {fact.Target}) 행이 없거나 "
                         + $"확정 사실이 다릅니다. `{fact.Fact}`를 그대로 옮겨야 합니다 - 이것은 미확정 "
                         + "사항이 아니라 확정값입니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.ExecutionSemanticsTableMissing,
@@ -5366,7 +5407,7 @@ namespace ReSet.Core.Services
                     var missing =
                         $"기계 확정 CASE 분기 표가 명세서에 없습니다. `{CaseBranchExtractor.TableHeading}` "
                         + $"헤딩과 {expectations.CaseBranches.Count}개 행을 그대로 옮겨야 합니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.CaseBranchTableMissing,
@@ -5400,7 +5441,7 @@ namespace ReSet.Core.Services
                         $"CASE 분기 표에 라인 {fact.Line}의 `{fact.Ordinal}` 행이 없거나 조건 원문이 "
                         + $"다릅니다. `{fact.Condition}`을 그대로 옮겨야 합니다 - 분기를 합치거나 "
                         + "비교 연산자를 말로 바꾸면 원문에서 찾을 수 없습니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.CaseBranchTableMissing,
@@ -5576,7 +5617,7 @@ namespace ReSet.Core.Services
                         $"기계 확정 트랜잭션 경계 표가 명세서에 없습니다. "
                         + $"`{TransactionBoundaryExtractor.TableHeading}` 헤딩과 "
                         + $"{expectations.TransactionBoundaries.Count}개 행을 그대로 옮겨야 합니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.TransactionBoundaryTableMissing,
@@ -5602,7 +5643,7 @@ namespace ReSet.Core.Services
                     var message =
                         $"트랜잭션 경계 표에 라인 {fact.Line}의 `{fact.Kind}` 행이 없습니다. "
                         + "배치 구현이 재현해야 할 경계이므로 산문으로 대신하거나 행을 합치면 안 됩니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.TransactionBoundaryTableMissing,
@@ -5651,7 +5692,7 @@ namespace ReSet.Core.Services
                         $"기계 확정 변수 대입 표가 명세서에 없습니다. "
                         + $"`{SetAssignmentExtractor.TableHeading}` 헤딩과 "
                         + $"{expectations.SetAssignments.Count}개 행을 그대로 옮겨야 합니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.SetAssignmentTableMissing,
@@ -5685,7 +5726,7 @@ namespace ReSet.Core.Services
                         $"변수 대입 표에 라인 {fact.Line}의 `{fact.Variable}` 행이 없거나 대입식 "
                         + $"원문이 다릅니다. `{fact.Expression}`을 그대로 옮겨야 합니다 - 대입식을 "
                         + "말로 바꾸거나 요약하면 원문에서 찾을 수 없습니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.SetAssignmentTableMissing,
@@ -5767,7 +5808,7 @@ namespace ReSet.Core.Services
                         + $"`{LocalVariableDeclarationExtractor.TableHeading}` 헤딩과 "
                         + $"{expectations.LocalVariableDeclarations.Count}개 행을 `## 파라미터 목록`에 "
                         + "그대로 옮겨야 합니다 — 표만 두고 헤딩을 빼면 리더가 그 표를 못 읽습니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.LocalVariableTableMismatch,
@@ -5797,7 +5838,7 @@ namespace ReSet.Core.Services
                         $"지역 변수 표에 `{fact.Name}` 행이 없거나 선언 타입이 다릅니다. "
                         + $"원본 DDL은 이 변수를 `{fact.DataType}`으로 선언합니다 — 그대로 옮겨야 합니다. "
                         + "타입을 이름으로 추측하면 금액 변수가 정수로 선언되어 절삭됩니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.LocalVariableTableMismatch,
@@ -5829,7 +5870,7 @@ namespace ReSet.Core.Services
                         $"지역 변수 표에 원본 DDL이 선언하지 않은 `{name}` 행이 있습니다. "
                         + "이 표는 기계 확정 전사표이므로 행을 더하면 안 됩니다 — "
                         + "원본에 없는 변수는 지우십시오.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.LocalVariableTableMismatch,
@@ -5877,7 +5918,7 @@ namespace ReSet.Core.Services
                         $"기계 확정 오류 코드 표가 명세서에 없습니다. "
                         + $"`{DmlScopeExtractor.ErrorCodeTableHeading}` 헤딩과 "
                         + $"{expectations.ErrorCodes.Count}개 행을 그대로 옮겨야 합니다.";
-                    result.Errors.Add(missing);
+                    result.Report(missing);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.ErrorCodeTableMissing,
@@ -5911,7 +5952,7 @@ namespace ReSet.Core.Services
                         $"오류 코드 표에 `{statementToken}` 행이 없거나 오류 코드·설정 대상이 "
                         + $"다릅니다. `{fact.Code}`를 `{fact.Variable}`에 설정하는 행을 그대로 "
                         + "옮겨야 합니다.";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.ErrorCodeTableMissing,
@@ -6054,7 +6095,7 @@ namespace ReSet.Core.Services
                         + "평문으로 무너집니다. 해당 행: \n" + rows[i].Trim() + "\n"
                         + (DescribeMergedRows(rows[i], headerCells)
                            ?? "헤더와 같은 칸 수로 옮기십시오.");
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.MachineTableShapeBroken,
@@ -6178,7 +6219,7 @@ namespace ReSet.Core.Services
                         $"같은 물리 테이블 `{kvp.Key}`이(가) `## CRUD 분석`의 한 절 안에서 " +
                         $"서로 다른 표기 {kvp.Value.Count}개로 나뉘어 기술되었습니다: " +
                         string.Join(", ", kvp.Value.Select(s => $"`{s}`")) + ".";
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.TableIdentitySplit,
@@ -6365,7 +6406,10 @@ namespace ReSet.Core.Services
             UpdateColumnExpectation expectation,
             IReadOnlyList<UpdateColumnExpectation> allExpectations,
             IReadOnlyDictionary<string, string> sections,
-            ValidationResult result)
+            ValidationResult result,
+            IReadOnlyList<string> lines,
+            int scopeStart,
+            int scopeEnd)
         {
             var normalizedTarget = NormalizeQualifiedName(expectation.Table);
 
@@ -6391,9 +6435,27 @@ namespace ReSet.Core.Services
 
             if (candidateSections.Count == 0)
             {
+                // 표가 정말 없는가, 아니면 헤딩 레벨만 다른가. 실재하지 않는 부재를
+                // 주장하면 모델이 이미 쓴 표를 다시 쓴다 - FindUpdateHeadingAtWrongLevel 참고.
+                var wrongLevel = FindUpdateHeadingAtWrongLevel(
+                    lines, scopeStart, scopeEnd, expectation.Table);
+
+                if (wrongLevel != null)
+                {
+                    AddUpdateMappingError(result,
+                        $"UPDATE 대상 테이블 `{expectation.Table}`의 매핑 표가 헤딩 레벨 "
+                        + $"`{wrongLevel}`로 쓰여 있습니다 - 표 자체는 있습니다. "
+                        + $"`{UpdateHeadingPrefix}` 처럼 `#` 셋으로 고치십시오(그 표의 내용은 "
+                        + "그대로 두십시오). 레벨이 다르면 기계가 그 절을 못 찾아 "
+                        + "매핑 대조가 통째로 건너뛰어집니다.",
+                        expectation.Table);
+                    return null;
+                }
+
                 AddUpdateMappingError(result,
                     $"`## CRUD 분석`에 UPDATE 대상 테이블 `{expectation.Table}`의 매핑 표가 없습니다. " +
-                    $"정적 파서가 확정한 SET 대상 컬럼: {string.Join(", ", expectation.Columns)}");
+                    $"정적 파서가 확정한 SET 대상 컬럼: {string.Join(", ", expectation.Columns)}",
+                    expectation.Table);
                 return null;
             }
 
@@ -6401,18 +6463,66 @@ namespace ReSet.Core.Services
             var candidateNames = string.Join(", ", candidateSections.Select(kvp => $"`{kvp.Key}`"));
             AddUpdateMappingError(result,
                 $"UPDATE 대상 테이블 `{expectation.Table}`을(를) 마지막 파트 `{lastPart}`만으로는 특정할 수 없습니다 " +
-                $"(후보 섹션: {candidateNames}). 명세서의 UPDATE 대상 테이블 헤딩을 완전 한정 이름으로 구분해 작성해 주십시오.");
+                $"(후보 섹션: {candidateNames}). 명세서의 UPDATE 대상 테이블 헤딩을 완전 한정 이름으로 구분해 작성해 주십시오.",
+                expectation.Table);
             return null;
         }
 
-        private static void AddUpdateMappingError(ValidationResult result, string message)
+        private static void AddUpdateMappingError(
+            ValidationResult result, string message, string? attributionLexeme = null)
         {
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.UpdateMappingMissing,
-                Message = message
+                Message = message,
+                // [작성 계약 9] 이 메시지는 백틱 토큰을 여럿 싣는다(`## CRUD 분석`,
+                // 그리고 레벨 오류 갈래에서는 `####`·`###`). 귀속 어휘를 직접 싣지
+                // 않으면 ViolationLexemes 가 그 고정 문구를 문서에서 되찾으려 해
+                // 엉뚱한 자리를 지목한다. 되찾을 것은 테이블 이름 하나다.
+                Lexemes = attributionLexeme is { Length: > 0 }
+                    ? new[] { attributionLexeme }
+                    : null
             });
+        }
+
+        /// <summary>
+        /// `### UPDATE 대상 테이블:` 절이 하나도 안 잡혔을 때, 같은 구간에 <b>다른 헤딩
+        /// 레벨로 쓰인</b> 같은 이름의 절이 있는지 본다. 있으면 그 헤딩 원문을 낸다.
+        ///
+        /// [실측 - 2026-09-10 EXCEPTION_PROC 재생성, 6 회 소진] 그 판을 끝낸 것이 이
+        /// 검사인데 <b>매핑 표는 18 개가 내용까지 온전히 있었다</b> — `####`(레벨 4)로
+        /// 썼을 뿐이다. 그런데 문구는 「매핑 표가 없습니다」였다. 사실이 아닌 부재를
+        /// 주장하면 모델은 이미 쓴 표를 다시 쓰고, 진짜 원인(`#` 한 글자)은 문구
+        /// 어디에도 없어 헤딩은 동전 던지기로 남는다(시도 3·4 는 맞혔고 5 에서
+        /// 되돌아갔다). 같은 부류를 이미 고친 전례가 있다 - <c>1e362c0b</c>.
+        ///
+        /// **발화 자체는 옳다** — 계약이 레벨 3 이고 프롬프트가 그 예시를 준다. 고칠
+        /// 것은 판정이 아니라 문구다.
+        /// </summary>
+        private static string? FindUpdateHeadingAtWrongLevel(
+            IReadOnlyList<string> lines, int start, int end, string expectedTable)
+        {
+            const string Tail = "UPDATE 대상 테이블:";
+            var wanted = LastNamePart(expectedTable);
+
+            for (var i = start; i < end && i < lines.Count; i++)
+            {
+                var line = lines[i].TrimStart();
+                if (!line.StartsWith("#", StringComparison.Ordinal)) continue;
+
+                var hashes = line.Length - line.TrimStart('#').Length;
+                if (hashes == 3) continue;   // 계약대로 쓴 것은 CollectUpdateSections 가 이미 잡았다
+                var rest = line[hashes..].TrimStart();
+                if (!rest.StartsWith(Tail, StringComparison.Ordinal)) continue;
+
+                var table = NormalizeQualifiedName(ReadHeadingTable(rest));
+                if (!string.Equals(LastNamePart(table), wanted, StringComparison.OrdinalIgnoreCase)) continue;
+
+                return new string('#', hashes);
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -6547,7 +6657,7 @@ namespace ReSet.Core.Services
                 {
                     var msg = $"필수 섹션 헤더 '## {req}'가 누락되었습니다.";
                     Log.Warning("린트 에러 감지 (헤더 누락) - {Message}", msg);
-                    result.Errors.Add(msg);
+                    result.Report(msg);
                     result.DetailedErrors.Add(new DetailedError { Type = ErrorType.HeaderMissing, Message = msg });
                 }
             }
@@ -6570,7 +6680,7 @@ namespace ReSet.Core.Services
                         + $"{offendingLines.Count}자리에 있습니다: {shown}{more}. "
                         + "그 칸을 실제 값으로 채우십시오 - 한 자리만 고치고 끝내지 마십시오.";
                     Log.Warning("린트 에러 감지 (Anti-Shortcut 위반) - {Message}", msg);
-                    result.Errors.Add(msg);
+                    result.Report(msg);
                     result.DetailedErrors.Add(new DetailedError { Type = ErrorType.General, Message = msg });
                 }
             }
@@ -6627,19 +6737,76 @@ namespace ReSet.Core.Services
         /// <summary>
         /// 금지 축약어가 나타난 <b>줄들</b>을 돌려준다. 참/거짓만 돌려주면 메시지가 위치를
         /// 말할 수 없고, 모델은 긴 문서에서 찾을 자리를 모른다(2026-09-09 실측).
+        ///
+        /// [판정 단위 - 2026-09-09 실측] 종전엔 줄 어디든 토큰이 있으면 걸렸다.
+        /// EXCEPTION_PROC 재생성 3·4 판에서 PGVT 행의 「설명」 칸이 "위와 동일한
+        /// 조건 판단(...)"으로 <b>조건을 괄호 안에 글자로 다 풀어 쓴 뒤</b> 그
+        /// 접속 표현으로 문장을 시작했다. 칸은 이미 채워져 있는데 종전 검사는
+        /// 「그 칸을 실제 값으로 채우십시오」라며 3·4 판 도합 5 회를 자기강화
+        /// 루프로 소진시켰다(PGCOMM·PGVT 가 CASE 조건을 공유하는 인접 컬럼이라
+        /// "위와 동일" 이 자연스러운 한국어라 매 시도 문구를 새로 써도 같은
+        /// 낱말이 나온다).
+        ///
+        /// 그래서 판정 단위를 「값이 들어갔어야 할 자리」로 바꾼다 - 표 행(<c>|</c>
+        /// 로 시작)이면 <b>칸</b> 단위로, 칸을 다듬은 내용이 사실상 그 축약어
+        /// 자체일 때만 위반이다. 표가 아니면 <b>줄</b> 전체가 사실상 그 축약어일
+        /// 때만 위반이다(295행 부근 시험이 요구하는, 표가 아닌 맨 산문 자리).
+        /// 「위와 동일」이 칸/줄 <i>안에</i> 섞여 있는 것과 그 칸/줄이 <i>곧</i>
+        /// 「위와 동일」인 것을 가른다 - CLVT 행처럼 원천 칸 자체가 축약어인
+        /// 진짜 결함은 계속 잡는다(<c>AntiShortcut_ShouldPointAtTheOffendingLines</c>
+        /// 가 그 자리를 잠근다).
+        ///
+        /// "etc." 는 이 축과 무관하게 <see cref="StandaloneEtcRegex"/> 완화를 그대로
+        /// 쓴다 - 이미 컬럼명 오탐(CLEtc.)과 진짜 축약어(CLComm, etc.)를 가르는
+        /// 별도 규칙을 갖고 있고, 후자는 칸 전체가 아니라 칸 <i>일부</i>로 등장해도
+        /// 계속 걸려야 한다(<c>Validate_WithStandaloneEtcAbbreviation_ShouldStillReturnFalse</c>).
+        ///
+        /// [알려진 한계 - 미리 적어 둔다, 2026-09-09 리뷰 라운드 1]
+        /// <see cref="IsEssentiallyTheShortcut"/>는 정확히 같음만 본다. 그래서
+        /// 금지 토큰 뒤에 짧은 참조 주석이 붙은 칸 - 예: <c>위와 동일 (UPDATE 3
+        /// 참조)</c>, <c>(생략) — 나머지는 동일 패턴</c> - 은 칸 전체가 토큰과
+        /// 같지 않으므로 조용히 통과한다. 이 변경 이전(부분 문자열 포함)에는
+        /// 잡혔다. 지금 넓히지 않는 이유: 이 모양은 오늘 코퍼스(로그 30 개,
+        /// <c>output/*/*/docs/Spec.md</c> 전량) 어디에도 0 건이고, 넓히면 이
+        /// 태스크가 닫으려는 오탐("위와 동일한 조건 판단(...)"처럼 조건을 다
+        /// 풀어 쓴 뒤 접속 표현으로 시작하는 칸)이 다시 걸린다 - 부분 문자열
+        /// 포함으로 되돌아가는 것과 같기 때문이다. 이 모양이 실제로 나타나면
+        /// 재야 할 것: 그 칸이 <i>정말로 값을 생략</i>했는지(위반) 아니면
+        /// <i>값을 다 채운 뒤 참조를 덧붙였는지</i>(오탐, PGVT 행과 같은 모양)
+        /// 부터 실물로 가르고, 가른 결과에 따라 "접두사가 토큰과 같고 나머지가
+        /// 짧은 괄호/대시 주석"인 경우만 추가로 위반으로 잡는 좁은 규칙을
+        /// 여기 더한다 - 부분 문자열 포함으로 되돌리지 않는다.
         /// </summary>
         private static IReadOnlyList<string> FindShortcutLines(string text, string forbidden)
         {
             var hits = new List<string>();
             foreach (var line in (text ?? string.Empty).Split('\n'))
             {
-                var hit = forbidden == "etc."
-                    ? StandaloneEtcRegex.IsMatch(line)
-                    : line.Contains(forbidden, StringComparison.OrdinalIgnoreCase);
+                bool hit;
+                if (forbidden == "etc.")
+                {
+                    hit = StandaloneEtcRegex.IsMatch(line);
+                }
+                else if (line.TrimStart().StartsWith("|", StringComparison.Ordinal))
+                {
+                    hit = SplitTableRowCells(line).Any(cell => IsEssentiallyTheShortcut(cell, forbidden));
+                }
+                else
+                {
+                    hit = IsEssentiallyTheShortcut(line, forbidden);
+                }
                 if (hit) hits.Add(line.Trim());
             }
             return hits;
         }
+
+        /// <summary>
+        /// 다듬은 내용이 그 축약어 자체와 같은지(대소문자 무시) 본다. 부분 문자열
+        /// 포함이 아니라 <b>정확히 같음</b>이다 - "그 자리 전부가 축약어"라는
+        /// 축을 그대로 옮긴 것이다(위 FindShortcutLines 문서 참고).
+        /// </summary>
+        private static bool IsEssentiallyTheShortcut(string cellOrLine, string forbidden) =>
+            cellOrLine.Trim().Equals(forbidden, StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// 메시지에 실을 줄 조각. 너무 길면 앞뒤를 남기고 줄인다.
@@ -6727,7 +6894,7 @@ namespace ReSet.Core.Services
                                         "아래 컴파일 로그의 줄 번호와 캐럿(^)이 가리키는 자리를 고치십시오. " +
                                         RendererDiagnostics.TrimStackTrace(stderr);
                                     Log.Warning("Mermaid CLI 검증 문법 오류 감지 - Stderr: {Stderr}", stderr);
-                                    result.Errors.Add(message);
+                                    result.Report(message);
                                     result.DetailedErrors.Add(new DetailedError
                                     {
                                         Type = ErrorType.MermaidCliError,
@@ -6806,7 +6973,7 @@ namespace ReSet.Core.Services
                         {
                             var msg = $"Mermaid 다이어그램 내 노드 '{nodeId}'의 텍스트 '{labelText}'에 괄호나 특수문자가 포함되어 있으나 큰따옴표(\"\")로 감싸지지 않았습니다. 문법 오류를 막기 위해 '\"{labelText}\"' 형태로 큰따옴표를 감싸서 출력해 주십시오.";
                             Log.Warning("린트 에러 감지 (Mermaid 따옴표 누락) - Node: {NodeId}, Label: {LabelText}", nodeId, labelText);
-                            result.Errors.Add(msg);
+                            result.Report(msg);
                             result.DetailedErrors.Add(new DetailedError 
                             { 
                                 Type = ErrorType.MermaidQuoteMissing, 
@@ -8298,13 +8465,29 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 단계 검사 하나가 던져도 나머지 검사가 죽지 않게 한다.
+        /// 검사 하나가 던져도 나머지 검사가 죽지 않게 한다.
         ///
         /// 이 저장소의 L1 규약 - 개별 검사의 실패가 검사 전체를 무력화하면 결함이
         /// 조용히 통과한다. 뒤이어 붙는 검사들(축 B 감사 S07의 앵커·컬럼 대조 등)도
         /// 이 헬퍼를 한 줄씩 더 쓴다.
+        ///
+        /// [왜 검사 이름을 싣는가 - 2026-09-10] 종전 문구는 "단계 검사 하나가 실패해
+        /// 건너뜁니다."로 <b>어느 검사가 죽었는지 안 남겼다</b>. 감싸는 자리를 21에서
+        /// 44로 넓히면서 그대로 두면, 「찾은 것을 지우고 통과」를 「어느 것이 안 돌았는지
+        /// 모른 채 통과」로 옮기는 것뿐이다 - 값 0을 게이트 통과시키는 그 모양이다.
+        /// <c>CallerArgumentExpression</c>이 람다 원문을 그대로 실어 준다.
+        ///
+        /// [왜 <c>virtual</c>인가 - 2026-09-10 실측] 이 가드가 실제로 값을 하는지
+        /// 판정하려면 검사가 던져야 하는데 <b>실물 입력으로는 못 만든다</b>:
+        /// 배송 코퍼스 31편 × 변형 14가지 = 434회에서 발동 0이고, 실행 로그
+        /// 2,549,970줄(38일)에서도 catch-all·자기 가드·SafeCheck 발동이 전부 0이다.
+        /// 주입점이 없으면 이 가드는 영영 「없앴을 때 무엇이 지나가는가」로 판정할 수
+        /// 없다 - 발화 수는 활동이지 효력이 아니다. 그래서 시험이 한 검사만 던지게
+        /// 만들 수 있도록 열어 둔다. 제품 코드에는 시험 전용 상태를 두지 않는다.
         /// </summary>
-        private static void SafeCheck(Action check)
+        protected virtual void SafeCheck(
+            Action check,
+            [CallerArgumentExpression(nameof(check))] string? checkExpression = null)
         {
             try
             {
@@ -8312,7 +8495,7 @@ namespace ReSet.Core.Services
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "단계 검사 하나가 실패해 건너뜁니다.");
+                Log.Warning(ex, "[MechanicalValidator] 검사 하나가 실패해 건너뜁니다 - {Check}", checkExpression);
             }
         }
 
@@ -10640,7 +10823,7 @@ namespace ReSet.Core.Services
                         "증적에는 그 배수만큼 부풀려진 금액이 남습니다. 양쪽을 각자의 부질의나 " +
                         "CTE에서 독립적으로 집계한 뒤 두 스칼라를 비교하십시오.";
 
-                    result.Errors.Add(message);
+                    result.Report(message);
                     result.DetailedErrors.Add(new DetailedError
                     {
                         Type = ErrorType.VerificationCartesianComparison,
@@ -10726,7 +10909,7 @@ namespace ReSet.Core.Services
                         .Any(s => CreatesRowIn(s.Body, bare));
                     if (otherProducer) continue;
 
-                    result.Errors.Add(
+                    result.Report(
                         $"{code} 섹션이 `{table.Name}`을 `StepCode <> N'{code}'` 로 읽어 다른 단계가 "
                         + $"적재한 제어합계를 기대값으로 삼는데, 그 표에 행을 만드는 단계가 {code} "
                         + "자신뿐입니다 — 기대값이 항상 공집합이라 대조가 무조건 통과합니다. "
@@ -10833,7 +11016,7 @@ namespace ReSet.Core.Services
 
                 var message = BatchRunRowCreationMessage(table);
 
-                result.Errors.Add(message);
+                result.Report(message);
                 result.DetailedErrors.Add(new DetailedError
                 {
                     Type = ErrorType.BatchRunRowNeverCreated,
@@ -11193,7 +11376,7 @@ namespace ReSet.Core.Services
                 "옮겨 온 힌트를 지우고, 격리는 SNAPSHOT 의무로만 말하십시오. " +
                 $"({SummarizeCodeTokenHits(hits)})";
 
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.NoLockHintInCode,
@@ -11236,7 +11419,7 @@ namespace ReSet.Core.Services
                 "메커니즘을 못박지 않고 모양만 보여 주는 옳은 표기이며, 한 문서는 한 표기로 " +
                 $"통일해야 합니다. ({SummarizeCodeTokenHits(hits)})";
 
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.FrameworkTypePrescribed,
@@ -11286,7 +11469,7 @@ namespace ReSet.Core.Services
                 "원본 오류 코드는 버리는 것이 아니라 앱의 실패 경로가 받아 기록하십시오 " +
                 $"(규칙 6-1·9). ({SummarizeCodeTokenHits(hits)})";
 
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.SqlSideControlFlow,
@@ -11349,7 +11532,7 @@ namespace ReSet.Core.Services
                 "규칙 4-1(`batch`·`batch_shadow` 스키마)이 다스립니다 - 프로시저는 그 규칙이 여는 " +
                 $"선택지가 아닙니다. ({SummarizeCodeTokenHits(hits)})";
 
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.NewDatabaseObjectDefined,
@@ -11431,7 +11614,7 @@ namespace ReSet.Core.Services
                 "적는 것으로는 결속이 되지 않으므로, 그 표에 쓰는 INSERT의 컬럼 목록이나 " +
                 $"UPDATE의 SET 절에서 `{column.Name}`을 대상으로 삼으십시오.";
 
-            result.Errors.Add(message);
+            result.Report(message);
             result.DetailedErrors.Add(new DetailedError
             {
                 Type = ErrorType.LegacyReturnCodeNeverBound,
@@ -11907,6 +12090,29 @@ namespace ReSet.Core.Services
         public List<string> Errors { get; set; } = new();
         public List<DetailedError> DetailedErrors { get; set; } = new();
 
+        /// <summary>
+        /// 이 검증에서 난 발화 전부, 낸 검사의 키와 함께. <see cref="Errors"/> 와 같은
+        /// 내용을 담되 키가 붙는다 - 「어느 검사가 시도마다 계속 발화하는가」를 세려면
+        /// 키가 있어야 한다(docs/superpowers/specs/2026-09-09-거부된-시도-코퍼스-design.md).
+        /// </summary>
+        public List<L1Firing> Firings { get; } = new();
+
+        /// <summary>
+        /// 발화 하나를 <see cref="Errors"/> 와 <see cref="Firings"/> 양쪽에 넣는다.
+        /// <see cref="DetailedErrors"/> 는 <b>건드리지 않는다</b> - 그쪽은 재생성 범위를
+        /// 정하는 의미 통로라, 검사가 스스로 필요할 때만 따로 넣는다.
+        ///
+        /// 공용 헬퍼에서 부르면 키가 그 헬퍼 이름이 된다. 의도한 것이다 - 여러 헤딩이
+        /// 한 헬퍼를 공유하면 그 헬퍼가 한 검사이고, 수렴을 재는 단위도 그것이다.
+        /// </summary>
+        public void Report(
+            string message,
+            [System.Runtime.CompilerServices.CallerMemberName] string checkKey = "")
+        {
+            Errors.Add(message);
+            Firings.Add(new L1Firing(checkKey, message));
+        }
+
         public string? SuggestedPromptFix
         {
             get
@@ -12115,6 +12321,21 @@ namespace ReSet.Core.Services
     /// ValidationResult를 재사용하지 않는 이유: 그 타입의 SuggestedPromptFix는
     /// 문서 전체의 H2 템플릿을 제안하도록 만들어져 있어, 단계 섹션 하나를 고치라는
     /// 지시에는 엉뚱한 교정 가이드가 붙는다.
+    ///
+    /// [알려진 한계 - 미리 적어 둔다, 2026-09-09 리뷰 Fix Round 1] 이 타입에는
+    /// <c>Firings</c>/<c>Report()</c>/<c>DetailedErrors</c> 통로가 없다. 이 타입을
+    /// 쓰는 <c>ValidateBatchStep</c> 재시도 루프(VerificationPipelineOrchestrator.cs
+    /// 의 배치 단계 생성 갈래)는 <c>L1AttemptLog.Append(...)</c> 를 전혀 부르지
+    /// 않는다 - 그건 오직 문서 단위 <c>_validator.Validate(...)</c> 갈래에서만
+    /// 난다. 그 결과 이 타입에 실리는 발화는 <c>raw/l1-attempts.json</c> 에도
+    /// 안 남고 <c>SelfReinforcingCheckTests</c> 가 재는 코퍼스에도 안 들어간다 -
+    /// 같은 검사가 시도마다 같은 문구를 반복 발화해 재시도 예산을 태우는 사고
+    /// (CheckErrorCodeUniquenessClaim 이 낸 것과 같은 모양)가 이 갈래에서 나면
+    /// 자동 탐지가 없다. 닫으려면 이 타입에 <c>Report</c>/<c>Firings</c> 를
+    /// 놓는 것과 <c>ValidateBatchStep</c> 실패를 <c>L1AttemptLog</c> 에 연결하는
+    /// 것을 **한 커밋에서 같이** 해야 한다 - 하나만 하면 값은 채워지는데 아무도
+    /// 안 읽는 자리가 생겨 「닫혔다」는 거짓 신호만 남긴다
+    /// (tests/ReSet.Core.Tests/l1-firing-key-baseline.txt 참고).
     /// </summary>
     public class StepValidationResult
     {

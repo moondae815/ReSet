@@ -93,8 +93,8 @@ END"
         {
             var rules = await BuildRulesAsync(DuplicateErrorCodeSpDefinition(duplicated: true));
 
-            var notice = Assert.Single(rules.Split('\n')
-                .Where(l => l.Contains("[DUPLICATE CODES IN THIS TABLE]")));
+            var notice = Assert.Single(
+                rules.Split('\n'), l => l.Contains("[DUPLICATE CODES IN THIS TABLE]"));
 
             // 어느 문장이 무엇을 공유하는지 - 모델이 그대로 옮겨 적을 재료다.
             Assert.Contains("UPDATE 1", notice);

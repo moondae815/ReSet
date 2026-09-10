@@ -138,3 +138,34 @@ git archive <BASE_SHA> src/ReSet.Core | tar -x -C <임시경로>
   <새 검사>: 진짜 양성 X건(객체명 나열) · 거짓 양성 0건
   다른 검사 카운트: BASE와 동일 / 달라졌다면 무엇이 왜
 ```
+
+## ★ 손으로 글롭을 치지 마라 — 두 가지로 조용히 0 이 된다
+
+정본은 이 문서의 `EnumerateFiles(root, "metadata.json", SearchOption.AllDirectories)` 다.
+아래 둘은 2026-09-10 에 두 세션이 각각 밟았고 **둘 다 stdout 에 `0` 을 찍는다.**
+
+**(1) 얕은 글롭이 External 을 못 본다.**
+```
+ls   output/*/*/docs/Spec.md                       →  24 편
+find output -name Spec.md -not -path "*/logs/*"    →  31 편
+```
+빠지는 일곱은 `output/External/<db>/Functions/<객체>/docs/Spec.md` 로 마디가 둘 더
+깊다. 코퍼스의 **23%** 이고, 그 침묵은 「해당 없음 0 건」과 구분되지 않는다.
+
+**(2) zsh 는 따옴표 없는 변수를 단어 분할하지 않는다.**
+```zsh
+SPECS=$(find output -name Spec.md -not -path "*/logs/*")   # 31 줄
+grep -l "…" $SPECS | wc -l
+#   stdout → 0
+#   stderr → warning: output/…/Spec.md
+output/…/Spec.md  (경로 31 개가 파일명 하나)
+```
+경로가 개행으로 이어 붙은 **파일명 하나**가 되어 아무것도 못 읽는다. 경고는 stderr 로만
+나가므로 stdout 의 `0` 을 그대로 읽으면 「없다」가 된다 — 부재를 관측한 자리와 결론이
+사는 자리가 다른 그 모양이다.
+
+**답**: `find … -print0 | xargs -0 grep -l …` (같은 조건에서 8 편이 나온다.)
+
+**그리고 이 창에서 잰 것 전부를 다시 재라.** 자가 틀린 것을 발견하면 촉발한 수만
+고치고 끝내지 마라 — 2026-09-10 에 한 세션이 「배송본 31 편으로 실측」이라 적은 값이
+실제로는 24 편이었고, 되재고 나서야 유출 편수가 7 → 8 로 바뀌었다(나머지 둘은 불변).

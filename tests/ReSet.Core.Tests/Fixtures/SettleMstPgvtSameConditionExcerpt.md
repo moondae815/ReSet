@@ -1,0 +1,5 @@
+| 테이블명 | 컬럼명 | 원천 표현식 (SET) | 설명 |
+| :--- | :--- | :--- | :--- |
+| SETTLE_POQ_DB.dbo.TSettleMst | PGCOMMTYPE | 1 | PG수수료유형을 1(정액)로 고정 설정합니다. |
+| SETTLE_POQ_DB.dbo.TSettleMst | PGCOMM | CASE WHEN ABS(A.PGCOMM) < IIF(MALLID = 'LOLLETTER4', 200, 180) THEN                                IIF(MALLID = 'LOLLETTER4', 200, 180) 			             ELSE ABS(A.PGCOMM) 			        END | MallID가 'LOLLETTER4'이면 기준값 200, 그 외에는 180을 기준으로 삼아, 기존 PGCOMM의 절대값이 기준값보다 작으면 기준값으로, 그렇지 않으면 기존 PGCOMM의 절대값으로 PGCOMM을 재설정합니다. |
+| SETTLE_POQ_DB.dbo.TSettleMst | PGVT | CASE WHEN ABS(A.PGCOMM) < IIF(MALLID = 'LOLLETTER4', 200, 180) THEN                                IIF(MALLID = 'LOLLETTER4', 20, 18) 			             ELSE ABS(A.PGVT) 			        END | 위와 동일한 조건 판단(기존 PGCOMM 절대값이 기준값보다 작은지)에 따라, 참이면 MallID가 'LOLLETTER4'인 경우 20, 그 외에는 18을 PGVT로 설정하고, 거짓이면 기존 PGVT의 절대값을 PGVT로 설정합니다. 본 문장은 FROM 절을 가지며(TSettleMst 단일 별칭 A만 존재), 별도의 조인 대상 테이블은 없습니다. 또한 PGCOMM, PGVT 컬럼이 CASE 조건 및 결과식 우변에서 자기 자신을 참조하므로, SQL은 SET 절의 모든 우변식을 갱신 이전 값 기준으로 동시에 평가합니다. 마이그레이션 시 컬럼을 순차적으로 대입하면 결과가 달라질 수 있습니다. |
