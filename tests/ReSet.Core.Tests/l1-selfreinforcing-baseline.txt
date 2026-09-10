@@ -40,7 +40,8 @@ dbo.UP_UTIL_SETTLE_EXCEPTION_PROC CheckErrorCodeUniquenessClaim  # 오탐 — �
   # 처방(8ae36da1): PredicativeUniquenessRegex 를 걷어냈다. 그 가지를 잠그던 합성
   # 시험(WhenTheClaimIsPredicative_ShouldStillReport)도 함께 걷어냈다. 되돌림으로
   # 확인: 가지를 되살리면 실물 오라클 시험(Attempt4_WhenHedgedDenialSplitsAcrossAClauseBoundary_ShouldStaySilent,
-  # l1-attempts.json 시도 4 문장을 한 글자도 안 고치고 오려 온 것) 하나만 빨개지고
+  # l1-attempts.json 시도 4 메시지의 인용 부분 문자열에서 오려 온 것 - 실질적으로
+  # 그대로다, 독립 문장으로 성립시키려고 끝에 마침표 하나만 붙였다) 하나만 빨개지고
   # 나머지(같은 파일의 "…ShouldStillReportTheRealClaims" 등, 진짜 거짓 주장 포착 시험)는
   # 전부 그대로 초록 — 그 가지가 사 주던 커버리지가 합성 픽스처 하나뿐이었다는 뜻이다.
   #

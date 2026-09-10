@@ -107,8 +107,9 @@ namespace ReSet.Core.Tests
         //    UniquenessDenialTokens 에 "안"을 추가해도 못 고친다(좌표자가 별도 콘솔
         //    앱으로 재현, 리뷰가 지목). 진짜 원인은 PredicativeUniquenessRegex 자체 -
         //    그 가지는 코퍼스에서 관측된 적이 없는 예방용이었는데 실물에서 오탐을 냈다.
-        //    실물(l1-attempts.json 시도 4 메시지가 인용한 문장, 한 글자도 안 고쳤다)을
-        //    오라클로 쓴다.
+        //    실물(l1-attempts.json 시도 4 메시지가 인용한 문장)을 오라클로 쓴다 -
+        //    실질적으로 그대로다, 독립 문장으로 성립시키려고 끝에 마침표 하나만
+        //    붙였다. 그 밖에는 인용 부분 문자열과 글자가 같다.
         [Fact]
         public void Attempt4_WhenHedgedDenialSplitsAcrossAClauseBoundary_ShouldStaySilent()
         {
