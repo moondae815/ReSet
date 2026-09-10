@@ -2683,6 +2683,13 @@ namespace ReSet.Core.Tests
                 .RootElement.GetProperty("ReuseKey");
             Assert.Equal("gpt-4", key.GetProperty("Model").GetString());
             Assert.False(string.IsNullOrEmpty(key.GetProperty("PlanStructureSha256").GetString()));
+
+            // 위 검사는 재시도 도중의 중간 기록(하한 미달 본문)만 본다 - RunStepAsync가
+            // 반환 직전에 최종 채택 본문을 다시 기록하는지는 별개 사실이다. 파이프라인이
+            // 끝난 뒤 S01.md가 최종 채택된 건강한 본문(하한 미달이 아님)을 담고 있어야
+            // 한다 - 그 마지막 기록을 지워도 위 어서션들은 여전히 통과한다.
+            var s01Final = await File.ReadAllTextAsync(Path.Combine(journalDir, "steps", "S01.md"));
+            Assert.DoesNotContain("하한 미달", s01Final);
         }
 
         // Task 18 - I2 배선. GenerateStepSectionWithFloorRetryAsync가
