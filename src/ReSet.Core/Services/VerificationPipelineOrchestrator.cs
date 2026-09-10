@@ -2079,7 +2079,7 @@ namespace ReSet.Core.Services
                                 currentPlanStructure, currentSteps, specsCopy, targetLanguage, jobName,
                                 progressScope, lastSkeleton, lastSkeletonResult, lastStepSections, stepFloorViolations,
                                 pendingDefectiveSteps, knownTableNames, parametersByProcedure, callGraph, ddlByProcedure, currentBrainstorming,
-                                specReturnCodes, specTargetTables, cancellationToken, repeatedDefects,
+                                specReturnCodes, specTargetTables, attemptJournal, attempt, cancellationToken, repeatedDefects,
                                 pendingSkeletonRevision);
 
                             if (split != null)
@@ -3121,6 +3121,8 @@ namespace ReSet.Core.Services
                             currentBrainstorming,
                             specReturnCodes,
                             specTargetTables,
+                            attemptJournal,
+                            attempt,
                             cancellationToken);
 
                         if (split != null)
@@ -3829,6 +3831,8 @@ namespace ReSet.Core.Services
             // 만들 수 없다.
             IReadOnlyDictionary<string, IReadOnlyList<string>> codesByProcedure,
             IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,
+            PlanAttemptJournal journal,
+            int attempt,
             CancellationToken cancellationToken,
             // 같은 단계가 같은 결함으로 연속 몇 회 지목됐는지(§3-8 에스컬레이션).
             // null이면 에스컬레이션을 절대 걸지 않는다 - L3 사용자 피드백 재생성
@@ -3891,6 +3895,7 @@ namespace ReSet.Core.Services
 
                     skeleton = skeletonResult.Content;
                     generation = skeletonResult;
+                    journal.RecordSkeleton(attempt, skeleton);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -3969,9 +3974,13 @@ namespace ReSet.Core.Services
                     var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
                         step, steps, conventions, specs, targetLanguage, jobName,
                         knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, callGraph,
-                        ddlByProcedure, cancellationToken, PreviousBodyFor(step.Code));
+                        ddlByProcedure, journal, attempt, cancellationToken, PreviousBodyFor(step.Code));
 
                     progressScope.CompleteTask(taskKey);
+
+                    // 병합 루프(Task.WhenAll 뒤)가 아니라 여기서 쓴다 - 거기서 쓰면
+                    // 회차 도중에 죽는 경우를 못 건지는데, 그게 이 기능의 목적이다.
+                    journal.RecordStepSection(attempt, step.Code, markdown);
                     return new StepSectionResult(step.Code, markdown, violation);
                 }
                 finally
@@ -4238,6 +4247,8 @@ namespace ReSet.Core.Services
             IReadOnlyDictionary<string, IReadOnlyList<string>> callGraph,
             // [N5] 조인 짝 대조의 기준값 - GenerateBySplitAsync 가 받은 것을 그대로 내려받는다.
             IReadOnlyDictionary<string, string> ddlByProcedure,
+            PlanAttemptJournal journal,
+            int attempt,
             CancellationToken cancellationToken,
             // 직전 회차가 이 단계에 대해 채택했던 본문(§3-8). null이면 백지에서
             // 새로 쓴다. 재시도(tries) 전체에 걸쳐 같은 값을 쓴다 - floorFeedback은
@@ -4359,6 +4370,12 @@ namespace ReSet.Core.Services
                 _userInteraction.NotifyStatus(
                     $"  [grey]* {step.Code} 단계가 하한 검사를 통과하지 못해 다시 생성합니다: {adoptedErrors}[/]");
                 floorFeedback = stepResult.SuggestedPromptFix;
+
+                // 다음 시도를 부르기 전에 이번 시도의 본문을 남긴다 - RunStepAsync의
+                // 최종 기록은 이 재시도 루프가 전부 끝난 뒤에야 실행되므로, 재시도
+                // 도중에 죽으면(혹은 다음 시도가 예외를 던지면) 최종 기록 자체가
+                // 없다. 하한 미달로 판정된 본문도 재개 재료로는 값이 있다.
+                journal.RecordStepSection(attempt, step.Code, content);
             }
 
             if (adopted == null)

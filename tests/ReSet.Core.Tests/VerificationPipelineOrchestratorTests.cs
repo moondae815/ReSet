@@ -2623,6 +2623,10 @@ namespace ReSet.Core.Tests
                 "  ]\n}\n```";
 
             var aiService = Substitute.For<IAiService>();
+            // 저널의 ReuseKey.Model은 이 파이프라인이 실제로 쓰는 서비스(consolidatorService,
+            // 곧 이 aiService 자신)의 ModelName을 읽는다 - orchestrator 생성자의 modelName
+            // 인자("gpt-4")는 별개 필드(_modelName)로 가는 값이라 여기서는 읽히지 않는다.
+            aiService.ModelName.Returns("gpt-4");
             aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(new AiResult { Content = "Brainstorm" });
             aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
@@ -6337,7 +6341,12 @@ SELECT 1;
             // previousBody를 넘긴다.
             IReadOnlyDictionary<string, int>? repeatedDefects = null,
             // 골격 수리 요청. 기본값(null)은 종전 동작이다 - 골격을 손대지 않는다.
-            SkeletonRevision? skeletonRevision = null)
+            SkeletonRevision? skeletonRevision = null,
+            // 배치 계획 시도 저널(Task 4). 기본값은 OpenRun을 부른 적 없는 Null Object -
+            // RecordSkeleton/RecordStepSection이 전부 조용한 no-op이라 이 헬퍼를 쓰는
+            // 기존 시험들의 동작이 그대로 유지된다.
+            PlanAttemptJournal? journal = null,
+            int attempt = 1)
         {
             var method = typeof(VerificationPipelineOrchestrator).GetMethod(
                 "GenerateBySplitAsync",
@@ -6363,6 +6372,10 @@ SELECT 1;
                 new Dictionary<string, string>(), null,
                 codesByProcedure ?? new Dictionary<string, IReadOnlyList<string>>(),
                 tablesByProcedure ?? new Dictionary<string, SpecTargetTableExtractor.StepTableSets>(),
+                journal ?? PlanAttemptJournal.Create(
+                    "unused-output-root", "UnusedJob", "OpenAI", "unused-model",
+                    null, "C#", PlanAttemptJournal.ComputeSha256("unused-specs")),
+                attempt,
                 cancellationToken,
                 repeatedDefects,
                 skeletonRevision
