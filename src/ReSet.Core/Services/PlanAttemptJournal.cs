@@ -20,8 +20,22 @@ namespace ReSet.Core.Services
         string? Effort,
         string TargetLanguage);
 
-    /// <summary>한 산출물이 어느 시도에 쓰였고 그 내용이 무엇이었나.</summary>
-    public sealed record PlanAttemptArtifact(int Attempt, string Sha256);
+    /// <summary>
+    /// 한 산출물이 어느 시도에 쓰였고 그 내용이 무엇이었나.
+    ///
+    /// <paramref name="DefectKind"/>·<paramref name="DefectReason"/> — [FINAL FIX -
+    /// Important 2] 하한 미달 중간본("본문 없음 - 하한 미달")과 생성 실패 스텁
+    /// ("이 단계는 생성에 실패했습니다")이 건강한 본문과 같은 (Attempt, Sha256)
+    /// 모양으로 기록되면, 2단계가 "이 섹션을 재사용해도 되는가"를 manifest만으로
+    /// 물을 방법이 없다 - 파일이 있다는 사실은 §11-1의 계약("`steps`가 진실이다")을
+    /// 만족하지만 그 안의 본문이 건강한지는 말하지 않는다. 문서 전체 L1
+    /// 재검사(§11-2)가 그물이긴 하나, 단계 하한 검사는 다른 축이라(생성 루프
+    /// 안에서만 돌고 재사용된 섹션에는 안 돈다) 그 그물이 이 자리를 못 받는다.
+    /// null 이면 건강한 본문(이 축의 하한 검사를 통과했거나, 검사가 아예 돌지
+    /// 않은 자리라도 결함이 관측되지 않았다).
+    /// </summary>
+    public sealed record PlanAttemptArtifact(
+        int Attempt, string Sha256, StepDefectKind? DefectKind = null, string? DefectReason = null);
 
     /// <summary>
     /// 판 하나의 명세. <b>이 파일이 진실이고 디렉터리의 파일 존재는 진실이 아니다</b> —
@@ -82,7 +96,11 @@ namespace ReSet.Core.Services
         private static readonly JsonSerializerOptions Options = new()
         {
             WriteIndented = true,
-            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            // DefectKind(StepDefectKind)를 정수가 아니라 이름으로 남긴다 - 이 파일은
+            // 감사가 직접 읽는 자리이고(§4-3), 숫자로는 "이 판이 왜 재사용 불가인가"에
+            // 답할 수 없다.
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
         };
 
         private PlanAttemptJournal(
@@ -110,12 +128,18 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 새 판을 연다. 계기는 둘 — 실행 시작(<c>run-start</c>)과 목차 재작성
-        /// (<c>structure-redraft</c>).
+        /// 새 판을 연다. 계기는 셋 — 실행 시작(<c>run-start</c>), 목차 재작성
+        /// (<c>structure-redraft</c>), 그리고 구제 채택이 재설계 이전 목차로
+        /// 되돌아갈 때(<c>rescue-adopt</c>, <c>VerificationPipelineOrchestrator.
+        /// AdoptPlanStructureForRescueAsync</c>).
         ///
         /// 목차가 바뀌면 기존 섹션은 전부 무효다(<c>ClearSplitGenerationCacheAfterRedraft</c>
         /// 가 인메모리에서 하는 그 일). 판을 새로 열면 그 무효화가 디렉터리 전환으로
-        /// 표현되어 <b>지울 것이 없다.</b>
+        /// 표현되어 <b>지울 것이 없다.</b> 구제 채택도 마찬가지다 — 되돌아가는 목차의
+        /// 해시가 이미 존재하는 옛 판(재료가 있다)과 같더라도, 그 판을 다시 열지
+        /// 않고 새 판을 파는 이유는 §5(설계서)가 "판 하나는 목차 하나에 대한 작업"을
+        /// 지키기 때문이다 — 옛 판을 덮어쓰면 그 판이 실제로 끝난 시각(<c>StartedAt</c>)이
+        /// 거짓이 된다.
         /// </summary>
         public void OpenRun(string planStructure, string openedBy)
         {
@@ -209,7 +233,11 @@ namespace ReSet.Core.Services
             }
         }
 
-        public void RecordStepSection(int attempt, string stepCode, string markdown)
+        /// <param name="defect">
+        /// 이 본문이 안고 있는 결함(있다면). null이면 건강한 본문이다 - 기존 호출부가
+        /// 이 인자를 안 넘겨도(생략 시 기본값 null) 종전 동작 그대로다.
+        /// </param>
+        public void RecordStepSection(int attempt, string stepCode, string markdown, StepDefect? defect = null)
         {
             lock (_gate)
             {
@@ -229,7 +257,8 @@ namespace ReSet.Core.Services
                     var stepsDir = Path.Combine(_runDirectory, "steps");
                     Directory.CreateDirectory(stepsDir);
                     WriteAtomic(Path.Combine(stepsDir, stepCode + ".md"), markdown);
-                    _manifest.Steps[stepCode] = new PlanAttemptArtifact(attempt, ComputeSha256(markdown));
+                    _manifest.Steps[stepCode] = new PlanAttemptArtifact(
+                        attempt, ComputeSha256(markdown), defect?.Kind, defect?.Reason);
                     FlushManifest();
                 }
                 catch (Exception ex)

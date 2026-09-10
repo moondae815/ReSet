@@ -152,6 +152,41 @@ namespace ReSet.Core.Tests
             Assert.Equal(1, steps.GetProperty("S02").GetProperty("Attempt").GetInt32());
         }
 
+        // [FINAL FIX - Important 2] 하한 미달 중간본·생성 실패 스텁이 건강한 본문과
+        // 같은 (Attempt, Sha256) 모양으로 기록되면, 2단계가 "이 섹션을 재사용해도
+        // 되는가"를 manifest만으로 물을 방법이 없다. 결함 종류·사유를 칸으로 남긴다.
+        [Fact]
+        public void RecordStepSection_WithDefect_RecordsTheDefectKindAndReasonInTheManifest()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+
+            journal.RecordStepSection(
+                1, "S01", "### S01\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다.",
+                new StepDefect(StepDefectKind.GenerationFailed, "S01 (생성 실패)"));
+
+            var s01 = JsonDocument.Parse(File.ReadAllText(Path.Combine(journal.CurrentRunDirectory!, "manifest.json")))
+                .RootElement.GetProperty("Steps").GetProperty("S01");
+            Assert.Equal("GenerationFailed", s01.GetProperty("DefectKind").GetString());
+            Assert.Equal("S01 (생성 실패)", s01.GetProperty("DefectReason").GetString());
+        }
+
+        // 건강한 본문은 결함 인자를 안 넘긴 기존 호출부 그대로 동작해야 한다 - 그
+        // 자리는 여전히 결함이 null이라는 뜻이다.
+        [Fact]
+        public void RecordStepSection_WithoutDefect_LeavesDefectKindNull()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+
+            journal.RecordStepSection(1, "S01", "건강한 본문");
+
+            var s01 = JsonDocument.Parse(File.ReadAllText(Path.Combine(journal.CurrentRunDirectory!, "manifest.json")))
+                .RootElement.GetProperty("Steps").GetProperty("S01");
+            Assert.Equal(JsonValueKind.Null, s01.GetProperty("DefectKind").ValueKind);
+            Assert.Equal(JsonValueKind.Null, s01.GetProperty("DefectReason").ValueKind);
+        }
+
         [Fact]
         public void RecordSkeleton_WritesTheFileAndIndexesIt()
         {
