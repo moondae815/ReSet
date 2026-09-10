@@ -93,19 +93,31 @@ END"
         {
             var rules = await BuildRulesAsync(DuplicateErrorCodeSpDefinition(duplicated: true));
 
-            var notice = Assert.Single(rules.Split('\n')
-                .Where(l => l.Contains("[DUPLICATE CODES IN THIS TABLE]")));
+            var notice = Assert.Single(
+                rules.Split('\n'), l => l.Contains("[DUPLICATE CODES IN THIS TABLE]"));
+            var proseRule = Assert.Single(
+                rules.Split('\n'),
+                l => l.Contains(MechanicalValidator.PromptInstructionMarker)
+                     && l.Contains("「고유」"));
 
-            // 어느 문장이 무엇을 공유하는지 - 모델이 그대로 옮겨 적을 재료다.
+            // [사실은 공지 줄에] 어느 문장이 무엇을 공유하는지 - 모델이 그대로 옮겨 적을
+            // 재료다. 이 줄은 옮겨 적혀도 문서 내용으로 성립한다.
             Assert.Contains("UPDATE 1", notice);
             Assert.Contains("UPDATE 3", notice);
-            // 금지할 낱말.
-            Assert.Contains("「고유」", notice);
-            Assert.Contains("「서로 다른」", notice);
-            // 「거의 다 다른데 왜?」를 미리 막는다 - 실물이 걸린 자리가 정확히 여기다.
-            Assert.Contains("대부분의 코드가 실제로 다르더라도", notice);
-            // 무엇을 대신 쓸지.
-            Assert.Contains("실패 지점을 특정할 수 없다", notice);
+            Assert.Contains("실패 지점을 특정할 수 없습니다", notice);
+
+            // [지시는 표지 줄에] 금지할 낱말과, 「거의 다 다른데 왜?」를 미리 막는 문장.
+            Assert.Contains("「고유」", proseRule);
+            Assert.Contains("「서로 다른」", proseRule);
+            Assert.Contains("most of the codes really are distinct", proseRule);
+
+            // ★ [2026-09-10 - 이 시험의 본체] 공지 줄에 지시가 섞이면 안 된다.
+            // 섞여 있던 종전 판이 배송본 둘을 만들었다 - 1판 :579 · 2판 :720. 2판은 L1을
+            // 통과해 배송됐고, 남은 결함은 「납품 문서가 자기 작성자에게 지시한다」였다.
+            // 표지 없는 지시가 축자 복사 블록 안에 있으면 모델이 옮겨 적는다.
+            Assert.DoesNotContain("마십시오", notice);
+            Assert.DoesNotContain("서술하십시오", notice);
+            Assert.DoesNotContain("「고유」", notice);
         }
 
         [Fact]

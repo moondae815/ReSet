@@ -1451,6 +1451,163 @@ A[""시작""] --> B[""끝""]
             Assert.Contains(result.Errors, e => e.Contains("CLINTCOMM"));
         }
 
+        // ─────────────────────────────────────────────────────────────────
+        // 「명세서는 SP 를 서술하는 문서지 자기 작성자에게 지시하는 문서가 아니다」
+        //
+        // 축이 「유출」이 아니라 「문서의 모양」인 이유: 프롬프트의 영어 지시를 모델이
+        // **번역해서** 싣는 경로가 실물로 있고(UF_GET_OUTYMD4REFUND:26·:92,
+        // UF_GET_COMM4CLIENT4PARTIALCANCEL:40), 번역본은 원문 귀속이 원리적으로
+        // 불가능하다. 귀속을 요구하는 축이면 작성 계약 §7 대로 침묵해야 하므로 그 셋을
+        // 영영 못 잡는다. 모양으로 보면 누가 썼는지 안 물어도 되고 앵커는 그 줄 자체다.
+        // (INS_EXTRA4PLCARD:204 는 프롬프트에 없는 모델 자작인데, 이 축에서는 참 양성이다.)
+        // ─────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public void Validate_WhenTheDocumentInstructsItsOwnAuthor_ShouldFail()
+        {
+            // Arrange - 2026-09-10 EXCEPTION_PROC 2판 배송본 :720 의 모양. L1을 통과해
+            // 나갔고, 남은 결함이 정확히 이것이었다.
+            var markdown = WrapSpec(
+                "위 표에는 같은 코드를 쓰는 문장이 있습니다: -1→UPDATE 3·UPDATE 4. 따라서 "
+                + "반환 코드만으로는 실패 지점을 특정할 수 없습니다. 대부분의 코드가 실제로 "
+                + "서로 다르더라도, 이 공유 관계 때문에 반환 코드 전체를 \"고유하다\"거나 "
+                + "\"서로 다르다\"고 표현해서는 안 되며, … 사실을 그대로 서술해야 합니다.");
+
+            // Act
+            var result = new MechanicalValidator().Validate(markdown);
+
+            // Assert
+            Assert.False(result.IsValid);
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.DocumentInstructsItsAuthor);
+        }
+
+        [Fact]
+        public void Validate_WhenTheInstructionSitsOnAQuoteLine_ShouldStillFail()
+        {
+            // Arrange - 참 양성 11 중 6 이 `>` 인용줄이다. 유출된 공지가 프롬프트에서
+            // `   > …` 로 렌더돼 인용줄로 오기 때문이다(BuildDmlScopeTableLines).
+            //
+            // ★ 그래서 이 검사는 `>` 를 **지우지 않는다** - 같은 파일의
+            // CheckErrorCodeUniquenessClaim 은 QuoteLineRegex 로 지운다(그쪽은 인용이
+            // L2 의 지적이라 옳다). 두 검사는 `>` 에 정반대 정책을 가져야 한다.
+            // 「인용 처리를 통일하자」는 리팩터가 오면 이 시험이 먼저 빨개진다.
+            var markdown = WrapSpec(
+                "> `기준일 파라미터 적용` 칸의 `아니오`는 최상위 WHERE에 없다는 뜻일 뿐이다. "
+                + "이 칸을 근거로 \"이 문장은 기준일을 사용하지 않는다\"고 서술해서는 안 된다.");
+
+            var result = new MechanicalValidator().Validate(markdown);
+
+            Assert.Contains(result.DetailedErrors, e => e.Type == ErrorType.DocumentInstructsItsAuthor);
+        }
+
+        [Fact]
+        public void Validate_WhenTheObligationIsOnTheCaller_ShouldStaySilent()
+        {
+            // Arrange - 수신자가 호출자면 명세서의 본업이다. 프롬프트 규칙이 그 서술을
+            // **요구한다**(AiService: "If the return value or output parameter is not
+            // explicitly assigned, describe the calling responsibility or prerequisites").
+            //
+            // ★ 어미 목록을 「해야 합니다」까지 넓히면 이 줄이 걸린다 - 규칙이 시킨 것을
+            // 검사가 고발하는 §8 사고다(실측: 넓히면 배송본 15 줄·10 편으로 는다).
+            // 이 시험이 그 확장을 막는 자다.
+            var markdown = WrapSpec(
+                "정상 종료 시 `@po_intRetVal`이 명시적으로 할당되지 않으므로, 호출자는 "
+                + "프로시저 호출 전 변수를 초기화해야 합니다.");
+
+            var result = new MechanicalValidator().Validate(markdown);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors, e => e.Type == ErrorType.DocumentInstructsItsAuthor);
+        }
+
+        [Fact]
+        public void Validate_WhenTheDocumentCarriesAVerificationBanner_ShouldStaySilent()
+        {
+            // Arrange - 배송본에 붙는 `VerificationBanner` 는 기계가 얹는 것이지 모델이
+            // 쓴 것이 아니다. 그 안 Critic 인용문은 지시 어미를 문자 그대로 단다.
+            //
+            // 지금 파이프라인에서 L1 은 배너를 **볼 수 없다** - 모든 Validate 호출이
+            // 배너를 얹기 전에 돌고(VerificationPipelineOrchestrator: 배너는 언제나
+            // `Banner + markdown` 으로 검증 뒤에 붙는다), 디스크의 Spec.md 를 다시
+            // 검증하는 경로도 없다. 그래도 이 시험을 두는 이유는 **스윕이 배송본을 재기
+            // 때문**이다 - 그 관할에서는 배너가 실물로 있다(31 편 중 1 편).
+            // 지금은 좁은 어미 목록이 배너의 「수정해야 합니다」 류를 안 물어서 통과한다.
+            var markdown =
+                "\n> [!CAUTION]\n"
+                + "> **[품질 불합격] CRUD/가독성 기준 미달 (최종 신뢰도 점수: 80/100)**\n"
+                + "> - **최종 Critic 결함 피드백**:\n"
+                + ">   [결함 1] 비즈니스 흐름 시각화의 분기 노드 표기를 반드시 수정해야 합니다.\n"
+                + "\n"
+                + WrapSpec("정상적인 CRUD 서술입니다.");
+
+            var result = new MechanicalValidator().Validate(markdown);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors, e => e.Type == ErrorType.DocumentInstructsItsAuthor);
+        }
+
+        [Fact]
+        public void Validate_WhenItReportsAnInstruction_ShouldCarryTheOffendingLineAsLexeme()
+        {
+            // Arrange - 작성 계약 §9. 메시지가 고정 문구를 백틱으로 실으면 그것이 귀속
+            // 어휘가 되어 위반 없는 단계까지 연다. 발화가 실제로 있던 원문 줄을 싣는다.
+            var markdown = WrapSpec("이 칸을 근거로 그렇게 서술해서는 안 됩니다.");
+
+            var result = new MechanicalValidator().Validate(markdown);
+
+            var error = Assert.Single(
+                result.DetailedErrors, e => e.Type == ErrorType.DocumentInstructsItsAuthor);
+            Assert.NotNull(error.Lexemes);
+            Assert.Contains(error.Lexemes!, l => l.Contains("서술해서는 안 됩니다"));
+        }
+
+        [Fact]
+        public void Validate_TheInstructionMessageMustNotTripItsOwnTrigger()
+        {
+            // Arrange - L1 메시지는 재시도 프롬프트로 되돌아간다. 시정 문구가 자기
+            // 트리거를 담으면, 모델이 그 문구를 문서에 옮기는 순간 같은 검사가 다시
+            // 발화하고 **고칠 것이 없는데 재시도가 소진된다.**
+            // CheckErrorCodeUniquenessClaim이 2026-09-09~10에 세 번 겪은 루프이고,
+            // 그중 한 번은 검증 미통과본 배송까지 갔다.
+            var markdown = WrapSpec("이 칸을 근거로 그렇게 서술해서는 안 됩니다.");
+
+            var first = new MechanicalValidator().Validate(markdown);
+            var message = Assert.Single(
+                first.DetailedErrors, e => e.Type == ErrorType.DocumentInstructsItsAuthor).Message;
+
+            // Act - 그 메시지를 그대로 문서 본문에 실은 문서를 다시 검증한다.
+            var echoed = new MechanicalValidator().Validate(WrapSpec(message));
+
+            // Assert - 증거([발화 근거] 뒤)는 원문 발화의 사본이라 다시 걸려도 옳다.
+            // 그러나 그 앞의 시정 문구는 어떤 트리거도 담으면 안 된다.
+            var marker = MechanicalValidator.AuthorInstructionEvidenceMarker;
+            Assert.Contains(marker, message);
+            var prescriptionOnly = message.Substring(
+                0, message.IndexOf(marker, StringComparison.Ordinal));
+            var prescriptionEchoed = new MechanicalValidator().Validate(WrapSpec(prescriptionOnly));
+
+            Assert.DoesNotContain(
+                prescriptionEchoed.DetailedErrors,
+                e => e.Type == ErrorType.DocumentInstructsItsAuthor);
+            Assert.NotNull(echoed);
+        }
+
+        [Fact]
+        public void Validate_WhenTheDocumentIsPlainDescription_ShouldStaySilent()
+        {
+            // Arrange - 되돌림의 반대편. 같은 주제를 사실로만 적으면 걸리지 않는다
+            // (실물 대조군: UF_GET_COMM4CLIENT:34 가 `(없음)`·스키마 바인딩을 다루면서
+            // 사실 서술로 끝난다). 주제가 아니라 수신자가 가른다.
+            var markdown = WrapSpec(
+                "`(없음)`은 이 함수가 스키마 바인딩되지 않았음을 확정한 값입니다. "
+                + "동일 테이블이라도 문장·별칭에 따라 힌트 유무가 다릅니다.");
+
+            var result = new MechanicalValidator().Validate(markdown);
+
+            Assert.DoesNotContain(
+                result.DetailedErrors, e => e.Type == ErrorType.DocumentInstructsItsAuthor);
+        }
+
         [Fact]
         public void Validate_WhenTheAbsenceClaimIsTrue_ShouldPass()
         {
