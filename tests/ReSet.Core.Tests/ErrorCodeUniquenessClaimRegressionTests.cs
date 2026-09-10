@@ -99,6 +99,22 @@ namespace ReSet.Core.Tests
             Assert.Empty(UniquenessErrors("ExceptionProcAttempt6UniqueDenialExcerpt.md"));
         }
 
+        // ⑤ 시도 4 - Task 6 재작업(2026-09-10)에서 드러난 네 번째 갈래. 이 문장은
+        //    검사의 처방(「고유」를 빼고 공유 관계를 그대로 서술하라)을 정확히 따랐고
+        //    옳다 - "안" 부정으로 유일성을 무른다. 그런데 절 경계 정규식이 「지만」에서
+        //    문장을 갈라, 앞 절 "대부분의 코드는 서로 다르"만 PredicativeUniquenessRegex
+        //    에 걸린다. 부정 표지("안")는 뒤 절에만 있어 앞 절에서는 안 보인다 -
+        //    UniquenessDenialTokens 에 "안"을 추가해도 못 고친다(좌표자가 별도 콘솔
+        //    앱으로 재현, 리뷰가 지목). 진짜 원인은 PredicativeUniquenessRegex 자체 -
+        //    그 가지는 코퍼스에서 관측된 적이 없는 예방용이었는데 실물에서 오탐을 냈다.
+        //    실물(l1-attempts.json 시도 4 메시지가 인용한 문장, 한 글자도 안 고쳤다)을
+        //    오라클로 쓴다.
+        [Fact]
+        public void Attempt4_WhenHedgedDenialSplitsAcrossAClauseBoundary_ShouldStaySilent()
+        {
+            Assert.Empty(UniquenessErrors("ExceptionProcAttempt4UniqueDenialExcerpt.md"));
+        }
+
         // ③ 배송본에는 진짜 거짓 주장이 둘 있다. 하나만 잡고 끝내면 나머지가 살아남아
         //    다음 시도에서 새로 발화한다 - 재시도를 태우는 모양 그대로다.
         [Fact]
@@ -156,26 +172,15 @@ namespace ReSet.Core.Tests
             Assert.Contains("2자리", error);
         }
 
-        // ④ 를 닫는 규칙(관형 수식만 본다)이 서술 용법에 구멍을 낸다 - 「코드는 고유하다」는
-        //    지시어가 낱말보다 앞에 온다. 가장 좁은 모양 하나만 따로 받고 여기서 잠근다.
-        //
-        //    [이 시험은 오라클이 아니라 잠금이다] 위 넷과 달리 재료가 실물이 아니다 -
-        //    이 모양은 코퍼스에서 관측된 적이 없고 예방으로 넣은 가지다. 「모델이 이렇게
-        //    쓴다」의 근거로 쓰지 마라. 넓히려거든 실측부터 하라.
-        [Fact]
-        public void WhenTheClaimIsPredicative_ShouldStillReport()
-        {
-            var markdown = WrapSpec(
-                "각 UPDATE 문의 오류 코드는 고유하므로 호출자가 실패 지점을 특정할 수 있다.\n\n"
-                + LoadFixture("ExceptionProcAttempt3ScopeExcerpt.md")
-                    .Split("\n")
-                    .SkipWhile(l => !l.StartsWith("###"))
-                    .Aggregate((a, b) => a + "\n" + b));
-
-            var result = new MechanicalValidator().Validate(markdown, ExceptionProcErrorCodes());
-
-            Assert.Contains(result.Errors, e => e.Contains("오류 코드는 고유하므로"));
-        }
+        // [2026-09-10 걷어냄 - Task 6 재작업] 여기 있던 WhenTheClaimIsPredicative_ShouldStillReport
+        // 는 PredicativeUniquenessRegex(서술 용법 "코드는 고유하다"를 절 경계와 무관하게
+        // 잡던 예방 가지)를 합성 픽스처로 잠그고 있었다. 그 가지가 실물 시도 4에서 오탐을
+        // 냈다(위 Attempt4_WhenHedgedDenialSplitsAcrossAClauseBoundary_ShouldStaySilent
+        // 참고) - 「코드는 서로 다르지만, …해서는 안 됩니다」가 「지만」 절 경계에서 잘려
+        // 앞 절만 그 정규식에 걸렸다. 되돌림으로 확인했다: 이 가지를 걷어내자 이 합성
+        // 시험 하나만 실패했고, 그 시험을 지운 지금은 실물 시험 전부(위 다섯 개) 초록이다
+        // - 그 가지가 사 주던 커버리지가 합성 픽스처 하나뿐이었다는 뜻이다. 서술 용법
+        // 자체를 다시 잡으려면 절 경계를 넘는 문맥을 실측한 뒤 다시 설계해야 한다.
 
         // 한 절에 같은 낱말이 두 번 나오고 <b>앞의 것만</b> 코드가 아닌 것을 꾸미는 모양.
         // 앞자리에서 판정을 끝내면 뒷자리의 진짜 주장이 가려진다 - 이번 회차가 내내 잡은

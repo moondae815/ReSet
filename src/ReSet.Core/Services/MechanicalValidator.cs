@@ -4184,11 +4184,15 @@ namespace ReSet.Core.Services
         /// <see cref="UniquenessDenialTokens"/> 가 닫은 자기강화 루프가 한 겹 아래에서
         /// 다시 열린 것이다.
         ///
-        /// [알려진 한계 - 미리 적어 둔다] 관형 수식(「고유한 오류 코드」)만 본다. 서술
-        /// 용법(「오류 코드는 고유하다」)은 지시어가 낱말보다 <b>앞</b>에 오므로 이 함수로는
-        /// 못 잡고, <see cref="PredicativeUniquenessRegex"/> 가 그중 가장 좁은 모양 하나만
-        /// 따로 받는다. 그 모양은 <b>코퍼스에서 관측된 적이 없고</b> 예방으로 둔 것이다 -
-        /// 실물 발화 여섯은 전부 관형 용법이다. 넓히기 전에 실측부터 하라.
+        /// [알려진 한계 - 2026-09-10 갱신] 관형 수식(「고유한 오류 코드」)만 본다. 서술
+        /// 용법(「오류 코드는 고유하다」)을 절 경계와 무관하게 잡으려던 <c>PredicativeUniquenessRegex</c>
+        /// (예방용, 코퍼스에서 관측된 적이 없었다)를 Task 6 재작업에서 걷어냈다 - 실물
+        /// 시도 4에서 오탐을 냈다: 「대부분의 코드는 서로 다르<b>지만</b>, 위 두 쌍이
+        /// 코드를 공유하므로 …서술해서는 안 됩니다」가 <c>UniquenessClauseBoundaryRegex</c>의
+        /// 「지만」 경계에서 앞 절 "…코드는 서로 다르"만으로 잘려 그 정규식에 걸렸고,
+        /// 부정 표지("안")는 뒤 절에만 있어 같은 절 안에서 안 보였다. 서술 용법 자체를
+        /// 다시 잡으려면 절 경계를 넘나드는 문맥이 필요하다 - 실측 없이 좁은 정규식으로
+        /// 예방하면 이번처럼 조용히 오탐을 낸다. 넓히기 전에 실측부터 하라.
         /// </summary>
         private static bool ModifiesErrorCode(string clause, int claimEnd)
         {
@@ -4206,17 +4210,6 @@ namespace ReSet.Core.Services
             var stop = CaseParticleRegex.Match(rest);
             return !stop.Success || topic <= stop.Index;
         }
-
-        /// <summary>
-        /// 서술 용법 중 가장 좁은 모양 하나(「오류 코드<b>는</b> 고유하다」). 지시어와
-        /// 유일성 낱말이 조사 하나만 사이에 두고 맞붙은 경우만 받는다.
-        ///
-        /// 예방용이다 - 이 모양은 코퍼스에서 관측된 적이 없다.
-        /// <see cref="ModifiesErrorCode"/> 의 [알려진 한계] 참고.
-        /// </summary>
-        private static readonly Regex PredicativeUniquenessRegex =
-            new(@"(?:코드|음수값|값)\s*(?:은|는|이|가)\s*(?:서로 다르|서로 다른|고유)",
-                RegexOptions.Compiled);
 
         /// <summary>
         /// 주장을 무르는 한정·부정 표지. 같은 절에 하나라도 있으면 유일성 단정이 아니다.
@@ -4255,11 +4248,9 @@ namespace ReSet.Core.Services
             {
                 // 유일성 낱말이 오류 코드를 직접 꾸미는 자리가 하나라도 있어야 주장이다.
                 // 같은 절에 있기만 한 것으로는 부족하다 - ModifiesErrorCode 문서 참고.
-                var onErrorCodes =
-                    PredicativeUniquenessRegex.IsMatch(clause)
-                    || UniquenessClaimTokens.Any(token =>
-                        AllOccurrences(clause, token).Any(at =>
-                            ModifiesErrorCode(clause, at + token.Length)));
+                var onErrorCodes = UniquenessClaimTokens.Any(token =>
+                    AllOccurrences(clause, token).Any(at =>
+                        ModifiesErrorCode(clause, at + token.Length)));
                 if (!onErrorCodes) continue;
 
                 var denied = Array.Exists(UniquenessDenialTokens, token =>
