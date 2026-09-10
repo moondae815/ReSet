@@ -168,6 +168,29 @@ namespace ReSet.Core.Tests
             Assert.Equal(2, skeleton.GetProperty("Attempt").GetInt32());
         }
 
+        // 골격은 시도별이 아니라 "최신 하나" 다(설계서 §4-1) - 회차 2가 다시 만들면
+        // 회차 1의 골격은 파일에서도 manifest 에서도 사라져야 한다. RecordStepSection
+        // 쪽은 RecordStepSection_OverwritesOnlyTheRewrittenStep 이 이미 잡고 있었다.
+        [Fact]
+        public void RecordSkeleton_OverwritesWithTheLatestAttempt()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+            journal.RecordSkeleton(1, "회차1 골격");
+
+            journal.RecordSkeleton(2, "회차2 골격");
+
+            var dir = journal.CurrentRunDirectory!;
+            Assert.Equal("회차2 골격", File.ReadAllText(Path.Combine(dir, "skeleton.md")));
+
+            var skeleton = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "manifest.json")))
+                .RootElement.GetProperty("Skeleton");
+            Assert.Equal(2, skeleton.GetProperty("Attempt").GetInt32());
+            Assert.Equal(
+                PlanAttemptJournal.ComputeSha256("회차2 골격"),
+                skeleton.GetProperty("Sha256").GetString());
+        }
+
         // 단계 코드는 모델이 목차에 채운 값이고 BatchStepPlanParser 는 빈 값과 중복만
         // 본다 - 파일명 안전성은 아무도 안 본다. 그 단계만 건너뛰고 판은 살린다.
         [Theory]
