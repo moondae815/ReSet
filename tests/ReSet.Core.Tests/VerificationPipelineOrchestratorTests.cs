@@ -2823,6 +2823,15 @@ namespace ReSet.Core.Tests
         /// 우연이 아니라 사실로 못박기 위해, <c>NotifyL2Defects</c>가 회차 1로
         /// 호출됐다는 것도 별도로 단언한다(그 두 번째 인자가 회차 번호다 - 회차가
         /// 실제로 거부되어 넘어가려 한다는 직접 증거).
+        ///
+        /// [정정 2026-09-10 — 최종 전체 브랜치 리뷰 Important 1] 이 시험이 단언하는
+        /// 것은 <b>리뷰</b>가 디스크에 있다는 사실뿐이다 - <c>골격도 없고</c>(위에서
+        /// 이미 언급) 섹션도 없으므로, 이 경로(단일 호출 폴백)가 여는 판에는
+        /// <b>본문이 하나도 안 남는다</b>. <c>manifest.json</c>과 <c>reviews/</c>만
+        /// 있고 <c>BatchPlanAssembler.Assemble</c>이 재조립할 골격·섹션 자체가 없다
+        /// - 이 시험의 초록을 "본문도 남는다"로 읽지 마라. 이 공백은 알려진
+        /// 공백으로 남기기로 했다(설계서 §11-5, 사람 결정) - 2단계는 골격·섹션이
+        /// 모두 없는 판을 재개 불가로 판정해야 한다.
         /// </summary>
         [Fact]
         public async Task RunConsolidatedPipeline_WhenAnAttemptIsRejected_ItsReviewIsOnDiskBeforeTheNextAttempt()
