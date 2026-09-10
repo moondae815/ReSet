@@ -163,15 +163,19 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
-        public void Validate_WithoutExpectations_RunsExactlyTheThreeUnconditionalChecks()
+        public void Validate_WithoutExpectations_RunsExactlyTheFourUnconditionalChecks()
         {
             // expectations가 null이면 조건부 27자리는 안 돈다. 이 수가 흔들리면 위
             // 이름 잠금이 어느 자리를 재는지 모르게 된다.
+            //
+            // 4: 2026-09-10 에 CheckDocumentInstructsItsAuthor 가 더해졌다. 그 검사는
+            // expectations를 안 받으므로 무조건 검사 쪽에 선다 - 이 수가 그 배선을
+            // 재는 자다(스윕의 「발화 11」은 검사 로직을 재지 배선을 재지 않는다).
             var probe = new Probe();
 
             probe.Validate(MissingRequiredHeaders);
 
-            Assert.Equal(3, probe.SeenCheckExpressions.Count);
+            Assert.Equal(4, probe.SeenCheckExpressions.Count);
         }
 
         [Fact]
@@ -183,7 +187,7 @@ namespace ReSet.Core.Tests
 
             probe.Validate(MissingRequiredHeaders);
 
-            Assert.Equal(3, probe.SeenCheckExpressions.Count);
+            Assert.Equal(4, probe.SeenCheckExpressions.Count);
         }
 
         // ─────────────────────────────────────────────────────────────────────
