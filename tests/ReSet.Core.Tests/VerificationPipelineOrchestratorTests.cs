@@ -4964,6 +4964,59 @@ namespace ReSet.Core.Tests
             Assert.Equal("첫 목차", await File.ReadAllTextAsync(Path.Combine(rawDir, "PlanStructure.superseded-1.md")));
         }
 
+        // 목차가 바뀌면 기존 섹션은 전부 무효다(설계서 §5) - 그 무효화가 디렉터리
+        // 전환(새 판)으로 표현되는지 판독한다. PlanStructure.md·superseded 파일만
+        // 보면 재설계가 있었다는 사실은 알 수 있지만 "저널이 새 판을 열었는가"는
+        // 별개 사실이다 - TryCommitPlanStructureAsync에서 OpenRun 호출을 지워도
+        // 위 RunConsolidatedPipelineAsync_Redraft_PreservesSupersededStructure는
+        // 여전히 통과한다.
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_Redraft_OpensANewJournalRunPerStructure()
+        {
+            var aiService = Substitute.For<IAiService>();
+            var userInteraction = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                userInteraction, "3", "gpt-4", null, aiService, aiService, null, null, null, 8);
+
+            var specs = new List<(string, string)> { ("spec1.md", "content1") };
+            var plan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "첫 목차" }, new AiResult { Content = "재설계 목차" });
+            aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = plan }));
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = true, StructureDefective = true, FeedbackComment = "결함", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 }),
+                    _ => Task.FromResult(new ReviewResult { HasDefects = false, ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 }));
+
+            await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "RedraftJournalJob", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            var attemptsDir = Path.Combine(_consolidatedOutputRoot, "Jobs", "RedraftJournalJob", "raw", "attempts");
+            Assert.True(Directory.Exists(Path.Combine(attemptsDir, "run-001")));
+            Assert.True(
+                Directory.Exists(Path.Combine(attemptsDir, "run-002")),
+                "목차 재작성이 새 판(run-002)을 열지 않았다.");
+
+            var manifest1 = JsonDocument.Parse(
+                await File.ReadAllTextAsync(Path.Combine(attemptsDir, "run-001", "manifest.json")));
+            var manifest2 = JsonDocument.Parse(
+                await File.ReadAllTextAsync(Path.Combine(attemptsDir, "run-002", "manifest.json")));
+
+            Assert.Equal(
+                PlanAttemptJournal.ComputeSha256("첫 목차"),
+                manifest1.RootElement.GetProperty("ReuseKey").GetProperty("PlanStructureSha256").GetString());
+            Assert.Equal(
+                PlanAttemptJournal.ComputeSha256("재설계 목차"),
+                manifest2.RootElement.GetProperty("ReuseKey").GetProperty("PlanStructureSha256").GetString());
+            Assert.Equal("structure-redraft", manifest2.RootElement.GetProperty("OpenedBy").GetString());
+        }
+
         // 재수립은 개선 시도이지 필수 단계가 아니다. 실패해도 파이프라인을 죽이지 않는다.
         [Fact]
         public async Task RunConsolidatedPipelineAsync_RedraftThrows_KeepsExistingStructureAndCompletes()

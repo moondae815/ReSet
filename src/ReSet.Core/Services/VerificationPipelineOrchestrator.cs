@@ -2159,7 +2159,7 @@ namespace ReSet.Core.Services
                         $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                     currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                        outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                        attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
                     RestoreAdoptedGenerationState(
                         adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                     finalAiResult = rescued.Generation ?? finalAiResult;
@@ -2474,7 +2474,7 @@ namespace ReSet.Core.Services
                                 $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                             currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                                outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                                attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
                             RestoreAdoptedGenerationState(
                                 adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                             finalAiResult = rescued.Generation ?? finalAiResult;
@@ -2571,7 +2571,7 @@ namespace ReSet.Core.Services
                         // "현재==채택본"으로 보고 아무 일도 하지 않아 파일에는 채택되지
                         // 않은 재수립 목차가 그대로 남는다(실측: 재현된 회귀).
                         currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                            outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                            attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
                         RestoreAdoptedGenerationState(
                             adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
 
@@ -2702,7 +2702,7 @@ namespace ReSet.Core.Services
                                 // PlanStructure.md와 실제로 쓰이는 목차를 어긋나게 두지 않는다.
                                 if (redrafted != null &&
                                     await TryCommitPlanStructureAsync(
-                                        "목차 재설계 결과", outputRoot, jobName, currentPlanStructure, redrafted, cancellationToken))
+                                        attemptJournal, "목차 재설계 결과", outputRoot, jobName, currentPlanStructure, redrafted, cancellationToken))
                                 {
                                     currentPlanStructure = redrafted;
                                     // 목차가 바뀌면 단계 목록도 바뀐다. 낡은 골격·섹션을
@@ -2784,7 +2784,7 @@ namespace ReSet.Core.Services
                                     $"({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                                 currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                                    outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                                    attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
                                 RestoreAdoptedGenerationState(
                                     adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                                 finalAiResult = rescued.Generation ?? finalAiResult;
@@ -2895,7 +2895,7 @@ namespace ReSet.Core.Services
                         if (rescued != null)
                         {
                             currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                                outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                                attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
                             RestoreAdoptedGenerationState(
                                 adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                         }
@@ -2925,7 +2925,7 @@ namespace ReSet.Core.Services
                             $"{rescued.AttemptNumber}차 시도({rescued.Review.NormalizedScore}/100)를 채택합니다.");
 
                         currentPlanStructure = await AdoptPlanStructureForRescueAsync(
-                            outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
+                            attemptJournal, outputRoot, jobName, currentPlanStructure, adoptedState.PlanStructure, cancellationToken);
                         RestoreAdoptedGenerationState(
                             adoptedState, out lastSkeleton, out lastSkeletonResult, out lastStepSections, out stepFloorViolations);
                         finalAiResult = rescued.Generation ?? finalAiResult;
@@ -3199,7 +3199,7 @@ namespace ReSet.Core.Services
                     {
                         // 새 목차가 실제로 본문을 만들어 냈으니 이제 기록을 확정한다.
                         if (!await TryCommitPlanStructureAsync(
-                                "목차 재설계 결과", outputRoot, jobName, currentPlanStructure, pendingPlanStructure, cancellationToken))
+                                attemptJournal, "목차 재설계 결과", outputRoot, jobName, currentPlanStructure, pendingPlanStructure, cancellationToken))
                         {
                             // 기록에 실패한 재수립은 없었던 일로 친다. 그 목차에서 나온
                             // 본문까지 함께 버려야 산출물과 기록이 어긋나지 않는다.
@@ -4392,6 +4392,7 @@ namespace ReSet.Core.Services
         /// 기록 실패로 파이프라인을 죽이지는 않는다.
         /// </summary>
         private async Task<bool> TryCommitPlanStructureAsync(
+            PlanAttemptJournal journal,
             string operationLabel,
             string outputRoot,
             string jobName,
@@ -4403,6 +4404,10 @@ namespace ReSet.Core.Services
             {
                 await WritePlanStructureFilesAsync(
                     outputRoot, jobName, supersededStructure, finalStructure, cancellationToken);
+
+                // 목차가 바뀌면 기존 섹션은 전부 무효다. 판을 새로 열어 그 무효화를
+                // 디렉터리 전환으로 표현한다 - 그러면 지울 것이 없다(설계서 §5).
+                journal.OpenRun(finalStructure, "structure-redraft");
                 return true;
             }
             // 취소는 실패가 아니라 사용자의 지시이므로 전파한다.
@@ -4464,6 +4469,7 @@ namespace ReSet.Core.Services
         /// 때는 그 빈도를 먼저 가정해야 한다.
         /// </summary>
         private async Task<string> AdoptPlanStructureForRescueAsync(
+            PlanAttemptJournal journal,
             string outputRoot,
             string jobName,
             string currentStructure,
@@ -4479,7 +4485,7 @@ namespace ReSet.Core.Services
             // 버려지는 목차도 superseded로 남긴다. 어떤 목차가 시도됐고 왜 채택되지
             // 않았는지가 raw/ 디렉터리만 보고 재구성되어야 한다.
             return await TryCommitPlanStructureAsync(
-                "채택된 시도의 목차", outputRoot, jobName, currentStructure, adoptedStructure, cancellationToken)
+                journal, "채택된 시도의 목차", outputRoot, jobName, currentStructure, adoptedStructure, cancellationToken)
                 ? adoptedStructure
                 : currentStructure;
         }
