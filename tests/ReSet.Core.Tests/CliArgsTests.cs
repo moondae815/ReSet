@@ -157,6 +157,44 @@ namespace ReSet.Core.Tests
             Assert.Equal("Critic 검토", interactiveUserInteraction.LastProgressTitle);
         }
 
+        /// <summary>
+        /// 위임을 지키는 시험. Task 2 워커가 RED/GREEN으로 확인했으나 그때는
+        /// PlanAttemptResumeCandidate가 아직 통합 전이라 임시 시험을 지웠다. 이제 실물이
+        /// 있으므로 영구화한다 - 「지워도 통과하는 분기」는 이 저장소의 반복 결함이다.
+        /// </summary>
+        [Fact]
+        public async Task RecursiveAnalysisUserInteraction_ForwardsConfirmResumeAsync()
+        {
+            var interactiveUserInteraction = new RecordingUserInteraction { ResumeAnswer = true };
+            var nestedType = typeof(Program).GetNestedType(
+                "RecursiveAnalysisUserInteraction",
+                BindingFlags.NonPublic);
+            Assert.NotNull(nestedType);
+
+            var adapter = Assert.IsAssignableFrom<IVerificationUserInteraction>(
+                Activator.CreateInstance(nestedType!, interactiveUserInteraction));
+
+            var candidate = new PlanAttemptResumeCandidate(
+                RunDirectory: "/tmp/unused/run-001",
+                Run: 1,
+                StartedAt: "2026-09-11T00:00:00+09:00",
+                Skeleton: "## 골격",
+                SkeletonAttempt: 1,
+                ReusableSections: new Dictionary<string, string> { ["S01"] = "### S01" },
+                SectionAttempts: new Dictionary<string, int> { ["S01"] = 1 },
+                DefectiveStepCodes: new List<string> { "S02" },
+                DefectiveStepKinds: new Dictionary<string, StepDefectKind?> { ["S02"] = StepDefectKind.QualityFloor },
+                PriorReviews: new List<(int Attempt, ReviewResult Review)>(),
+                TotalStepsInManifest: 2);
+
+            var answer = await adapter.ConfirmResumeAsync("Job_Test", candidate);
+
+            // 답이 감싼 UI(RecordingUserInteraction)까지 그대로 돌아온다.
+            Assert.True(answer);
+            // candidate가 감싼 UI까지 그대로 전달됐다(변형되지 않는다).
+            Assert.Same(candidate, interactiveUserInteraction.ResumeAsked);
+        }
+
         private static IConfiguration LoadCliConfiguration()
         {
             var repositoryRoot = FindRepositoryRoot();
