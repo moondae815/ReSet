@@ -687,7 +687,8 @@ namespace ReSet.Cli
                         $"[yellow]경고: 배치 모드에서 CLI provider를 사용합니다. ({Markup.Escape(cliRole)} 역할)[/]");
                     AnsiConsole.MarkupLine(
                         "[yellow]권한 프롬프트 정지나 구독 쿼터 소진이 발생하면 이번 실행이 중단될 수 있습니다 — " +
-                        "이미 만든 단계는 저장되어 같은 Job 이름으로 다시 실행하면 이어집니다.[/]");
+                        "이미 만든 단계는 저장되어 같은 Job 이름으로 다시 실행하면 이어지도록 설계돼 있습니다 " +
+                        "(실물 확인은 진행 중입니다).[/]");
                 }
             }
 
