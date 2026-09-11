@@ -38,6 +38,23 @@ namespace ReSet.Core.Services
         int Attempt, string Sha256, StepDefectKind? DefectKind = null, string? DefectReason = null);
 
     /// <summary>
+    /// 재개 후보 하나. <b>2단계가 이 타입만 보고 재개를 판단한다</b> — manifest 해석은
+    /// <c>TryResume</c> 안에서 끝난다(설계 §3-2).
+    /// </summary>
+    public sealed record PlanAttemptResumeCandidate(
+        string RunDirectory,
+        int Run,
+        string StartedAt,
+        string Skeleton,
+        int SkeletonAttempt,
+        IReadOnlyDictionary<string, string> ReusableSections,
+        IReadOnlyDictionary<string, int> SectionAttempts,
+        IReadOnlyList<string> DefectiveStepCodes,
+        IReadOnlyDictionary<string, StepDefectKind?> DefectiveStepKinds,
+        IReadOnlyList<(int Attempt, ReviewResult Review)> PriorReviews,
+        int TotalStepsInStructure);
+
+    /// <summary>
     /// 판 하나의 명세. <b>이 파일이 진실이고 디렉터리의 파일 존재는 진실이 아니다</b> —
     /// 반쯤 쓰인 판이 나중에 거짓 재료가 되는 것을 막는 유일한 장치다(설계서 §8).
     /// </summary>
@@ -51,6 +68,23 @@ namespace ReSet.Core.Services
         public PlanAttemptReuseKey? ReuseKey { get; set; }
         public PlanAttemptArtifact? Skeleton { get; set; }
         public Dictionary<string, PlanAttemptArtifact> Steps { get; set; } = new(StringComparer.Ordinal);
+
+        /// <summary>이 판이 어느 판에서 재개했나. 재개가 아니면 null(설계 §3-5).</summary>
+        public string? ResumedFrom { get; set; }
+
+        /// <summary>
+        /// <see cref="PlanAttemptReuseKey.SpecsSha256"/> 이 무엇으로 계산됐는지 -
+        /// 파일 <b>이름</b> 목록만이다(본문은 절대 안 넣는다, 파일이 거대해진다).
+        ///
+        /// <b>ReuseKey 밖의 형제 필드다</b> - ReuseKey 는 비교 계약이라 항을 늘리면
+        /// 기존 판이 전부 불일치가 된다(Task 7 §Step 2). 이 필드는 비교에 안 쓰이고
+        /// 오직 「SpecsSha256 이 왜 다른가」를 사람이 물을 때만 읽힌다.
+        ///
+        /// 옛 manifest(이 필드가 없던 시절)를 읽으면 null 이다 - 역직렬화가 깨지면
+        /// 안 되므로 nullable 이고, null 이면 SpecsSha256 불일치의 원인까지는 못
+        /// 밝히고 「다르다」까지만 말한다.
+        /// </summary>
+        public IReadOnlyList<string>? SpecsFileNames { get; set; }
     }
 
     /// <summary>
@@ -88,6 +122,7 @@ namespace ReSet.Core.Services
         private readonly string? _effort;
         private readonly string _targetLanguage;
         private readonly string _specsSha256;
+        private readonly IReadOnlyList<string>? _specsFileNames;
 
         private readonly object _gate = new();
         private string? _runDirectory;
@@ -105,7 +140,8 @@ namespace ReSet.Core.Services
 
         private PlanAttemptJournal(
             string outputRoot, string jobName, string provider, string model,
-            string? effort, string targetLanguage, string specsSha256)
+            string? effort, string targetLanguage, string specsSha256,
+            IReadOnlyList<string>? specsFileNames)
         {
             _outputRoot = outputRoot;
             _jobName = jobName;
@@ -114,12 +150,20 @@ namespace ReSet.Core.Services
             _effort = effort;
             _targetLanguage = targetLanguage;
             _specsSha256 = specsSha256;
+            _specsFileNames = specsFileNames;
         }
 
+        /// <param name="specsFileNames">
+        /// <c>specsSha256</c> 을 계산한 파일 <b>이름</b> 목록(순서 그대로) - 재개가
+        /// 실패했을 때 <c>SpecsSha256</c> 불일치의 원인(개수·순서·이름)을 진단하는
+        /// 자리에만 쓰인다(Task 7 §Step 2). 생략하면(기존 호출부) 그 세부 진단만
+        /// 빠지고 나머지 동작은 그대로다.
+        /// </param>
         public static PlanAttemptJournal Create(
             string outputRoot, string jobName, string provider, string model,
-            string? effort, string targetLanguage, string specsSha256) =>
-            new(outputRoot, jobName, provider, model, effort, targetLanguage, specsSha256);
+            string? effort, string targetLanguage, string specsSha256,
+            IReadOnlyList<string>? specsFileNames = null) =>
+            new(outputRoot, jobName, provider, model, effort, targetLanguage, specsSha256, specsFileNames);
 
         /// <summary>열린 판의 디렉터리. 열린 판이 없으면 null(비활성).</summary>
         public string? CurrentRunDirectory
@@ -141,7 +185,7 @@ namespace ReSet.Core.Services
         /// 지키기 때문이다 — 옛 판을 덮어쓰면 그 판이 실제로 끝난 시각(<c>StartedAt</c>)이
         /// 거짓이 된다.
         /// </summary>
-        public void OpenRun(string planStructure, string openedBy)
+        public void OpenRun(string planStructure, string openedBy, string? resumedFrom = null)
         {
             lock (_gate)
             {
@@ -161,6 +205,8 @@ namespace ReSet.Core.Services
                         Job = _jobName,
                         StartedAt = DateTimeOffset.Now.ToString("o"),
                         OpenedBy = openedBy,
+                        ResumedFrom = resumedFrom,
+                        SpecsFileNames = _specsFileNames,
                         ReuseKey = new PlanAttemptReuseKey(
                             ContractVersion,
                             ComputeSha256(planStructure),
@@ -290,7 +336,7 @@ namespace ReSet.Core.Services
         /// <c>NormalizedScore</c> 는 계산 속성이라 직렬화에서 빠질 수 있다. 무엇이
         /// 남는지 이 자리에서 못박는다.
         /// </summary>
-        private sealed record PlanAttemptReview(
+        internal sealed record PlanAttemptReview(
             int Attempt,
             bool HasDefects,
             string? FeedbackComment,
@@ -347,6 +393,419 @@ namespace ReSet.Core.Services
                 {
                     Log.Debug(ex, "[PlanAttemptJournal] 리뷰를 남기지 못했습니다 - 시도: {Attempt}", attempt);
                 }
+            }
+        }
+
+        /// <summary>
+        /// 이어서 할 수 있는 판을 찾는다. 없으면 <c>null</c>.
+        ///
+        /// [왜 쓰기와 같은 클래스인가] 1단계 설계가 「읽는 쪽이 생길 때 같은 클래스에
+        /// 들어가 규약이 갈라지지 않는다」고 약속한 자리다. manifest 의 키 대소문자·
+        /// 진실 계약(§11-1)을 아는 곳이 둘이 되면 조용히 갈린다.
+        ///
+        /// [무엇을 거르나] <c>ReuseKey</c> 일곱 항목이 전부 같아야 한다 — 특히 모델이
+        /// 다르면 문서의 목소리가 섞인다. 골격도 섹션도 없는 판(단일 호출 폴백)은
+        /// 재개 불가다(§11-5). <c>Sha256</c> 이 안 맞는 항목은 버린다.
+        ///
+        /// [왜 소프트페일인가] 못 읽는 판은 <b>없는 것으로 친다.</b> 재개는 편의이지
+        /// 파이프라인의 전제가 아니다.
+        /// </summary>
+        public PlanAttemptResumeCandidate? TryResume(string planStructure)
+        {
+            try
+            {
+                var attemptsRoot = Path.Combine(_outputRoot, "Jobs", _jobName, "raw", "attempts");
+                if (!Directory.Exists(attemptsRoot)) return null;
+
+                var wanted = new PlanAttemptReuseKey(
+                    ContractVersion, ComputeSha256(planStructure), _specsSha256,
+                    _provider, _model, _effort, _targetLanguage);
+
+                // [2026-09-11 최종 전체 리뷰 C1] 목차가 선언하는 단계 코드 전체. 쿼터는
+                // 단계 생성 도중에 나므로 manifest.Steps 에는 그 회차까지만 기록돼 있다
+                // - 목차에는 있는데 manifest 에는 아예 없는 코드가 생긴다. 이 목록이
+                // 없으면 그 코드는 재사용 대상도 결함 표시도 아니게 되어(둘 다 manifest
+                // 를 순회해서 나온다) 재생성 후보에서 영영 빠진다(TryReadCandidateCore
+                // 참고). 못 파싱하면(§11-5 단일 호출 폴백 등) null 이고, 그러면 차집합을
+                // 낼 기준이 없어 예전처럼 manifest 만 본다 - "있는 파서를 쓴다"
+                // (BatchStepPlanParser, 이미 오케스트레이터가 같은 텍스트로 부르는 것과
+                // 같은 함수라 결과가 갈리지 않는다).
+                var structureSteps = BatchStepPlanParser.TryParse(planStructure);
+
+                var runDirs = Directory.EnumerateDirectories(attemptsRoot, "run-*")
+                    .OrderByDescending(d => d, StringComparer.Ordinal)
+                    .ToList();
+
+                foreach (var runDir in runDirs)
+                {
+                    var candidate = TryReadCandidate(runDir, wanted, structureSteps);
+                    if (candidate != null) return candidate;
+                }
+
+                // [Task 7 §Step 1] 판은 있는데 후보가 하나도 안 잡혔다 - 이 자리가
+                // 지금까지 완전히 조용했던 자리다(2026-09-11, POQSettleBatch7-resume
+                // 실물 실패). 판이 아예 없으면(첫 실행) 이 분기 자체를 안 타므로
+                // 조용하다 - "재료가 없다"는 정상이지 실패가 아니다.
+                if (runDirs.Count > 0)
+                {
+                    LogResumeMiss(runDirs[0], wanted, runDirs.Count);
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 처음부터 만듭니다.");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 재개 후보가 하나도 안 잡혔을 때 사람이 볼 수 있는 자리에 이유를 남긴다.
+        ///
+        /// <b>가장 최근 판 하나만 진단한다</b> - 판이 여럿이면 전부 쏟아내는 것은
+        /// 소음이라 안 읽힌다(Task 7 지시). 판을 몇 개 봤는지는 남겨 "얼마나
+        /// 뒤졌는지"를 알 수 있게 한다.
+        ///
+        /// <b>Log.Information 을 쓴다</b> - 이 실행 내내 조용했던 <c>Log.Debug</c> 가
+        /// 이번 실물 실패를 못 건졌다(설계서 동기). 이 저장소의 사용자 대면 상태
+        /// 알림(<c>_userInteraction.NotifyStatus</c> 로 못 미치는 진단성 정보)은
+        /// <c>ApiUsageLoggingTests</c>·<c>CliUsageLoggingTests</c> 가 이미
+        /// <c>Log.Information</c> 을 그 층으로 쓰고 있다 - 같은 관례를 따른다.
+        /// <c>Warning</c> 은 이 저장소에서 "재시도 소진"·"상한 초과" 같은 파이프라인
+        /// 이상에 쓰이는데, 재개 실패는 파이프라인 이상이 아니라 정상 동작(처음부터
+        /// 다시 만듦)이므로 그 급으로 올리지 않는다.
+        ///
+        /// ReuseKey 가 완전히 같은데 다른 이유(골격도 섹션도 없음, §11-5)로 후보가
+        /// 없는 경우는 이 진단의 범위 밖이다 - 조용히 돌아간다. 그 경로는 이미
+        /// 코드가 이유를 문서화하고 있고, 이번 실물 실패의 미스터리는 ReuseKey
+        /// 불일치였다(설계 동기).
+        /// </summary>
+        private void LogResumeMiss(string newestRunDir, PlanAttemptReuseKey wanted, int runsExamined)
+        {
+            try
+            {
+                var runName = Path.GetFileName(newestRunDir);
+                var manifestPath = Path.Combine(newestRunDir, "manifest.json");
+                if (!File.Exists(manifestPath))
+                {
+                    Log.Information(
+                        "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 판 {RunsExamined}개를 봤고 " +
+                        "가장 최근 판({RunDir})에 manifest.json이 없습니다.",
+                        runsExamined, runName);
+                    return;
+                }
+
+                // [대칭 훑기] ReuseKey 불일치와 같은 모양의 실패 - manifest 가 있어도
+                // 못 읽으면(깨진 JSON 등) ReuseKey 를 비교조차 못 한다. 이 사실도
+                // 말해야 한다 - 아니면 TryReadCandidate 의 개별 Log.Debug 뒤에서
+                // 다시 조용해진다.
+                PlanAttemptManifest? manifest;
+                try
+                {
+                    manifest = JsonSerializer.Deserialize<PlanAttemptManifest>(
+                        File.ReadAllText(manifestPath), Options);
+                }
+                catch (Exception readEx)
+                {
+                    Log.Information(
+                        "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 판 {RunsExamined}개를 봤고 " +
+                        "가장 최근 판({RunDir})의 manifest.json을 읽지 못했습니다: {Reason}",
+                        runsExamined, runName, readEx.Message);
+                    return;
+                }
+
+                if (manifest?.ReuseKey == null)
+                {
+                    Log.Information(
+                        "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 판 {RunsExamined}개를 봤고 " +
+                        "가장 최근 판({RunDir})의 manifest에 ReuseKey가 없습니다.",
+                        runsExamined, runName);
+                    return;
+                }
+
+                var diffs = DiffReuseKey(wanted, manifest.ReuseKey, _specsFileNames, manifest.SpecsFileNames);
+                if (diffs.Count == 0) return;
+
+                Log.Information(
+                    "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 판 {RunsExamined}개를 봤고 " +
+                    "가장 최근 판({RunDir})과 다음 항목이 어긋났습니다: {Diffs}",
+                    runsExamined, runName, string.Join(", ", diffs));
+            }
+            catch (Exception ex)
+            {
+                // 진단 자체가 실패해도 파이프라인은 계속한다 - 이 로그는 편의이지
+                // 전제가 아니다.
+                Log.Debug(ex, "[PlanAttemptJournal] 재개 실패 사유를 진단하지 못했습니다 - {RunDir}", newestRunDir);
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="wanted"/>(이번 실행이 계산한 것)과 <paramref name="found"/>
+        /// (저장된 판의 ReuseKey)가 어긋난 항목을 사람이 읽을 문구로 만든다. 해시
+        /// 항목은 <see cref="ShortHash"/>로 앞자리만 싣는다(64자 두 개는 안 읽힌다).
+        /// </summary>
+        private static List<string> DiffReuseKey(
+            PlanAttemptReuseKey wanted, PlanAttemptReuseKey found,
+            IReadOnlyList<string>? currentSpecsFileNames, IReadOnlyList<string>? storedSpecsFileNames)
+        {
+            var diffs = new List<string>();
+
+            if (wanted.ContractVersion != found.ContractVersion)
+                diffs.Add($"ContractVersion({wanted.ContractVersion}→{found.ContractVersion})");
+
+            if (!string.Equals(wanted.PlanStructureSha256, found.PlanStructureSha256, StringComparison.Ordinal))
+                diffs.Add(
+                    $"PlanStructureSha256({ShortHash(wanted.PlanStructureSha256)}→{ShortHash(found.PlanStructureSha256)})");
+
+            if (!string.Equals(wanted.SpecsSha256, found.SpecsSha256, StringComparison.Ordinal))
+            {
+                var entry = $"SpecsSha256({ShortHash(wanted.SpecsSha256)}→{ShortHash(found.SpecsSha256)})";
+                var detail = DescribeSpecsDiff(currentSpecsFileNames, storedSpecsFileNames);
+                if (detail != null) entry += $" [{detail}]";
+                diffs.Add(entry);
+            }
+
+            if (!string.Equals(wanted.Provider, found.Provider, StringComparison.Ordinal))
+                diffs.Add($"Provider({wanted.Provider}→{found.Provider})");
+
+            if (!string.Equals(wanted.Model, found.Model, StringComparison.Ordinal))
+                diffs.Add($"Model({wanted.Model}→{found.Model})");
+
+            if (!string.Equals(wanted.Effort, found.Effort, StringComparison.Ordinal))
+                diffs.Add($"Effort({wanted.Effort ?? "(없음)"}→{found.Effort ?? "(없음)"})");
+
+            if (!string.Equals(wanted.TargetLanguage, found.TargetLanguage, StringComparison.Ordinal))
+                diffs.Add($"TargetLanguage({wanted.TargetLanguage}→{found.TargetLanguage})");
+
+            return diffs;
+        }
+
+        private static string ShortHash(string? sha) =>
+            string.IsNullOrEmpty(sha) ? "(없음)" : sha.Substring(0, Math.Min(10, sha.Length));
+
+        /// <summary>
+        /// [Task 7 §Step 2] <c>SpecsSha256</c> 이 다를 때 <b>왜</b> 다른지 - 개수가
+        /// 다른가, 이름 집합이 다른가, 순서가 다른가. 어느 쪽 목록이든 null 이면
+        /// (옛 manifest·이름 재료를 안 넘긴 호출부) 판단할 근거가 없어 null 을
+        /// 돌려준다 - 해시 불일치까지만 말하고 세부는 침묵한다.
+        /// </summary>
+        private static string? DescribeSpecsDiff(IReadOnlyList<string>? current, IReadOnlyList<string>? stored)
+        {
+            if (current == null || stored == null) return null;
+
+            if (current.Count != stored.Count)
+                return $"개수 {stored.Count}→{current.Count}";
+
+            var storedOnly = stored.Except(current, StringComparer.Ordinal).Take(3).ToList();
+            var currentOnly = current.Except(stored, StringComparer.Ordinal).Take(3).ToList();
+            if (storedOnly.Count > 0 || currentOnly.Count > 0)
+                return $"이름 다름(이전 판: {string.Join(",", storedOnly)} / 이번: {string.Join(",", currentOnly)})";
+
+            if (!stored.SequenceEqual(current, StringComparer.Ordinal))
+                return "순서 다름";
+
+            return "내용만 다름"; // 이름·순서는 같은데 파일 본문이 달라졌다.
+        }
+
+        /// <summary>
+        /// 판 하나를 읽는다. <b>이 판만 포기한다</b> — manifest 가 깨진 JSON이거나
+        /// 그 밖의 방식으로 못 읽혀도, 그 사실이 <c>TryResume</c> 의 <c>foreach</c> 를
+        /// 끊어 더 오래된 건강한 판을 스캔에서 빼면 안 된다(리뷰 발견 Important 1,
+        /// 2026-09-11). <c>ReadPriorReviews</c> 가 리뷰 파일 하나마다 개별
+        /// try/catch 로 이미 지키는 것과 같은 「부분 실패는 그 항목만 버린다」
+        /// 규칙을 판 단위에도 적용한다.
+        /// </summary>
+        private static PlanAttemptResumeCandidate? TryReadCandidate(
+            string runDir, PlanAttemptReuseKey wanted, IReadOnlyList<BatchStepPlan>? structureSteps)
+        {
+            try
+            {
+                return TryReadCandidateCore(runDir, wanted, structureSteps);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "[PlanAttemptJournal] 판을 읽지 못해 건너뜁니다 - {RunDir}", runDir);
+                return null;
+            }
+        }
+
+        private static PlanAttemptResumeCandidate? TryReadCandidateCore(
+            string runDir, PlanAttemptReuseKey wanted, IReadOnlyList<BatchStepPlan>? structureSteps)
+        {
+            var manifestPath = Path.Combine(runDir, "manifest.json");
+            if (!File.Exists(manifestPath)) return null;
+
+            var manifest = JsonSerializer.Deserialize<PlanAttemptManifest>(
+                File.ReadAllText(manifestPath), Options);
+            if (manifest?.ReuseKey == null || !manifest.ReuseKey.Equals(wanted)) return null;
+
+            // 골격
+            string? skeleton = null;
+            var skeletonAttempt = 0;
+            var skeletonPath = Path.Combine(runDir, "skeleton.md");
+            if (manifest.Skeleton != null && File.Exists(skeletonPath))
+            {
+                var text = File.ReadAllText(skeletonPath);
+                if (ComputeSha256(text) == manifest.Skeleton.Sha256)
+                {
+                    skeleton = text;
+                    skeletonAttempt = manifest.Skeleton.Attempt;
+                }
+            }
+
+            // 섹션 — DefectKind 가 있으면 재사용하지 않고 「다시 만들 것」으로 보낸다.
+            // DefectiveStepCodes 에는 네 부류가 섞인다: (1) DefectKind 가 있는 것,
+            // (2) 파일이 없는 것, (3) 해시가 안 맞는 것, (4) 목차엔 있으나 manifest에
+            // 코드 자체가 없는 것(아래 별도 루프, 2026-09-11 최종 전체 리뷰 C1).
+            // DefectiveStepKinds 는 (1)만 실제 종류를 옮기고 (2)·(3)·(4)는 null 이다 -
+            // "결함 표시는 없지만 재료가 없어 다시 만들어야 함"을 화면이 가를 수
+            // 있어야 한다(리뷰 발견, Task 2 의 ConfirmResumeAsync 가 사유를 못 보이던
+            // 근본 원인, 2026-09-11).
+            var reusable = new Dictionary<string, string>(StringComparer.Ordinal);
+            var attempts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var defective = new List<string>();
+            var defectiveKinds = new Dictionary<string, StepDefectKind?>(StringComparer.Ordinal);
+            foreach (var (code, artifact) in manifest.Steps.OrderBy(p => p.Key, StringComparer.Ordinal))
+            {
+                if (artifact.DefectKind != null)
+                {
+                    defective.Add(code);
+                    defectiveKinds[code] = artifact.DefectKind;
+                    continue;
+                }
+
+                var path = Path.Combine(runDir, "steps", code + ".md");
+                if (!File.Exists(path))
+                {
+                    defective.Add(code);
+                    defectiveKinds[code] = null;
+                    continue;
+                }
+
+                var text = File.ReadAllText(path);
+                if (ComputeSha256(text) != artifact.Sha256)
+                {
+                    defective.Add(code);
+                    defectiveKinds[code] = null;
+                    continue;
+                }
+
+                reusable[code] = text;
+                attempts[code] = artifact.Attempt;
+            }
+
+            // [2026-09-11 최종 전체 리뷰 C1] 목차가 선언하지만 manifest 에는 코드
+            // 자체가 없는 단계 - (1)~(3)과 다른 네 번째 부류다. 쿼터가 단계 생성
+            // 도중에 나면 정확히 이 모양이 남는다: 목차는 17단계인데 manifest 는
+            // 거기까지만(13단계) 기록됐다. 위 foreach 는 manifest.Steps 만 순회하므로
+            // 이 코드들은 reusable 에도 defective 에도 안 들어가 있었다 - 재사용도
+            // 재생성도 안 되고 최종 문서에서 조용히 사라지는 원인이다. "결함 표시"가
+            // 있었던 게 아니라 재료 자체가 없으므로 (2)·(3)과 같이 DefectKind는 null.
+            if (structureSteps != null)
+            {
+                foreach (var step in structureSteps)
+                {
+                    if (reusable.ContainsKey(step.Code) || defectiveKinds.ContainsKey(step.Code)) continue;
+                    defective.Add(step.Code);
+                    defectiveKinds[step.Code] = null;
+                }
+            }
+
+            // 골격도 섹션도 없으면 재개할 재료가 없다(§11-5). 위에서 새로 추가한
+            // "manifest에 없는" 코드는 이 판정과 무관하다 - reusable.Count 를 안 바꾼다.
+            if (skeleton == null && reusable.Count == 0) return null;
+
+            // 분모는 manifest 가 아니라 목차 단계 수다(설계 §3-4) - manifest 기준이면
+            // "13/13"처럼 빠진 4단계가 화면에서 안 드러난다. 목차를 못 파싱했으면
+            // (예: §11-5 단일 호출 폴백 판) manifest 기준으로 떨어진다 - 그 경우
+            // 목차 단계 수 자체를 알 방법이 없다.
+            var totalStepsInStructure = structureSteps?.Count ?? manifest.Steps.Count;
+
+            return new PlanAttemptResumeCandidate(
+                runDir, manifest.Run, manifest.StartedAt,
+                skeleton ?? string.Empty, skeletonAttempt,
+                reusable, attempts, defective, defectiveKinds,
+                ReadPriorReviews(runDir), totalStepsInStructure);
+        }
+
+        /// <summary>
+        /// 시도 번호가 큰 순으로 최근 <c>CriticFeedbackLog.MaxRetainedRounds</c> 개.
+        /// 점수로 고르지 않는다 — <c>CriticFeedbackLog.Record</c> 가 시간순으로 쌓고
+        /// 넘치면 앞에서 버리는 그 규칙과 같아야 <b>재개 전후로 동작이 같다</b>(설계 §3-3).
+        /// </summary>
+        private static IReadOnlyList<(int Attempt, ReviewResult Review)> ReadPriorReviews(string runDir)
+        {
+            var reviewsDir = Path.Combine(runDir, "reviews");
+            if (!Directory.Exists(reviewsDir)) return new List<(int, ReviewResult)>();
+
+            var result = new List<(int Attempt, ReviewResult Review)>();
+            foreach (var path in Directory.EnumerateFiles(reviewsDir, "attempt-*.json"))
+            {
+                try
+                {
+                    var doc = JsonSerializer.Deserialize<PlanAttemptReview>(File.ReadAllText(path), Options);
+                    if (doc == null || doc.Attempt <= 0) continue;
+                    result.Add((doc.Attempt, new ReviewResult
+                    {
+                        HasDefects = doc.HasDefects,
+                        FeedbackComment = doc.FeedbackComment,
+                        DefectiveSteps = doc.DefectiveSteps?.ToList() ?? new List<string>(),
+                        SkeletonDefective = doc.SkeletonDefective,
+                        StructureDefective = doc.StructureDefective,
+                        AxisThresholdForced = doc.AxisThresholdForced,
+                        ScoreAccuracy = doc.ScoreAccuracy,
+                        ScoreCrud = doc.ScoreCrud,
+                        ScoreInterface = doc.ScoreInterface,
+                        ScoreException = doc.ScoreException,
+                        ScoreReadability = doc.ScoreReadability
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "[PlanAttemptJournal] 리뷰 파일을 건너뜁니다 - {Path}", path);
+                }
+            }
+
+            return result
+                .OrderByDescending(r => r.Attempt)
+                .Take(CriticFeedbackLog.MaxRetainedRounds)
+                .ToList();
+        }
+
+        /// <summary>
+        /// 최신 판에 무엇이 저장됐는지 한 줄로. <b>manifest 에서 읽는다</b> — 짐작이 아니라
+        /// 실제 기록이다(설계 §4-4). 못 읽으면 null.
+        /// </summary>
+        public static string? DescribeLatestRun(string outputRoot, string jobName)
+        {
+            try
+            {
+                var attemptsRoot = Path.Combine(outputRoot, "Jobs", jobName, "raw", "attempts");
+                if (!Directory.Exists(attemptsRoot)) return null;
+
+                var newest = Directory.EnumerateDirectories(attemptsRoot, "run-*")
+                    .OrderByDescending(d => d, StringComparer.Ordinal).FirstOrDefault();
+                if (newest == null) return null;
+
+                var manifestPath = Path.Combine(newest, "manifest.json");
+                if (!File.Exists(manifestPath)) return null;
+
+                var manifest = JsonSerializer.Deserialize<PlanAttemptManifest>(
+                    File.ReadAllText(manifestPath), Options);
+                if (manifest == null) return null;
+
+                var healthy = manifest.Steps.Count(p => p.Value.DefectKind == null);
+                var reviews = Directory.Exists(Path.Combine(newest, "reviews"))
+                    ? Directory.EnumerateFiles(Path.Combine(newest, "reviews"), "attempt-*.json").Count()
+                    : 0;
+                var skeleton = manifest.Skeleton != null ? " · 골격" : "";
+                return $"run-{manifest.Run:D3} — 단계 {healthy}/{manifest.Steps.Count}{skeleton} · 회차 리뷰 {reviews}개";
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "[PlanAttemptJournal] 최신 판을 요약하지 못했습니다.");
+                return null;
             }
         }
 

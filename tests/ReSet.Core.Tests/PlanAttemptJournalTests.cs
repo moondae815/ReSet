@@ -1,12 +1,19 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 using Xunit;
 using ReSet.Core.Services;
 
 namespace ReSet.Core.Tests
 {
+    // Task 7 시험들이 전역 Serilog.Log.Logger 를 갈아 끼운다 - GlobalSerilogLoggerCollection.cs
+    // 의 규칙대로 이 컬렉션에 들어간다.
+    [Collection(GlobalSerilogLoggerCollection.Name)]
     public class PlanAttemptJournalTests : IDisposable
     {
         private readonly string _root =
@@ -414,6 +421,720 @@ namespace ReSet.Core.Tests
                     $"{Path.GetFileName(path)} 에 UTF-8 BOM 이 붙었다 — " +
                     "저장소 밖 도구(python json·jq)가 거부하고 섹션은 이어 붙일 때 본문 중간에 낀다.");
             }
+        }
+
+        /// <summary>
+        /// 재개 후보를 만드는 헬퍼 — 판 하나를 완성된 모양으로 써 둔다.
+        /// 골격 1개 · 건강한 섹션 2개 · 결함 섹션 1개 · 리뷰 2개.
+        /// </summary>
+        private PlanAttemptJournal WriteResumableRun(string planStructure = "## 목차 A")
+        {
+            var journal = NewJournal();
+            journal.OpenRun(planStructure, "run-start");
+            journal.RecordSkeleton(1, "골격 본문");
+            journal.RecordStepSection(1, "S01", "S01 건강");
+            journal.RecordStepSection(1, "S02", "S02 건강");
+            journal.RecordStepSection(2, "S03", "S03 미달",
+                new StepDefect(StepDefectKind.QualityFloor, "S03 (하한 미달: 이유)"));
+            journal.RecordReview(1, new ReviewResult
+            {
+                HasDefects = true, FeedbackComment = "회차 1 지적",
+                ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5,
+                ScoreException = 5, ScoreReadability = 5
+            });
+            journal.RecordReview(2, new ReviewResult
+            {
+                HasDefects = true, FeedbackComment = "회차 2 지적",
+                ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7,
+                ScoreException = 7, ScoreReadability = 7
+            });
+            return journal;
+        }
+
+        [Fact]
+        public void TryResume_FindsTheRunAndSplitsHealthyFromDefective()
+        {
+            WriteResumableRun();
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(1, candidate!.Run);
+            Assert.Equal("골격 본문", candidate.Skeleton);
+            Assert.Equal(1, candidate.SkeletonAttempt);
+
+            // DefectKind 가 있는 S03 은 재사용 대상이 아니다 — 다시 만들 목록으로 간다.
+            Assert.Equal(new[] { "S01", "S02" }, candidate.ReusableSections.Keys.OrderBy(k => k).ToArray());
+            Assert.Equal("S01 건강", candidate.ReusableSections["S01"]);
+            Assert.Equal(new[] { "S03" }, candidate.DefectiveStepCodes.ToArray());
+            // 목차를 못 파싱하는 입력("## 목차 A"엔 ```json 블록이 없다)이라 목차
+            // 단계 수를 알 수 없다 - 예전처럼 manifest 기준으로 떨어진다.
+            Assert.Equal(3, candidate.TotalStepsInStructure);
+
+            // 원래 Attempt 를 그대로 옮긴다(설계 §3-5) — 새 판에 다시 기록할 때 쓴다.
+            Assert.Equal(1, candidate.SectionAttempts["S01"]);
+
+            // 리뷰는 시도 번호가 큰 순으로 최근 3개까지(설계 §3-3).
+            Assert.Equal(new[] { 2, 1 }, candidate.PriorReviews.Select(r => r.Attempt).ToArray());
+            Assert.Equal("회차 2 지적", candidate.PriorReviews[0].Review.FeedbackComment);
+        }
+
+        /// <summary>
+        /// [PROBE A — 2026-09-11 최종 전체 리뷰 C1, 영구 시험으로 승격] 목차
+        /// (PlanStructure)가 선언하는 단계인데 manifest 에 <b>아예 없는</b> 코드는
+        /// 재사용 대상도(ReusableSections) 결함 표시도(구 DefectiveStepCodes) 아니었다
+        /// - <c>TryReadCandidateCore</c>가 <c>manifest.Steps</c>만 순회했기 때문이다.
+        ///
+        /// 리뷰어가 실물로 관측한 사슬: 쿼터는 단계 생성 도중에 나므로 <c>RecordStepSection</c>이
+        /// 그 회차까지만 쓴 채 중단된다 - manifest 에는 그 시점까지 기록된 코드만 있다.
+        /// 다음 실행에서 재개하면 목차(17단계)와 manifest(13단계)의 차이 4단계가
+        /// <b>재사용도 재생성도 안 되고</b> 최종 문서에서 조용히 사라지며, 파이프라인은
+        /// <c>Passed</c>로 끝난다(PROBE-A regenerated=[]·plan contains S03: False·
+        /// outcome=Passed).
+        ///
+        /// 이 시험은 그 사슬의 근원(TryReadCandidateCore)만 잡는다 - "재생성됐는가"는
+        /// VerificationPipelineOrchestrator.cs:4034-4036(<c>pending = steps.Where(...
+        /// defectiveSteps.Contains(...))</c>)이 DefectiveStepCodes를 그대로 pending 판정에
+        /// 쓰므로, 여기서 S03이 DefectiveStepCodes에 들어가면 그 자리가 자동으로 S03을
+        /// 다시 부른다(오케스트레이터 쪽은 별도 통합 시험이 잰다).
+        /// </summary>
+        [Fact]
+        public void TryResume_WhenStructureDeclaresAStepMissingFromTheManifest_MarksItDefectiveNotSilentlyDropped()
+        {
+            var planStructure = "## 목차\n\n```json\n{ \"Steps\": [" +
+                "{ \"Code\": \"S01\", \"Name\": \"n1\" }," +
+                "{ \"Code\": \"S02\", \"Name\": \"n2\" }," +
+                "{ \"Code\": \"S03\", \"Name\": \"n3\" }" +
+                "] }\n```";
+
+            var journal = NewJournal();
+            journal.OpenRun(planStructure, "run-start");
+            journal.RecordSkeleton(1, "골격 본문");
+            journal.RecordStepSection(1, "S01", "S01 건강");
+            journal.RecordStepSection(1, "S02", "S02 건강");
+            // S03 은 회차 도중 쿼터가 나서 한 번도 기록되지 않았다 - manifest.Steps 에
+            // 키 자체가 없다. 파일 없음(§S02 유사)·해시 불일치와는 다른 세 번째 부재다.
+
+            var candidate = NewJournal().TryResume(planStructure);
+
+            Assert.NotNull(candidate);
+            Assert.Equal(
+                new[] { "S01", "S02" }, candidate!.ReusableSections.Keys.OrderBy(k => k).ToArray());
+
+            // S03 이 다시 만들 목록에 들어가야 한다 - 여기 빠지면 S03 은 재사용도
+            // 재생성도 안 되고 최종 문서에서 사라진다.
+            Assert.Contains("S03", candidate.DefectiveStepCodes);
+            Assert.True(candidate.DefectiveStepKinds.ContainsKey("S03"));
+            // 결함 "표시"가 있었던 게 아니라 재료 자체가 없다 - null 로 구분한다
+            // (§698-700 주석과 같은 세 번째 부류).
+            Assert.Null(candidate.DefectiveStepKinds["S03"]);
+
+            // 분모는 manifest 가 아니라 목차 단계 수다 - "재사용 2/2"가 아니라
+            // "2/3"이어야 사람이 보고 하나가 빠졌다는 것을 알 수 있다(설계 §3-4).
+            Assert.Equal(3, candidate.TotalStepsInStructure);
+        }
+
+        // 일곱 항목 각각을 재야 한다 — 하나라도 안 재면 그 항목은 무방비다(설계 §5-1).
+        // ContractVersion 은 const 라 이 Theory 로 못 바꾼다 — 바로 아래 별도 시험이 맡는다.
+        [Theory]
+        [InlineData("planStructure")]
+        [InlineData("specsSha")]
+        [InlineData("provider")]
+        [InlineData("model")]
+        [InlineData("effort")]
+        [InlineData("targetLanguage")]
+        public void TryResume_WhenAnyReuseKeyItemDiffers_FindsNothing(string differing)
+        {
+            WriteResumableRun();
+
+            var journal = PlanAttemptJournal.Create(
+                _root, "Job_Test",
+                differing == "provider" ? "OtherProvider" : "OpenAI",
+                differing == "model" ? "other-model" : "gpt-4",
+                differing == "effort" ? "low" : "high",
+                differing == "targetLanguage" ? "Java" : "C#",
+                differing == "specsSha" ? "otherspecshash" : "specshash");
+
+            var candidate = journal.TryResume(differing == "planStructure" ? "## 다른 목차" : "## 목차 A");
+
+            Assert.Null(candidate);
+        }
+
+        /// <summary>
+        /// 일곱 번째 항목. <c>PlanAttemptJournal.ContractVersion</c> 은 <c>const</c> 라
+        /// 위 Theory 로 바꿀 수 없다 — manifest 를 직접 고쳐 「옛 계약으로 쓰인 판」을 만든다.
+        ///
+        /// <b>이 시험이 없으면 일곱 번째 항목이 무방비다.</b> 계약 버전이 올라간 뒤에도
+        /// 옛 판을 주워 와, 새 규약을 안 지키는 섹션이 문서에 섞인다.
+        /// </summary>
+        [Fact]
+        public void TryResume_WhenTheContractVersionDiffers_FindsNothing()
+        {
+            var journal = WriteResumableRun();
+            var manifestPath = Path.Combine(journal.CurrentRunDirectory!, "manifest.json");
+
+            var text = File.ReadAllText(manifestPath);
+            var bumped = text.Replace(
+                $"\"ContractVersion\": {PlanAttemptJournal.ContractVersion}",
+                $"\"ContractVersion\": {PlanAttemptJournal.ContractVersion + 1}");
+            Assert.NotEqual(text, bumped);          // 치환이 실제로 일어났는지 먼저 확인한다
+            File.WriteAllText(manifestPath, bumped);
+
+            Assert.Null(NewJournal().TryResume("## 목차 A"));
+        }
+
+        // 해시가 안 맞는 항목은 버린다 — 사람이 손댔거나 반쯤 쓰였다는 뜻이다(설계 §3-2).
+        [Fact]
+        public void TryResume_WhenASectionsHashDoesNotMatch_DropsThatSectionOnly()
+        {
+            var journal = WriteResumableRun();
+            var dir = journal.CurrentRunDirectory!;
+            File.WriteAllText(Path.Combine(dir, "steps", "S01.md"), "누군가 손댄 본문");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.False(candidate!.ReusableSections.ContainsKey("S01"));
+            Assert.True(candidate.ReusableSections.ContainsKey("S02"));
+        }
+
+        // 골격도 섹션도 없는 판은 재개 불가다(설계 §11-5 — 단일 호출 폴백 판).
+        [Fact]
+        public void TryResume_WhenTheRunHasNoSkeletonAndNoSections_FindsNothing()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차 A", "run-start");
+            journal.RecordReview(1, new ReviewResult { HasDefects = false });
+
+            Assert.Null(NewJournal().TryResume("## 목차 A"));
+        }
+
+        // [잔여 Minor ③ — 2026-09-11] §11-5 배제(skeleton == null && reusable.Count == 0)를
+        // "&& defective.Count == 0"으로 변이시켜도 기존 시험은 잡지 못했다 — "## 목차 A"는
+        // ```json 블록이 없어 BatchStepPlanParser.TryParse 가 null 을 돌려주고, 그러면
+        // TryReadCandidateCore의 C1 루프(698-713행)가 아예 안 돌아 defective 가 항상 0으로
+        // 남는다. 이 시험은 목차가 실제로 파싱되고(구조 단계 코드가 있고) manifest 에는
+        // 그 코드가 하나도 기록된 적이 없는 판을 만든다 — RecordSkeleton·RecordStepSection을
+        // 한 번도 부르지 않으므로 reusable.Count == 0·skeleton == null 인데, C1 루프가
+        // 목차의 세 단계를 전부 defective 로 채워 defective.Count == 3 이다. 변이된 조건이면
+        // "&& defective.Count == 0"이 거짓이 되어 이 경우를 지나쳐 버리므로 TryResume 이
+        // null 이 아닌 후보를 낸다 — 재사용할 재료가 하나도 없는데 재개 후보를 내놓는
+        // 회귀다. 현재 코드는 defective.Count 를 안 보므로 이 경우에도 null 을 낸다.
+        [Fact]
+        public void TryResume_WhenStructureParsesButNothingWasEverRecorded_FindsNothingEvenThoughStepsAreDefective()
+        {
+            var planStructure = "## 목차\n\n```json\n{ \"Steps\": [" +
+                "{ \"Code\": \"S01\", \"Name\": \"n1\" }," +
+                "{ \"Code\": \"S02\", \"Name\": \"n2\" }," +
+                "{ \"Code\": \"S03\", \"Name\": \"n3\" }" +
+                "] }\n```";
+
+            var journal = NewJournal();
+            journal.OpenRun(planStructure, "run-start");
+            // 골격도, 어떤 단계 섹션도 한 번도 기록하지 않는다 — manifest.Steps 는 비어
+            // 있고(reusable.Count == 0·skeleton == null), 그런데 C1 루프가 목차의 세
+            // 단계를 전부 defective 로 채운다(defective.Count == 3).
+
+            var candidate = NewJournal().TryResume(planStructure);
+
+            Assert.Null(candidate);
+        }
+
+        [Fact]
+        public void TryResume_WhenSeveralRunsMatch_PicksTheNewest()
+        {
+            WriteResumableRun();                 // run-001
+            var second = NewJournal();
+            second.OpenRun("## 목차 A", "run-start");
+            second.RecordSkeleton(1, "둘째 판 골격");
+            second.RecordStepSection(1, "S01", "둘째 판 S01");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.Equal(2, candidate!.Run);
+            Assert.Equal("둘째 판 골격", candidate.Skeleton);
+        }
+
+        [Fact]
+        public void TryResume_WhenNoRunExists_FindsNothing()
+        {
+            Assert.Null(NewJournal().TryResume("## 목차 A"));
+        }
+
+        // [대칭 훑기] 계획서가 준 시험은 섹션의 Sha256 불일치만 잰다(위 시험). 같은 규칙이
+        // 골격에도 §3-2 대로 적용돼야 한다 — 안 재면 골격만 손댔을 때 무방비다. 골격이
+        // 버려져도 건강한 섹션이 있으면 후보는 여전히 non-null 이어야 한다(§11-5 는
+        // "둘 다 없을 때"만 제외한다).
+        [Fact]
+        public void TryResume_WhenTheSkeletonsHashDoesNotMatch_DropsTheSkeletonButKeepsSections()
+        {
+            var journal = WriteResumableRun();
+            var dir = journal.CurrentRunDirectory!;
+            File.WriteAllText(Path.Combine(dir, "skeleton.md"), "누군가 손댄 골격");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(string.Empty, candidate!.Skeleton);
+            Assert.Equal(0, candidate.SkeletonAttempt);
+            Assert.True(candidate.ReusableSections.ContainsKey("S01"));
+        }
+
+        // [대칭 훑기] 골격 파일이 통째로 사라진 경우(해시 불일치와 다른 경로 —
+        // File.Exists 분기)도 같은 결과여야 한다. steps 쪽은 이미
+        // RecordStepSection_UnsafeCode 류로 파일 부재를 다루지만 TryResume 경로에서는
+        // 안 재고 있었다.
+        [Fact]
+        public void TryResume_WhenTheSkeletonFileIsMissing_DropsTheSkeletonButKeepsSections()
+        {
+            var journal = WriteResumableRun();
+            var dir = journal.CurrentRunDirectory!;
+            File.Delete(Path.Combine(dir, "skeleton.md"));
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(string.Empty, candidate!.Skeleton);
+            Assert.True(candidate.ReusableSections.ContainsKey("S01"));
+        }
+
+        // [대칭 훑기] 골격이 아예 기록된 적 없어도(manifest.Skeleton == null) 건강한
+        // 섹션만으로 재개 후보가 되어야 한다 — §11-5 는 "골격도 섹션도 없을 때"만
+        // 제외하지 "골격이 없을 때"를 제외하지 않는다. 주어진 시험들은 골격·섹션이
+        // 둘 다 있거나(WriteResumableRun) 둘 다 없는 경우만 쟀다.
+        [Fact]
+        public void TryResume_WhenOnlySectionsExistWithNoSkeletonEverRecorded_StillFindsTheRun()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차 A", "run-start");
+            journal.RecordStepSection(1, "S01", "S01 건강");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(string.Empty, candidate!.Skeleton);
+            Assert.Equal(0, candidate.SkeletonAttempt);
+            Assert.True(candidate.ReusableSections.ContainsKey("S01"));
+        }
+
+        // [대칭 훑기] 설계 §3-3 은 "시도 번호가 큰 순으로 최근 3개"라고 못박고
+        // CriticFeedbackLog.MaxRetainedRounds(3) 와 같은 상한이어야 한다고 적었다.
+        // 주어진 시험은 리뷰 2개만 써서 상한에 못 미친다 — 4개를 쌓아 3개로 잘리는지,
+        // 그리고 잘리는 것이 "오래된" 1회차인지(최근 3개 = 2,3,4)를 직접 잰다.
+        [Fact]
+        public void TryResume_WhenMoreReviewsThanMaxRetainedRoundsExist_KeepsOnlyTheMostRecentThree()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차 A", "run-start");
+            journal.RecordStepSection(1, "S01", "S01 건강");
+            for (var attempt = 1; attempt <= 4; attempt++)
+            {
+                journal.RecordReview(attempt, new ReviewResult
+                {
+                    HasDefects = true, FeedbackComment = $"회차 {attempt} 지적",
+                    ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5,
+                    ScoreException = 5, ScoreReadability = 5
+                });
+            }
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(CriticFeedbackLog.MaxRetainedRounds, candidate!.PriorReviews.Count);
+            Assert.Equal(new[] { 4, 3, 2 }, candidate.PriorReviews.Select(r => r.Attempt).ToArray());
+        }
+
+        // [FIX ROUND 1 - Important 1] 최신 판의 manifest.json 이 깨진 JSON 이어도
+        // TryResume 은 그 판만 포기해야 한다 — foreach 전체가 끊겨 더 오래된 건강한
+        // 판까지 못 찾으면 안 된다. run-002(깨진 manifest)가 run-001(재사용 가능)보다
+        // 최신이라 스캔 순서상 먼저 걸린다.
+        [Fact]
+        public void TryResume_WhenTheNewestRunsManifestIsCorrupt_StillFindsAnOlderHealthyRun()
+        {
+            var journal = WriteResumableRun();               // run-001, 재사용 가능
+            var attemptsRoot = Path.GetDirectoryName(journal.CurrentRunDirectory!)!;
+            var corruptRunDir = Path.Combine(attemptsRoot, "run-002");
+            Directory.CreateDirectory(corruptRunDir);
+            File.WriteAllText(Path.Combine(corruptRunDir, "manifest.json"), "{ 이건 유효한 JSON 이 아니다");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(1, candidate!.Run);
+            Assert.Equal("골격 본문", candidate.Skeleton);
+        }
+
+        // [FIX ROUND 1 - Minor] ReadPriorReviews 의 "리뷰 파일 하나가 깨져도 나머지가
+        // 산다"는 동작(파일별 try/catch)은 코드로는 맞았지만 이를 직접 재는 시험이
+        // 없었다 - 무방비였다. attempt-01.json 을 깨뜨려도 attempt-02.json 의 리뷰는
+        // 남아야 한다.
+        [Fact]
+        public void TryResume_WhenOneReviewFileIsCorrupt_TheOtherReviewsSurvive()
+        {
+            var journal = WriteResumableRun();                // reviews: attempt-01, attempt-02
+            var reviewsDir = Path.Combine(journal.CurrentRunDirectory!, "reviews");
+            File.WriteAllText(Path.Combine(reviewsDir, "attempt-01.json"), "{ 이건 유효한 JSON 이 아니다");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Single(candidate!.PriorReviews);
+            Assert.Equal(2, candidate.PriorReviews[0].Attempt);
+            Assert.Equal("회차 2 지적", candidate.PriorReviews[0].Review.FeedbackComment);
+        }
+
+        // [FIX ROUND 1 - Task 2 리뷰가 지목한 근본 원인] 설계 §3-4 는 화면에 다시 만들
+        // 단계의 "사유"까지 보이라고 요구한다. DefectKind 가 manifest 에 실제로 있는
+        // 단계(S03·QualityFloor)는 그 종류가 그대로 옮겨져야 한다.
+        [Fact]
+        public void TryResume_DefectiveStepKinds_CarriesTheManifestsDefectKindForActualDefects()
+        {
+            WriteResumableRun();       // S03 은 QualityFloor 로 기록된다
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.True(candidate!.DefectiveStepKinds.ContainsKey("S03"));
+            Assert.Equal(StepDefectKind.QualityFloor, candidate.DefectiveStepKinds["S03"]);
+        }
+
+        // DefectiveStepCodes 에는 세 부류가 섞인다: (1) DefectKind 가 있는 것,
+        // (2) 파일이 없는 것, (3) 해시가 안 맞는 것. 뒤의 둘은 결함 "표시"가 없었을
+        // 뿐 재료가 없어 다시 만들어야 하므로 DefectiveStepKinds 에서 null 이어야
+        // 한다 — 화면이 "표시된 결함"과 "재료 없음"을 가를 수 있어야 한다.
+        [Fact]
+        public void TryResume_DefectiveStepKinds_IsNullForStepsDroppedByMissingFileOrHashMismatch()
+        {
+            var journal = WriteResumableRun();
+            var dir = journal.CurrentRunDirectory!;
+            File.WriteAllText(Path.Combine(dir, "steps", "S01.md"), "누군가 손댄 본문"); // 해시 불일치
+            File.Delete(Path.Combine(dir, "steps", "S02.md"));                            // 파일 없음
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(new[] { "S01", "S02", "S03" }, candidate!.DefectiveStepCodes.OrderBy(c => c).ToArray());
+            Assert.True(candidate.DefectiveStepKinds.ContainsKey("S01"));
+            Assert.Null(candidate.DefectiveStepKinds["S01"]);
+            Assert.True(candidate.DefectiveStepKinds.ContainsKey("S02"));
+            Assert.Null(candidate.DefectiveStepKinds["S02"]);
+            Assert.Equal(StepDefectKind.QualityFloor, candidate.DefectiveStepKinds["S03"]);
+        }
+
+        // 설계 §4-4 형태("단계 h/n · 골격 · 회차 리뷰 k개")가 실제 값으로 채워지는지.
+        // h(healthy=2)·n(total=4)·k(reviews=3)을 모두 다른 값으로 seed한다 - 셋이
+        // 같으면 서식 안의 자리를 바꿔도(예: healthy와 reviews를 맞바꿔도) 이 시험이
+        // 못 잡는다.
+        [Fact]
+        public void DescribeLatestRun_HealthyRun_SummarizesStepsSkeletonAndReviews()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+
+            journal.RecordSkeleton(1, "골격 본문");
+            journal.RecordStepSection(1, "S01", "S01 건강");
+            journal.RecordStepSection(1, "S02", "S02 건강");
+            journal.RecordStepSection(
+                1, "S03", "### S03\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다.",
+                new StepDefect(StepDefectKind.GenerationFailed, "S03 (생성 실패)"));
+            journal.RecordStepSection(
+                1, "S04", "### S04\n\n> [!WARNING]\n> 본문 없음 - 하한 미달",
+                new StepDefect(StepDefectKind.QualityFloor, "S04 (하한 미달)"));
+            journal.RecordReview(1, new ReviewResult { HasDefects = true, DefectiveSteps = { "S03", "S04" } });
+            journal.RecordReview(2, new ReviewResult { HasDefects = true, DefectiveSteps = { "S04" } });
+            journal.RecordReview(3, new ReviewResult { HasDefects = false });
+
+            var summary = PlanAttemptJournal.DescribeLatestRun(_root, "Job_Test");
+
+            Assert.NotNull(summary);
+            Assert.Contains("run-001", summary);
+            Assert.Contains("2/4", summary);          // healthy=2, total=4
+            Assert.Contains("골격", summary);
+            Assert.Contains("회차 리뷰 3개", summary); // reviews=3
+        }
+
+        // 다섯 갈래 모두 null - 짐작이 아니라 읽지 못하면 조용히 포기한다(설계 §4-4).
+        [Theory]
+        [InlineData("no-attempts-directory")]
+        [InlineData("no-run-directory")]
+        [InlineData("no-manifest-file")]
+        [InlineData("manifest-deserializes-to-null")]
+        [InlineData("corrupt-json-throws")]
+        public void DescribeLatestRun_MissingOrBrokenArtifacts_ReturnsNull(string scenario)
+        {
+            var jobName = $"Job_{scenario}";
+            var attemptsRoot = Path.Combine(_root, "Jobs", jobName, "raw", "attempts");
+
+            switch (scenario)
+            {
+                case "no-attempts-directory":
+                    // Jobs/{jobName}/raw/attempts 자체를 만들지 않는다.
+                    break;
+                case "no-run-directory":
+                    Directory.CreateDirectory(attemptsRoot);
+                    break;
+                case "no-manifest-file":
+                    Directory.CreateDirectory(Path.Combine(attemptsRoot, "run-001"));
+                    break;
+                case "manifest-deserializes-to-null":
+                    {
+                        var runDir = Path.Combine(attemptsRoot, "run-001");
+                        Directory.CreateDirectory(runDir);
+                        File.WriteAllText(Path.Combine(runDir, "manifest.json"), "null");
+                        break;
+                    }
+                case "corrupt-json-throws":
+                    {
+                        var runDir = Path.Combine(attemptsRoot, "run-001");
+                        Directory.CreateDirectory(runDir);
+                        File.WriteAllText(Path.Combine(runDir, "manifest.json"), "{ 이것은 JSON 이 아니다");
+                        break;
+                    }
+            }
+
+            var result = PlanAttemptJournal.DescribeLatestRun(_root, jobName);
+
+            Assert.Null(result);
+        }
+
+        // ---------------------------------------------------------------
+        // Task 7 - 재개가 조용히 안 되는 것을 말하게 한다
+        // ---------------------------------------------------------------
+
+        // 판이 있는데 ReuseKey 가 안 맞으면 지금까지는 완전히 조용했다(2026-09-11
+        // 실물 실패 - POQSettleBatch7-resume). 어느 항이 어긋났는지 남겨야 한다.
+        [Fact]
+        public void TryResume_WhenReuseKeyMismatches_LogsWhichItemsDifferedForTheNewestRun()
+        {
+            WriteResumableRun(); // run-001 - Model=gpt-4, SpecsSha256=specshash
+
+            var mismatched = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "other-model", "high", "C#", "other-specshash");
+
+            var lines = CaptureLogs(() => mismatched.TryResume("## 목차 A"));
+
+            var line = Assert.Single(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("SpecsSha256", line);
+            Assert.Contains("Model", line);
+            // 안 바뀐 항목은 소음이니 안 실려야 한다.
+            Assert.DoesNotContain("TargetLanguage", line);
+            Assert.DoesNotContain("Provider", line);
+        }
+
+        // 판이 아예 없으면(첫 실행) 조용해야 한다 - 매 실행 경고는 소음이다.
+        [Fact]
+        public void TryResume_WhenNoRunExists_LogsNothing()
+        {
+            var lines = CaptureLogs(() => NewJournal().TryResume("## 목차 A"));
+
+            Assert.DoesNotContain(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+        }
+
+        // [대칭 훑기 - 반대 방향] 일곱 항목이 전부 맞아 후보가 잡히면 이 진단이
+        // 발화하면 안 된다 - 발화하면 정상 재개마다 경고가 뜬다.
+        [Fact]
+        public void TryResume_WhenReuseKeyFullyMatches_LogsNothing()
+        {
+            WriteResumableRun();
+
+            var lines = CaptureLogs(() => NewJournal().TryResume("## 목차 A"));
+
+            Assert.DoesNotContain(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+        }
+
+        // [대칭 훑기] ReuseKey 불일치와 같은 모양의 다른 자리 - 가장 최근 판의
+        // manifest.json 자체가 깨져 있으면 지금까지는 TryReadCandidate 의 개별
+        // Log.Debug 로 그 판만 건너뛰고(§설계 의도), 최종적으로 후보가 없으면
+        // 역시 조용했다. ReuseKey 를 비교할 수조차 없다는 사실도 말해야 한다.
+        [Fact]
+        public void TryResume_WhenNewestRunManifestIsCorrupt_LogsThatItCouldNotBeRead()
+        {
+            var journal = WriteResumableRun();
+            File.WriteAllText(
+                Path.Combine(journal.CurrentRunDirectory!, "manifest.json"), "{ 이것은 JSON 이 아니다");
+
+            var lines = CaptureLogs(() => NewJournal().TryResume("## 목차 A"));
+
+            var line = Assert.Single(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("run-001", line);
+            Assert.Contains("읽지 못했습니다", line);
+        }
+
+        // 판이 여럿이면 전부 쏟아내지 않는다 - 가장 최근 판 하나만 진단하고,
+        // 몇 개를 봤는지는 남긴다.
+        [Fact]
+        public void TryResume_WhenSeveralRunsAllMismatch_DiagnosesOnlyTheNewestRun()
+        {
+            // run-001 은 Model 이 어긋나고, run-002(최신)는 Effort 가 어긋난다 - 쿼리
+            // 본인과 둘 다 다르지만 이유가 서로 달라야 "가장 최근 것만" 진단됨을 잰다.
+            var first = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "model-run1", "high", "C#", "specshash");
+            first.OpenRun("## 목차 A", "run-start");
+            first.RecordSkeleton(1, "run-001 골격");
+            first.RecordStepSection(1, "S01", "run-001 S01");
+
+            var second = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "model-query", "low", "C#", "specshash");
+            second.OpenRun("## 목차 A", "run-start");
+            second.RecordSkeleton(1, "run-002 골격");
+            second.RecordStepSection(1, "S01", "run-002 S01");
+
+            var query = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "model-query", "high", "C#", "specshash");
+
+            var lines = CaptureLogs(() => query.TryResume("## 목차 A"));
+
+            var line = Assert.Single(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("run-002", line);              // 가장 최근 판
+            Assert.Contains("Effort", line);                // run-002 가 어긋난 항목
+            Assert.DoesNotContain("model-run1", line);       // run-001 항목(Model)은 안 쏟아낸다
+            Assert.Contains("판 2개", line);                 // 판 몇 개를 봤는지
+        }
+
+        // SpecsSha256 이 다를 때, 파일 이름 목록이 양쪽에 다 있으면 "무엇이" 다른지도
+        // 말해야 한다(§Step 2) - 여기서는 개수 차이를 잰다.
+        [Fact]
+        public void TryResume_WhenSpecsSha256DiffersAndFileNamesAreKnown_ReportsCountDifference()
+        {
+            var withNames = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "gpt-4", "high", "C#",
+                PlanAttemptJournal.ComputeSha256("A\nbodyA\nB\nbodyB"),
+                new[] { "Schema.A", "Schema.B" });
+            withNames.OpenRun("## 목차 A", "run-start");
+            withNames.RecordSkeleton(1, "골격");
+            withNames.RecordStepSection(1, "S01", "S01 본문");
+
+            var fewerSpecs = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "gpt-4", "high", "C#",
+                PlanAttemptJournal.ComputeSha256("A\nbodyA"),
+                new[] { "Schema.A" });
+
+            var lines = CaptureLogs(() => fewerSpecs.TryResume("## 목차 A"));
+
+            var line = Assert.Single(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("SpecsSha256", line);
+            Assert.Contains("개수", line);
+            Assert.Contains("2", line);
+            Assert.Contains("1", line);
+        }
+
+        // 이름 집합 자체가 다르면(개수는 같아도) "개수" 대신 "이름 다름"을 말해야
+        // 한다.
+        [Fact]
+        public void TryResume_WhenSpecsSha256DiffersWithSameCountButDifferentNames_ReportsNameDifference()
+        {
+            var original = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "gpt-4", "high", "C#",
+                PlanAttemptJournal.ComputeSha256("A\nbodyA"),
+                new[] { "Schema.A" });
+            original.OpenRun("## 목차 A", "run-start");
+            original.RecordSkeleton(1, "골격");
+            original.RecordStepSection(1, "S01", "S01 본문");
+
+            var renamed = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "gpt-4", "high", "C#",
+                PlanAttemptJournal.ComputeSha256("Z\nbodyZ"),
+                new[] { "Schema.Z" });
+
+            var lines = CaptureLogs(() => renamed.TryResume("## 목차 A"));
+
+            var line = Assert.Single(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("이름", line);
+            Assert.Contains("Schema.A", line);
+            Assert.Contains("Schema.Z", line);
+        }
+
+        // 옛 manifest(SpecsFileNames 필드가 없던 시절)를 읽어도 깨지면 안 된다 -
+        // run-001 실물 회귀 표본과 같은 모양(필드 자체가 JSON에 없음)을 흉내 낸다.
+        [Fact]
+        public void TryResume_WhenStoredManifestHasNoSpecsFileNames_StillDiagnosesWithoutThrowing()
+        {
+            var journal = NewJournal(); // specsSha256="specshash"
+            journal.OpenRun("## 목차 A", "run-start");
+            journal.RecordSkeleton(1, "골격");
+            journal.RecordStepSection(1, "S01", "S01 본문");
+
+            // 옛 manifest 는 SpecsFileNames 필드가 JSON에 아예 없었다(이 필드를 도입하기
+            // 전 판) - 손으로 지워 그 모양을 흉내 낸다. System.Text.Json 은 없는 필드를
+            // null 로 두고 역직렬화해야 한다(전제).
+            var manifestPath = Path.Combine(journal.CurrentRunDirectory!, "manifest.json");
+            var withField = JsonDocument.Parse(File.ReadAllText(manifestPath)).RootElement;
+            var withoutField = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            foreach (var prop in withField.EnumerateObject())
+            {
+                if (prop.Name == "SpecsFileNames") continue;
+                withoutField[prop.Name] = prop.Value.Clone();
+            }
+            var legacyJson = JsonSerializer.Serialize(withoutField);
+            Assert.DoesNotContain("SpecsFileNames", legacyJson); // 전제 확인
+            File.WriteAllText(manifestPath, legacyJson);
+
+            var mismatched = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "gpt-4", "high", "C#", "otherspecshash",
+                new[] { "Schema.Current" });
+
+            List<string>? lines = null;
+            var ex = Record.Exception(() => lines = CaptureLogs(() => mismatched.TryResume("## 목차 A")));
+            Assert.Null(ex);
+
+            var line = Assert.Single(lines!, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("SpecsSha256", line);
+        }
+
+        // 실물 회귀 표본 - output/Jobs/POQSettleBatch7/raw/attempts/run-001/manifest.json 을
+        // 그대로 읽어도(SpecsFileNames 필드가 없다) TryResume 이 던지지 않아야 한다.
+        //
+        // [2026-09-11 최종 전체 리뷰 I2] 예전에는 이 시험이 사설 FindRepoRoot()(아래,
+        // .git 을 디렉터리로만 판정)를 썼다. 워크트리에서 .git 은 파일이라
+        // Directory.Exists 가 false 를 돌려주고, 부모로 계속 올라가 저장소 밖에서
+        // 던진다 - :1027 이 던지면 위 "코퍼스 없으면 건너뛴다" 가드에 도달조차
+        // 못 한다. CorpusPaths.RepoRoot() 는 애초에 .git 을 안 본다 - ReSet.slnx
+        // (모든 워크트리에 있는 커밋된 파일)로 잡는다(CorpusPaths 클래스 주석,
+        // 2026-09-07 재정박). 새 판정기를 짓지 않고 이 저장소의 기존 수단을 쓴다.
+        [SkippableFact]
+        public void TryResume_ReadsTheRealPOQSettleBatch7Manifest_WithoutThrowing()
+        {
+            var fixturePath = Path.Combine(
+                CorpusPaths.RepoRoot(), "output", "Jobs", "POQSettleBatch7", "raw", "attempts", "run-001", "manifest.json");
+            // 조용한 return 이 아니라 Skip 이어야 한다 - 이 저장소는 「건너뜀 0」을
+            // 유일한 탐지기로 쓴다(CorpusSkip.Reason). return 은 그 탐지기에 안 걸려
+            // 코퍼스가 없어도 "통과"로 보인다.
+            Skip.If(!File.Exists(fixturePath), CorpusSkip.Reason);
+
+            var runDir = Path.Combine(_root, "Jobs", "Job_Real", "raw", "attempts", "run-001");
+            Directory.CreateDirectory(runDir);
+            File.Copy(fixturePath, Path.Combine(runDir, "manifest.json"));
+
+            var journal = PlanAttemptJournal.Create(
+                _root, "Job_Real", "claude-cli", "claude-sonnet-5", "high", "C#", "다른-specs-해시");
+
+            var ex = Record.Exception(() => CaptureLogs(() => journal.TryResume("## 다른 목차")));
+            Assert.Null(ex);
+        }
+
+        private static List<string> CaptureLogs(Action action)
+        {
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration()
+                .MinimumLevel.Verbose().WriteTo.Sink(sink).CreateLogger();
+            try
+            {
+                action();
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            return sink.Messages;
+        }
+
+        private sealed class CapturingSink : ILogEventSink
+        {
+            public List<string> Messages { get; } = new();
+            public void Emit(LogEvent logEvent) => Messages.Add(logEvent.RenderMessage());
         }
     }
 }

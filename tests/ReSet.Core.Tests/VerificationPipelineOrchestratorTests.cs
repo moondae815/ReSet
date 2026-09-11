@@ -1923,6 +1923,30 @@ namespace ReSet.Core.Tests
             _userInteraction.Received(1).NotifyValidationSuccess("Job_Test");
         }
 
+        /// <summary>
+        /// 쿼터 소진은 실패가 아니다 — 사유가 결과에 실려 CLI 까지 가야 「이어서 하십시오」를
+        /// 말할 수 있다(설계 §4-3).
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenQuotaIsExhausted_ResultCarriesTheAbortReason()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns<AiResult>(_ => throw new AiCallFailedException(
+                    "쿼터 소진", new Exception("한도"), 1, AiRetryVerdict.Exhausted));
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            Assert.Null(result.Plan);
+            Assert.Equal(PipelineAbortReason.QuotaExhausted, result.AbortReason);
+        }
+
         [Fact]
         public async Task RunConsolidatedPipelineAsync_L1ValidationError_AttemptsSelfCorrection()
         {
@@ -2604,6 +2628,325 @@ namespace ReSet.Core.Tests
             Assert.Equal(1, result.Coverage!.StepsTotal);
             Assert.Equal(1, result.Coverage.StepsVerified);
             Assert.False(result.Coverage.NeedsHumanAttention);
+        }
+
+        /// <summary>
+        /// 재개가 실제로 비용을 줄였다는 <b>유일한 직접 증거</b>는 AI 호출 수다(설계 §5-2).
+        /// 재사용한 단계는 GenerateBatchStepSectionAsync가 불리지 않아야 하고,
+        /// 브레인스토밍·목차 생성도 통째로 건너뛰어야 한다.
+        ///
+        /// [계획서 수정] 원 계획의 두 가지가 빠져 있었다:
+        /// (1) seed의 Effort("high")가 orchestrator 생성자의 consolidatorEffort("default")와
+        /// 달라 ReuseKey가 절대 맞지 않았다 - orchestrator가 실제로 쓰는
+        /// _consolidatorEffort와 seed를 맞췄다.
+        /// (2) seed.OpenRun은 attempts/run-001/manifest.json만 쓰고 raw/PlanStructure.md는
+        /// 쓰지 않는다 - Step 4가 읽는 파일은 그것이므로, 여기서 직접 써 둬야
+        /// 재개 판정 코드가 후보를 찾을 수 있다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenResumeIsApproved_OnlyDefectiveStepsAreRegenerated()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n" +
+                "    { \"Code\": \"S01\", \"Name\": \"첫\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] },\n" +
+                "    { \"Code\": \"S02\", \"Name\": \"둘\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T2\"], \"ErrorCodes\": [\"-2\"] }\n" +
+                "  ]\n}\n```";
+            var planStructure = "## 목차\n" + stepsJson;
+
+            // 1) 이어서 할 판을 미리 써 둔다 - S01은 건강, S02는 하한 미달.
+            //    Effort는 orchestrator가 실제로 쓰는 consolidatorEffort("default")와
+            //    맞춘다 - 다르면 ReuseKey가 안 맞아 재개 후보를 영영 못 찾는다.
+            var seed = PlanAttemptJournal.Create(
+                _consolidatedOutputRoot, "Job_Test", "OpenAI", "gpt-4", "default", "C#",
+                PlanAttemptJournal.ComputeSha256("dbo.USP_Spec1\ncontent1"));
+            seed.OpenRun(planStructure, "run-start");
+            seed.RecordSkeleton(1, SkeletonMarkdown);
+            seed.RecordStepSection(1, "S01", HealthyStepSection("S01", "dbo.T1", "-1"));
+            seed.RecordStepSection(1, "S02", "## S02\n(하한 미달)",
+                new StepDefect(StepDefectKind.QualityFloor, "S02 (하한 미달)"));
+
+            // 재개 판정은 raw/PlanStructure.md에서 목차를 읽는다(설계 §3-1 정정) -
+            // seed.OpenRun은 attempts/ 디렉터리만 쓰므로 이 파일은 직접 만들어야 한다.
+            var rawDir = Path.Combine(_consolidatedOutputRoot, "Jobs", "Job_Test", "raw");
+            Directory.CreateDirectory(rawDir);
+            File.WriteAllText(Path.Combine(rawDir, "PlanStructure.md"), planStructure);
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.ModelName.Returns("gpt-4");
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = planStructure });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var regenerated = new List<string>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    regenerated.Add(step.Code);
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var interaction = Substitute.For<IVerificationUserInteraction>();
+            interaction.ConfirmResumeAsync("Job_Test", Arg.Any<PlanAttemptResumeCandidate>())
+                .Returns(Task.FromResult(true));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                interaction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                new List<(string, string)> { ("dbo.USP_Spec1", "content1") },
+                "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // S01은 재사용됐으므로 AI가 안 불린다. S02만 다시 만든다.
+            Assert.Equal(new[] { "S02" }, regenerated.Distinct().ToArray());
+
+            // 브레인스토밍·목차 생성 AI 호출 둘도 건너뛰어야 한다(§5-2가 재는 것은
+            // 단계 호출만이 아니다 - 재개의 값 전체가 이 둘에도 걸려 있다).
+            await aiService.DidNotReceive().BrainstormBatchPlanAsync(
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await aiService.DidNotReceive().DraftBatchPlanStructureAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+
+            // 골격도 재사용돼야 한다(§5-2) - lastSkeletonResult를 함께 복원해 두지
+            // 않으면 GenerateBySplitAsync의 reuseSkeleton 판정(previousSkeleton != null
+            // && previousSkeletonResult != null)이 성립하지 않아 골격이 재개마다 매번
+            // 다시 생성된다. 실측(리뷰 발견): lastSkeletonResult 대입만 지우면 이
+            // 단언이 없는 채로는 시험이 계속 초록이었다 - 단계 재사용 단언만으로는
+            // 골격 한 자리가 새는 것을 못 잡는다.
+            await aiService.DidNotReceive().GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>());
+
+            // 새 판이 열렸고 재사용한 것이 거기 다시 기록됐다(설계 §3-5).
+            var runs = Directory.GetDirectories(
+                Path.Combine(_consolidatedOutputRoot, "Jobs", "Job_Test", "raw", "attempts"), "run-*");
+            Assert.Equal(2, runs.Length);
+            var newest = runs.OrderBy(d => d, StringComparer.Ordinal).Last();
+            var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(newest, "manifest.json"))).RootElement;
+            Assert.Equal("run-001", manifest.GetProperty("ResumedFrom").GetString());
+            Assert.Equal(1, manifest.GetProperty("Steps").GetProperty("S01").GetProperty("Attempt").GetInt32());
+        }
+
+        /// <summary>
+        /// [PROBE A, 오케스트레이터 층 — 2026-09-11 최종 전체 리뷰 C1] 위 시험과 다른
+        /// 것: S02(결함 표시)가 아니라 <b>manifest.Steps 에 코드 자체가 없는 S03</b>를
+        /// 다룬다. 쿼터는 단계 생성 도중에 나므로, 목차가 3단계(S01·S02·S03)를
+        /// 선언해도 <c>RecordStepSection</c>이 S03까지 못 미치고 중단되면 manifest 에는
+        /// S01·S02까지만 있다. 고치기 전 코드는 이 코드를 재사용 대상에도 다시 만들
+        /// 목록에도 넣지 않았다 - <c>TryReadCandidateCore</c>가 <c>manifest.Steps</c>만
+        /// 순회했기 때문이다. 그 결과가 리뷰어의 실측이다: 재생성 호출 0회, 최종
+        /// 문서에 S03 없음, 그런데도 <c>Passed</c>로 끝난다.
+        ///
+        /// 이 시험은 그 사슬 전체(저널의 진단 → 오케스트레이터의 pending 판정 →
+        /// 최종 조립)를 공개 진입점 하나로 관통해서 잰다 - PlanAttemptJournalTests의
+        /// PROBE A는 저널 한 겹만 재므로, 오케스트레이터가 DefectiveStepCodes를 실제로
+        /// pending에 반영해 AI를 다시 부르고 그 결과를 최종 문서에 꿰매 넣는지는
+        /// 이 시험만이 잰다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenTocStepIsMissingFromTheManifest_RegeneratesItInsteadOfDroppingItSilently()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n" +
+                "    { \"Code\": \"S01\", \"Name\": \"첫\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] },\n" +
+                "    { \"Code\": \"S02\", \"Name\": \"둘\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T2\"], \"ErrorCodes\": [\"-2\"] },\n" +
+                "    { \"Code\": \"S03\", \"Name\": \"셋\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T3\"], \"ErrorCodes\": [\"-3\"] }\n" +
+                "  ]\n}\n```";
+            var planStructure = "## 목차\n" + stepsJson;
+            var skeleton = SkeletonMarkdownFor("S01", "S02", "S03");
+
+            // 이어서 할 판을 미리 써 둔다 - S01·S02만 건강하게 기록됐고, S03은 한 번도
+            // 기록되지 않았다(쿼터 소진이 S02 이후 S03 호출 도중 났다고 가정).
+            // manifest.Steps 에는 S03 키 자체가 없다 - "결함 표시"·"파일 없음"·
+            // "해시 불일치"와 다른 네 번째 부재다.
+            var seed = PlanAttemptJournal.Create(
+                _consolidatedOutputRoot, "Job_Test", "OpenAI", "gpt-4", "default", "C#",
+                PlanAttemptJournal.ComputeSha256("dbo.USP_Spec1\ncontent1"));
+            seed.OpenRun(planStructure, "run-start");
+            seed.RecordSkeleton(1, skeleton);
+            seed.RecordStepSection(1, "S01", HealthyStepSection("S01", "dbo.T1", "-1"));
+            seed.RecordStepSection(1, "S02", HealthyStepSection("S02", "dbo.T2", "-2"));
+
+            var rawDir = Path.Combine(_consolidatedOutputRoot, "Jobs", "Job_Test", "raw");
+            Directory.CreateDirectory(rawDir);
+            File.WriteAllText(Path.Combine(rawDir, "PlanStructure.md"), planStructure);
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.ModelName.Returns("gpt-4");
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = planStructure });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = skeleton });
+
+            var regenerated = new List<string>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    regenerated.Add(step.Code);
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var interaction = Substitute.For<IVerificationUserInteraction>();
+            interaction.ConfirmResumeAsync("Job_Test", Arg.Any<PlanAttemptResumeCandidate>())
+                .Returns(Task.FromResult(true));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                interaction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                new List<(string, string)> { ("dbo.USP_Spec1", "content1") },
+                "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // S01·S02는 재사용됐으므로 AI가 안 불린다. manifest에 없던 S03만 다시
+            // 만든다 - 고치기 전에는 이 목록이 비어 있었다(리뷰어 실측: regenerated=[]).
+            Assert.Equal(new[] { "S03" }, regenerated.Distinct().ToArray());
+
+            // 최종 문서에 S03의 본문이 실제로 있어야 한다 - 고치기 전에는 여기서
+            // "plan contains S03: False"가 났다. 비어 있지 않은 문서(Passed)이면서
+            // 단계 하나가 조용히 빠지는 것이 이 결함의 핵심 증상이었다.
+            Assert.NotNull(result.Plan);
+            Assert.Contains("S03", result.Plan);
+            Assert.Contains("dbo.T3", result.Plan);
+        }
+
+        /// <summary>거절하면 재사용 없이 전량을 다시 만든다. Effort·raw/PlanStructure.md 수정은
+        /// 위 「승인」시험과 같은 사유다.</summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenResumeIsDeclined_EverythingIsRegenerated()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n" +
+                "    { \"Code\": \"S01\", \"Name\": \"첫\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] }\n" +
+                "  ]\n}\n```";
+            var planStructure = "## 목차\n" + stepsJson;
+
+            var seed = PlanAttemptJournal.Create(
+                _consolidatedOutputRoot, "Job_Test", "OpenAI", "gpt-4", "default", "C#",
+                PlanAttemptJournal.ComputeSha256("dbo.USP_Spec1\ncontent1"));
+            seed.OpenRun(planStructure, "run-start");
+            seed.RecordSkeleton(1, SkeletonMarkdown);
+            seed.RecordStepSection(1, "S01", HealthyStepSection("S01", "dbo.T1", "-1"));
+
+            var rawDir = Path.Combine(_consolidatedOutputRoot, "Jobs", "Job_Test", "raw");
+            Directory.CreateDirectory(rawDir);
+            File.WriteAllText(Path.Combine(rawDir, "PlanStructure.md"), planStructure);
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.ModelName.Returns("gpt-4");
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = planStructure });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var regenerated = new List<string>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    regenerated.Add(step.Code);
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var interaction = Substitute.For<IVerificationUserInteraction>();
+            interaction.ConfirmResumeAsync("Job_Test", Arg.Any<PlanAttemptResumeCandidate>())
+                .Returns(Task.FromResult(false));   // 거절
+            // 거절은 게이트(§3-4-b)가 묻는 경로에서만 뜻이 있다 - 무인 배치는 묻지
+            // 않고 자동 재개하므로 isBatchMode:true로는 「거절」을 재현할 수 없다
+            // (계획서의 원 스니펫이 isBatchMode:true를 썼는데, 그러면 거절값이 아예
+            // 안 읽혀 regenerated가 통째로 빈 채로 끝난다 - 실측으로 발견). 대화형
+            // 경로를 타려면 L3 승인 루프까지 닿으므로 Approve를 함께 스텁한다.
+            interaction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                interaction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                new List<(string, string)> { ("dbo.USP_Spec1", "content1") },
+                "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
+
+            Assert.Contains("S01", regenerated);
+        }
+
+        /// <summary>
+        /// 무인 배치는 묻지 않고 재개한다(설계 §3-4-b). 게이트가 없으면 AnsiConsole.Confirm이
+        /// 비대화형에서 예외를 던져 <b>재개 후보가 있는 모든 무인 배치가 하드 실패로 죽는다</b> -
+        /// Task 2 재리뷰어가 Spectre 0.55.2로 실측했다. 「승인」시험과 같은 셋업을 쓰되
+        /// interaction은 절대 불리면 안 된다 - 배치 모드는 응답을 기다리지 않고 그냥 재개한다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_InBatchMode_ResumesWithoutAsking()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n" +
+                "    { \"Code\": \"S01\", \"Name\": \"첫\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] },\n" +
+                "    { \"Code\": \"S02\", \"Name\": \"둘\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T2\"], \"ErrorCodes\": [\"-2\"] }\n" +
+                "  ]\n}\n```";
+            var planStructure = "## 목차\n" + stepsJson;
+
+            var seed = PlanAttemptJournal.Create(
+                _consolidatedOutputRoot, "Job_Test", "OpenAI", "gpt-4", "default", "C#",
+                PlanAttemptJournal.ComputeSha256("dbo.USP_Spec1\ncontent1"));
+            seed.OpenRun(planStructure, "run-start");
+            seed.RecordSkeleton(1, SkeletonMarkdown);
+            seed.RecordStepSection(1, "S01", HealthyStepSection("S01", "dbo.T1", "-1"));
+            seed.RecordStepSection(1, "S02", "## S02\n(하한 미달)",
+                new StepDefect(StepDefectKind.QualityFloor, "S02 (하한 미달)"));
+
+            var rawDir = Path.Combine(_consolidatedOutputRoot, "Jobs", "Job_Test", "raw");
+            Directory.CreateDirectory(rawDir);
+            File.WriteAllText(Path.Combine(rawDir, "PlanStructure.md"), planStructure);
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.ModelName.Returns("gpt-4");
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = planStructure });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var regenerated = new List<string>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    regenerated.Add(step.Code);
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            // 무인 배치가 대화형 확인을 시도조차 하지 않는다는 것을 세운다 - Confirm 자체가
+            // 예외를 던지는 대체물이었다면, 이 substitute는 애초에 불려서는 안 된다.
+            var interaction = Substitute.For<IVerificationUserInteraction>();
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                interaction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                new List<(string, string)> { ("dbo.USP_Spec1", "content1") },
+                "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 묻지 않았다 - 배치 게이트의 핵심 단언.
+            await interaction.DidNotReceive().ConfirmResumeAsync(Arg.Any<string>(), Arg.Any<PlanAttemptResumeCandidate>());
+
+            // 그런데도 재사용은 실제로 일어났다: S01은 재사용, S02만 다시 만든다.
+            Assert.Equal(new[] { "S02" }, regenerated.Distinct().ToArray());
         }
 
         /// <summary>
@@ -4866,6 +5209,115 @@ namespace ReSet.Core.Tests
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
 
             Assert.Null(result.Plan);
+            // 쿼터 소진이 아닌 예외 타입이다 — AbortReason이 QuotaExhausted로
+            // 잘못 번지면 CLI가 진짜 실패를 "실패가 아닙니다"로 오안내한다.
+            Assert.Null(result.AbortReason);
+        }
+
+        /// <summary>
+        /// AiCallFailedException이되 Verdict가 Exhausted가 아니면(Fatal) AbortReason은
+        /// null이어야 한다. 타입만 보고 판정하면(Verdict를 안 보면) 이 시험이 빨개진다 —
+        /// 조건이 넓어지는 방향의 회귀를 잡는 유일한 시험이다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenAiCallFailsWithNonExhaustedVerdict_AbortReasonStaysNull()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns<AiResult>(_ => throw new AiCallFailedException(
+                    "치명적 오류", new Exception("복구 불가"), 1, AiRetryVerdict.Fatal));
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            Assert.Null(result.Plan);
+            Assert.Null(result.AbortReason);
+        }
+
+        /// <summary>
+        /// [2026-09-11 최종 전체 리뷰 I1] 단계 재시도 루프(GenerateStepSectionWithFloorRetryAsync)는
+        /// AiCallFailedException을 전부 삼키고 "생성 실패" 스텁을 돌려준다 - 그 자체는
+        /// 기존 복원력(한 단계 실패가 전체를 죽이지 않음)이라 고치기 전에도 지킨다.
+        /// 문제는 <b>왜</b> 실패했는지가 결과까지 안 실린다는 것이다 - 고치기 전에는
+        /// 모든 시도가 Exhausted를 던져도 AbortReason이 null로 남았다(리뷰어 실측).
+        /// 단계 호출은 쿼터가 가장 자주 터지는 자리인데도 설계 §4-4가 만든 안내가
+        /// 거기서만 한 번도 안 떴다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenAStepExhaustsQuotaAfterAllRetries_ReportsAbortReasonEvenThoughAStubIsProduced()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n" +
+                "    { \"Code\": \"S01\", \"Name\": \"첫\", \"LegacyProcedures\": [\"USP_Test1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] }\n" +
+                "  ]\n}\n```";
+            var planStructure = "## 목차\n" + stepsJson;
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = planStructure });
+            _aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            // 5회 전부(최초 1 + 재시도 4) 쿼터 소진으로 던진다 - 재시도 루프는 이
+            // 값을 보고도 계속 재시도한다(기존 동작 보존, 이 수정은 카운트를 안 바꾼다).
+            _aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns<AiResult>(_ => throw new AiCallFailedException(
+                    "쿼터 소진", new Exception("한도"), 1, AiRetryVerdict.Exhausted));
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 스텁은 여전히 만들어진다 - 기존 복원력을 안 건드렸다는 증거다.
+            Assert.NotNull(result.Plan);
+            Assert.Contains("이 단계는 생성에 실패했습니다", result.Plan);
+
+            // 고치기 전엔 여기가 null이었다 - 사유가 위로 전달되는 것이 이 수정의
+            // 목표다(설계 §4-4, "쿼터 소진으로 멈췄습니다 - 실패가 아닙니다" 안내는
+            // 이 값에 의존한다).
+            Assert.Equal(PipelineAbortReason.QuotaExhausted, result.AbortReason);
+        }
+
+        /// <summary>
+        /// [2026-09-11 최종 전체 리뷰 I1, 두 번째 자리] L2 리뷰 호출의 catch도 같은
+        /// 모양으로 AiCallFailedException을 삼킨다(reviewFailureReason만 남긴다).
+        /// 생성 자체는 성공했으므로 Plan은 non-null로 끝나지만, 나중 회차가 이어서
+        /// 완전히 실패하면(Plan이 null이 되면) 이 회차에서 세운 abortReason이
+        /// 그 실패까지 살아남아야 CLI가 쿼터 안내를 낼 수 있다 - abortReason은
+        /// while 루프 밖에서 선언돼 회차를 넘어 산다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenL2ReviewExhaustsQuota_ReportsAbortReason()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult
+                {
+                    Content = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트"
+                }));
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns<ReviewResult>(_ => throw new AiCallFailedException(
+                    "쿼터 소진", new Exception("한도"), 1, AiRetryVerdict.Exhausted));
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 이 회차의 생성 자체는 성공했으므로 문서는 여전히 나온다(교차 검증 없이
+            // 확정하는 기존 경로) - 이 시험이 재는 것은 Plan의 유무가 아니라
+            // AbortReason이 이 catch에서도 살아남는가다.
+            Assert.NotNull(result.Plan);
+            Assert.Equal(PipelineAbortReason.QuotaExhausted, result.AbortReason);
         }
 
         // finalAiResult는 생성이 성공할 때만 갱신되므로 채택본과 어긋날 수 있었다.

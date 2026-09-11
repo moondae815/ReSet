@@ -187,9 +187,21 @@ ReSet의 산출물은 전부 AI가 만든 것이 아니다. **어느 주체가 �
 | `docs/BatchMigrationPlan.md` | 🤖 AI + ⚙️ 검증 헤더 | 3/3 성공 시 | **통합 전환 계획서.** 검증 결과와 커버리지를 헤더에 얹는다 |
 | `docs/Thinking.md` | 🤖 AI (추론 부분) | 계획서와 한 쌍 | 채택된 시도의 사고 과정. 계획서와 짝이라 한쪽만 나가면 안 된다 |
 
-`raw/attempts/`는 1단계(쓰기 전용)의 산출물이다 — 지금은 재개(읽기)가 없으므로 중단된
-실행을 이어서 하는 데는 아직 못 쓴다. 재현과 감사를 위한 원본이라는 점은 위의 다른
-`raw/` 산출물과 같다.
+`raw/attempts/`는 재현과 감사를 위한 원본이면서, **같은 Job 이름으로 다시 실행하면 이어서
+하도록 설계된 재료**이기도 하다(`PlanAttemptJournal.TryResume`, 실물 확인은 아직이다). 후보가 되려면 `raw/PlanStructure.md`가
+남아 있고, 최신 판(`run-NNN`)의 `manifest.json`에 적힌 `ReuseKey` **일곱 항목**
+(`ContractVersion`·`PlanStructureSha256`·`SpecsSha256`·`Provider`·`Model`·`Effort`·
+`TargetLanguage`)이 이번 실행이 만들려는 값과 **전부** 같아야 한다 — 하나라도 어긋나면
+(예: `Effort`를 바꿔 재실행) 후보가 조용히 안 잡히고 처음부터 다시 만든다. 후보가 잡히면
+브레인스토밍·목차 설계(1/3·2/3)를 건너뛰고 저장된 목차를 그대로 쓰며, **골격과 `DefectKind`가
+없는 단계 섹션**을 그 판의 최신 `Attempt`로 재사용한다. `DefectKind`가 있는 섹션(하한
+미달·생성 실패 등)과 아직 안 만든 단계는 다시 만든다. 무인 배치는 묻지 않고 재개하고,
+대화형은 사람이 승인해야 한다(`IVerificationUserInteraction.ConfirmResumeAsync`) — 재사용
+개수(`N/전체`)를 보여주고 진행 여부를 확인받는다. 승인 뒤 여는 새 판의 `manifest.json`에는
+`ResumedFrom`에 원본 판 디렉터리 이름(예: `run-001`)이 남고, 재사용된 섹션·골격의
+`Attempt`는 **그 재료를 실제로 만든 원래 시도 번호**를 그대로 옮겨 적는다(재개한 시도의
+번호가 아니다) — 구제 채택 재기록과 같은 이유로, 감사가 「언제 무엇이 실제로 생성됐는지」를
+잃지 않게 하기 위해서다.
 
 ---
 

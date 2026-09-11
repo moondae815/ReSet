@@ -193,5 +193,62 @@ namespace ReSet.Core.Tests
             // 대기 중에 취소됐으므로 두 번째 시도(factory의 두 번째 호출)로 넘어가면 안 된다.
             Assert.Equal(1, calls);
         }
+
+        // 쿼터 소진은 CliFailureClassifier가 이미 분류해 준 사실이다 - Fatal처럼
+        // 재시도 없이 즉시 포기하되, 사유(Verdict)는 위로 실어 보낸다(설계 §4-1·§4-2).
+        [Fact]
+        public async Task ExecuteAsync_WhenQuotaIsExhausted_StopsImmediatelyAndCarriesTheVerdict()
+        {
+            var calls = 0;
+            var thrown = await Assert.ThrowsAsync<AiCallFailedException>(() =>
+                AiCallRetry.ExecuteAsync<string>(() =>
+                {
+                    calls++;
+                    throw new ReSet.Core.Services.Clients.Cli.CliInvocationException(
+                        "한도 소진", ReSet.Core.Services.Clients.Cli.CliFailureKind.QuotaExhausted);
+                }, CancellationToken.None, RetryPlan.NoDelay));
+
+            Assert.Equal(1, calls);                                   // 재시도하지 않는다
+            Assert.Equal(AiRetryVerdict.Exhausted, thrown.Verdict);   // 사유가 위로 간다
+        }
+
+        // 429가 재시도를 다 쓰면 그때는 짧은 막힘이 아니다(설계 §4-1) - 반대 방향은
+        // Classify_Http429_IsTransientSoTheRetryStillRuns가 잡는다: 첫 429에 곧바로
+        // Exhausted로 보면 넘길 수 있는 막힘에 포기하는 것이라 두 시험이 함께 있어야
+        // 방향 오류를 잡는다.
+        [Fact]
+        public async Task ExecuteAsync_WhenHttp429ExhaustsRetries_EndsAsExhausted()
+        {
+            var calls = 0;
+
+            var thrown = await Assert.ThrowsAsync<AiCallFailedException>(() =>
+                AiCallRetry.ExecuteAsync<string>(
+                    () =>
+                    {
+                        calls++;
+                        throw new HttpRequestException("429", null, HttpStatusCode.TooManyRequests);
+                    },
+                    CancellationToken.None, RetryPlan.NoDelay));
+
+            // 승격 전에 재시도가 실제로 다 쓰였다는 것을 재야 한다 - 최종 Verdict 만 보면
+            // 첫 429 에 곧바로 Exhausted 로 승격하는 뮤테이션도 같은 Verdict 를 내
+            // 이 시험을 통과시킨다(설계 §5-3). 호출 횟수가 MaxTries 와 같아야 한다.
+            Assert.Equal(RetryPlan.NoDelay.MaxTries, calls);
+            Assert.Equal(AiRetryVerdict.Exhausted, thrown.Verdict);
+        }
+
+        // 대칭 확인: 429가 아닌 다른 일시적 실패(예: 503)가 재시도를 다 써도 Exhausted로
+        // 승격되지 않는다 - 승격 조건은 「재시도 소진」 전체가 아니라 「429 소진」에
+        // 좁게 걸려 있어야 한다(설계 §4-1 표 - CLI/HTTP 429 외에는 근거가 없다).
+        [Fact]
+        public async Task ExecuteAsync_WhenNon429TransientExhaustsRetries_StaysTransientNotExhausted()
+        {
+            var thrown = await Assert.ThrowsAsync<AiCallFailedException>(() =>
+                AiCallRetry.ExecuteAsync<string>(
+                    () => throw Transient(),
+                    CancellationToken.None, RetryPlan.NoDelay));
+
+            Assert.Equal(AiRetryVerdict.Transient, thrown.Verdict);
+        }
     }
 }

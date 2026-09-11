@@ -1743,7 +1743,10 @@ namespace ReSet.Core.Services
                 outputRoot, jobName, provider, _consolidatorService.ModelName,
                 _consolidatorEffort, targetLanguage,
                 PlanAttemptJournal.ComputeSha256(
-                    string.Join("\n", specs.Select(s => s.FileName + "\n" + s.Content))));
+                    string.Join("\n", specs.Select(s => s.FileName + "\n" + s.Content))),
+                // SpecsSha256 이 무엇으로 계산됐는지 - 재개가 실패했을 때 그 이유를
+                // 진단하는 자리에만 쓰인다(Task 7 §Step 2). 본문은 절대 안 싣는다.
+                specs.Select(s => s.FileName).ToList());
 
             // 미지 테이블 검사의 재료. definitions가 없으면 빈 집합이 되고,
             // 검증기는 그때 검사를 건너뛴다(소프트 스킵). 조립 근거는
@@ -2013,6 +2016,9 @@ namespace ReSet.Core.Services
             // 초기화되어 상한이 걸리지 않는다. attempt가 실제로 올라갈 때만
             // 아래에서 명시적으로 되돌린다.
             bool reviewRetriedThisAttempt = false;
+            // 생성이 쿼터 소진으로 중단됐다는 사실. while(true) 밖에서 선언해야 그
+            // 사실이 구제 실패로 이어지는 반환(:2237 부근)까지 살아 있다(설계 §4-3).
+            PipelineAbortReason? abortReason = null;
             while (true)
             {
                 var attemptText = attempt == 1 ? "1차 분석" : $"자가 수정 보완 ({attempt}회째)";
@@ -2034,22 +2040,105 @@ namespace ReSet.Core.Services
                     {
                         if (string.IsNullOrEmpty(currentPlanStructure))
                         {
-                            progressScope.AddTask("phase1", "1/3. 브레인스토밍 중...");
-                            var brainstormResult = await WrapWithProgress(_consolidatorService.BrainstormBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase1");
-
                             var rawDir = System.IO.Path.Combine(outputRoot, "Jobs", jobName, "raw");
                             if (!System.IO.Directory.Exists(rawDir)) System.IO.Directory.CreateDirectory(rawDir);
-                            await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "Brainstorming.md"), brainstormResult.Content);
-                            currentBrainstorming = brainstormResult.Content;
 
-                            progressScope.AddTask("phase2", "2/3. 목차 설계 중...");
-                            var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, sourceProcedureRoster, _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
-                            var planEnrichment = PlanStructureEnricher.Enrich(
-                                planResult.Content, specReturnCodes, specTargetTables);
-                            currentPlanStructure = planEnrichment.Markdown;
-                            NotifyDroppedTableDeclarations(jobName, planEnrichment);
-                            await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "PlanStructure.md"), currentPlanStructure);
-                            attemptJournal.OpenRun(currentPlanStructure, "run-start");
+                            // [재개] 브레인스토밍 앞에서 먼저 묻는다. 목차를 새로 만든 뒤에
+                            // 물으면 PlanStructureSha256이 이전 판과 절대 안 맞아 후보가
+                            // 영영 안 잡힌다 - 이 순서가 재개의 전제다(설계 §3-1 정정).
+                            var priorStructurePath = System.IO.Path.Combine(rawDir, "PlanStructure.md");
+                            PlanAttemptResumeCandidate? resumeCandidate = null;
+                            string? resumedFrom = null;
+
+                            if (System.IO.File.Exists(priorStructurePath))
+                            {
+                                var priorStructure = await System.IO.File.ReadAllTextAsync(priorStructurePath, cancellationToken);
+                                var found = attemptJournal.TryResume(priorStructure);
+
+                                // 무인 배치는 묻지 않고 재개한다(설계 §3-4-b). AnsiConsole.Confirm이
+                                // 비대화형에서 예외를 던지므로 게이트 없이 부르면 재개 후보가 있는
+                                // 모든 무인 배치가 하드 실패로 죽는다. 이 저장소가 이미
+                                // RequestHumanReviewAsync·ConfirmMetadataSyncAsync를 같은 축으로 가른다.
+                                if (found != null &&
+                                    (isBatchMode || await _userInteraction.ConfirmResumeAsync(jobName, found)))
+                                {
+                                    resumeCandidate = found;
+                                    resumedFrom = System.IO.Path.GetFileName(found.RunDirectory);
+
+                                    // 목차를 그대로 쓴다 - 새로 만들면 그 순간 재사용 키가 깨진다.
+                                    currentPlanStructure = priorStructure;
+
+                                    lastSkeleton = string.IsNullOrEmpty(found.Skeleton) ? null : found.Skeleton;
+                                    // 골격 재사용(reuseSkeleton)은 lastSkeleton과 lastSkeletonResult가
+                                    // 둘 다 있어야 성립한다(GenerateBySplitAsync). Result 객체 자체는
+                                    // manifest에 실리지 않으므로 복원한 본문으로 다시 만든다 - 그러지
+                                    // 않으면 골격이 매 재개마다 다시 생성되어 §5-2가 요구하는 호출
+                                    // 절감이 골격 한 자리에서 새어 나간다.
+                                    lastSkeletonResult = lastSkeleton != null
+                                        ? new AiResult { Content = lastSkeleton }
+                                        : null;
+                                    lastStepSections = new Dictionary<string, string>(found.ReusableSections);
+                                    pendingDefectiveSteps.Clear();
+                                    pendingDefectiveSteps.AddRange(found.DefectiveStepCodes);
+
+                                    // 피드백을 이어받지 않으면 첫 회차가 백지에서 시작해 이미
+                                    // 정리된 결함이 되살아난다(설계 §3-3).
+                                    foreach (var (priorAttempt, priorReview) in found.PriorReviews.Reverse())
+                                    {
+                                        CriticFeedbackLog.Record(feedbackHistory, priorAttempt, priorReview, _criticScoreThreshold);
+                                    }
+                                    if (feedbackHistory.Count > 0)
+                                    {
+                                        feedbackLog = CriticFeedbackLog.Compose(
+                                            feedbackHistory,
+                                            "이어서 하는 회차입니다. 위 누적 피드백에서 이미 반영한 내용 교정의 " +
+                                            "서술 수준을 낮추지 마십시오. 원본 DDL을 절대적 기준으로 삼으십시오.");
+                                    }
+
+                                    // 무인 모드면 이 줄이 「왜 이 산출물이 이 모양인가」에 답하는
+                                    // 유일한 화면 기록이다(설계 §3-4-b). manifest의 ResumedFrom과 짝이다.
+                                    _userInteraction.NotifyStatus(
+                                        $"[yellow]{jobName}[/] - run-{found.Run:D3} 에서 이어서 합니다 " +
+                                        $"(재사용 {found.ReusableSections.Count}/{found.TotalStepsInStructure}, " +
+                                        $"브레인스토밍·목차 생성을 건너뜁니다)" +
+                                        (isBatchMode ? " — 무인 모드라 묻지 않았습니다." : "."));
+                                }
+                            }
+
+                            // 재개가 아니면 종전대로 목차를 만든다.
+                            if (string.IsNullOrEmpty(currentPlanStructure))
+                            {
+                                progressScope.AddTask("phase1", "1/3. 브레인스토밍 중...");
+                                var brainstormResult = await WrapWithProgress(_consolidatorService.BrainstormBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase1");
+                                await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "Brainstorming.md"), brainstormResult.Content);
+                                currentBrainstorming = brainstormResult.Content;
+
+                                progressScope.AddTask("phase2", "2/3. 목차 설계 중...");
+                                var planResult = await WrapWithProgress(_consolidatorService.DraftBatchPlanStructureAsync(brainstormResult.Content, targetLanguage, jobName, sourceProcedureRoster, _consolidatorEffort, cancellationToken: cancellationToken), progressScope, "phase2");
+                                var planEnrichment = PlanStructureEnricher.Enrich(
+                                    planResult.Content, specReturnCodes, specTargetTables);
+                                currentPlanStructure = planEnrichment.Markdown;
+                                NotifyDroppedTableDeclarations(jobName, planEnrichment);
+                                await System.IO.File.WriteAllTextAsync(priorStructurePath, currentPlanStructure);
+                            }
+
+                            attemptJournal.OpenRun(currentPlanStructure, "run-start", resumedFrom);
+
+                            // 새 판이 자기만으로 완결되게 한다(설계 §3-5). 원래 Attempt를
+                            // 그대로 옮긴다 - 구제 재기록이 전량을 한 Attempt로 적어
+                            // 과대 표기를 낸 것과 같은 자리를 반복하지 않는다.
+                            if (resumeCandidate != null && resumedFrom != null)
+                            {
+                                if (lastSkeleton != null)
+                                {
+                                    attemptJournal.RecordSkeleton(resumeCandidate.SkeletonAttempt, lastSkeleton);
+                                }
+                                foreach (var (code, markdown) in resumeCandidate.ReusableSections)
+                                {
+                                    attemptJournal.RecordStepSection(
+                                        resumeCandidate.SectionAttempts[code], code, markdown);
+                                }
+                            }
                         }
 
                         // 목차가 단계 목록을 냈을 때만 분할한다. 못 냈으면 단일 호출로
@@ -2090,6 +2179,16 @@ namespace ReSet.Core.Services
                                 lastSkeletonResult = split.Generation;
                                 lastStepSections = split.Sections;
                                 stepFloorViolations = split.FloorViolations;
+                                // [2026-09-11 최종 전체 리뷰 I1] 단계 재시도 루프는
+                                // AiCallFailedException을 삼키고 스텁을 돌려준다 -
+                                // 예외가 여기까지 안 올라오므로 바깥 catch(:2231-2238)가
+                                // 이 사유를 못 본다. split이 대신 실어 온 신호를 여기서
+                                // 세운다 - 쿼터가 가장 자주 터지는 자리(단계 호출)의
+                                // 사유가 CLI까지 가는 유일한 경로다.
+                                if (split.AnyStepQuotaExhausted)
+                                {
+                                    abortReason = PipelineAbortReason.QuotaExhausted;
+                                }
                             }
                             else
                             {
@@ -2142,6 +2241,10 @@ namespace ReSet.Core.Services
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _userInteraction.NotifyError($"{jobName} - AI 통합 계획 생성 실패 (시도 {attempt}): {ex.Message}");
+                    if (ex is AiCallFailedException { Verdict: AiRetryVerdict.Exhausted })
+                    {
+                        abortReason = PipelineAbortReason.QuotaExhausted;
+                    }
                 }
 
                 if (!genSuccess || string.IsNullOrEmpty(consolidatedPlan))
@@ -2151,7 +2254,7 @@ namespace ReSet.Core.Services
                         bestAttempt, _criticScoreThreshold, attempt, RetryAbortReason.GenerationFailed);
                     if (rescued == null)
                     {
-                        return new ConsolidatedPipelineResult(null, null, null, planOutcome);
+                        return new ConsolidatedPipelineResult(null, null, null, planOutcome, AbortReason: abortReason);
                     }
 
                     _userInteraction.NotifyError(
@@ -2526,6 +2629,15 @@ namespace ReSet.Core.Services
                 {
                     _userInteraction.NotifyError($"{jobName} - AI 교차 리뷰 실패 (시도 {attempt}): {ex.Message}");
                     reviewFailureReason = ex.Message;
+                    // [2026-09-11 최종 전체 리뷰 I1] 골격·단계 생성 쪽(:2234-2237)과 같은
+                    // 판정을 여기도 해야 한다 - 안 하면 L2 리뷰가 쿼터로 죽어도 사유가
+                    // 결과까지 안 올라간다. abortReason은 while 밖에서 선언돼 회차를
+                    // 넘어 산다 - 이번 회차는 구제/ReviewNotRun으로 문서를 살리더라도,
+                    // 나중 회차가 완전히 실패하면 이 값이 그 실패의 사유가 된다.
+                    if (ex is AiCallFailedException { Verdict: AiRetryVerdict.Exhausted })
+                    {
+                        abortReason = PipelineAbortReason.QuotaExhausted;
+                    }
                 }
 
                 if (reviewSuccess && l2Result != null)
@@ -2993,7 +3105,7 @@ namespace ReSet.Core.Services
             if (isBatchMode)
             {
                 _userInteraction.NotifyStatus($"[green]{jobName}[/] - 배치 모드로 인해 통합 계획서가 자동으로 최종 승인되었습니다.");
-                return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps), coverage);
+                return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps), coverage, abortReason);
             }
 
             while (true)
@@ -3007,11 +3119,11 @@ namespace ReSet.Core.Services
 
                 if (reviewResult.Decision == UserDecision.Approve)
                 {
-                    return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps), coverage);
+                    return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps), coverage, abortReason);
                 }
                 else if (reviewResult.Decision == UserDecision.Cancel)
                 {
-                    return new ConsolidatedPipelineResult(null, null, null, planOutcome);
+                    return new ConsolidatedPipelineResult(null, null, null, planOutcome, AbortReason: abortReason);
                 }
                 else if (reviewResult.Decision == UserDecision.ProvideFeedback)
                 {
@@ -3589,12 +3701,19 @@ namespace ReSet.Core.Services
         /// 있는 한 함께 살아 있어야 한다. 목록이었다면 통째 교체 시 그 기록이
         /// 사라져 배너가 조용히 과소 보고했을 것이다.
         /// </summary>
+        /// <param name="AnyStepQuotaExhausted">
+        /// [2026-09-11 최종 전체 리뷰 I1] 이번 회차의 단계 중 하나 이상이 재시도를 다
+        /// 쓰고도(스텁으로 끝났고) 그 원인에 쿼터 소진이 있었는가. RunConsolidatedPipelineAsync가
+        /// 이 값을 보고 abortReason을 세운다 - 안 그러면 쿼터가 가장 자주 터지는
+        /// 자리(단계 호출)에서만 사유가 영영 안 실린다.
+        /// </param>
         private sealed record SplitGeneration(
             string Markdown,
             AiResult Generation,
             string Skeleton,
             Dictionary<string, string> Sections,
-            Dictionary<string, StepDefect> FloorViolations);
+            Dictionary<string, StepDefect> FloorViolations,
+            bool AnyStepQuotaExhausted = false);
 
         /// <summary>
         /// 채택 후보(BestAttempt.Current)를 실제로 만들어 낸 상태 일체.
@@ -3800,7 +3919,12 @@ namespace ReSet.Core.Services
         /// 단계 하나의 생성 결과. 병렬 실행 중에는 공유 컬렉션을 만지지 않고 이
         /// 레코드로 돌려주며, 병합은 Task.WhenAll 이후 단일 스레드에서 한다.
         /// </summary>
-        private sealed record StepSectionResult(string Code, string Markdown, StepDefect? FloorViolation);
+        /// <param name="QuotaExhausted">
+        /// [2026-09-11 최종 전체 리뷰 I1] 이 단계가 쿼터 소진으로 스텁이 됐는가.
+        /// GenerateStepSectionWithFloorRetryAsync의 out 값을 그대로 옮긴다.
+        /// </param>
+        private sealed record StepSectionResult(
+            string Code, string Markdown, StepDefect? FloorViolation, bool QuotaExhausted = false);
 
         /// <summary>
         /// 골격 1회 + 단계 N회로 계획서를 만든다.
@@ -3992,7 +4116,7 @@ namespace ReSet.Core.Services
                     var taskKey = $"step_{step.Code}";
                     progressScope.AddTask(taskKey, $"3/3. 단계 본문 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
 
-                    var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
+                    var (markdown, violation, stepQuotaExhausted) = await GenerateStepSectionWithFloorRetryAsync(
                         step, steps, conventions, specs, targetLanguage, jobName,
                         knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, callGraph,
                         ddlByProcedure, journal, attempt, cancellationToken, PreviousBodyFor(step.Code));
@@ -4004,7 +4128,7 @@ namespace ReSet.Core.Services
                     // violation을 그대로 넘긴다 - 2단계가 "이 섹션을 재사용해도
                     // 되는가"를 manifest만으로 물을 수 있어야 한다(설계서 §4-3).
                     journal.RecordStepSection(attempt, step.Code, markdown, violation);
-                    return new StepSectionResult(step.Code, markdown, violation);
+                    return new StepSectionResult(step.Code, markdown, violation, stepQuotaExhausted);
                 }
                 finally
                 {
@@ -4082,7 +4206,8 @@ namespace ReSet.Core.Services
                 generation,
                 skeleton,
                 sections,
-                floorViolations);
+                floorViolations,
+                stepResults.Any(r => r.QuotaExhausted));
         }
 
         /// <summary>
@@ -4251,7 +4376,21 @@ namespace ReSet.Core.Services
         /// 들어가는 순서는 완료 순서를 따라 비결정적이 된다. 호출부가 Task.WhenAll
         /// 이후 단일 스레드에서 목록 순서대로 병합한다.
         /// </summary>
-        private async Task<(string Markdown, StepDefect? Defect)> GenerateStepSectionWithFloorRetryAsync(
+        /// <returns>
+        /// <c>QuotaExhausted</c> — [2026-09-11 최종 전체 리뷰 I1] 이 단계가 결국 "생성
+        /// 실패" 스텁으로 끝났고(<c>adopted == null</c>), 그 원인 중 하나가 쿼터 소진
+        /// (<see cref="AiRetryVerdict.Exhausted"/>)이었는가. 재시도 루프는 이 예외를
+        /// 삼킨다 - 그 자체는 바꾸지 않는다(한 단계 실패가 전체를 죽이지 않게 하는
+        /// 기존 복원력이다). 다만 삼킨 사유를 밖으로 꺼내지 않으면
+        /// <c>ConsolidatedPipelineResult.AbortReason</c>이 이 자리에서만 영영 null로
+        /// 남는다 - 쿼터가 가장 자주 터지는 자리인데도. 본문이 실제로 나온 경로
+        /// (성공 반환 둘)에서는 항상 false다 - 도중에 한 시도가 Exhausted를 던졌어도
+        /// 결국 본문을 얻었다면 이 회차는 실패가 아니다.
+        ///
+        /// out 매개변수가 아니라 튜플 세 번째 자리인 이유: 이 메서드는 <c>async</c>다 -
+        /// C#은 async 메서드에 ref/out 매개변수를 허용하지 않는다(CS1988).
+        /// </returns>
+        private async Task<(string Markdown, StepDefect? Defect, bool QuotaExhausted)> GenerateStepSectionWithFloorRetryAsync(
             BatchStepPlan step,
             IReadOnlyList<BatchStepPlan> steps,
             string conventions,
@@ -4279,6 +4418,9 @@ namespace ReSet.Core.Services
             // 자체라 회차 안에서 바뀌면 안 된다.
             string? previousBody = null)
         {
+            // 이번 회차 안에서 어느 시도든 Exhausted를 던졌는지. adopted == null로
+            // 끝났을 때만 반환값의 QuotaExhausted에 실린다.
+            var sawQuotaExhausted = false;
             const int maxTries = 5;   // 최초 1회 + 재시도 4회 - 근거는 위 docstring 참고
 
             // 원본이 무엇으로 거르고 어떤 순서로 반올림하는지는 명세서에만 있다.
@@ -4342,6 +4484,13 @@ namespace ReSet.Core.Services
                 {
                     previousTryThrew = true;
                     _userInteraction.NotifyError($"{jobName} - {step.Code} 단계 섹션 생성 실패: {ex.Message}");
+                    // [2026-09-11 최종 전체 리뷰 I1] 재시도 횟수·지연은 그대로 둔다 -
+                    // 이 수정은 "삼킨 사유를 기억해 둔다"만 더한다. adopted == null로
+                    // 끝날 때만(아래) 밖으로 꺼낸다.
+                    if (ex is AiCallFailedException { Verdict: AiRetryVerdict.Exhausted })
+                    {
+                        sawQuotaExhausted = true;
+                    }
                 }
 
                 if (string.IsNullOrWhiteSpace(content))
@@ -4372,7 +4521,7 @@ namespace ReSet.Core.Services
                     ddlByProcedure: ddlByProcedure);
                 if (stepResult.IsValid)
                 {
-                    return (content, null);
+                    return (content, null, false);
                 }
 
                 // 목차가 대조할 재료를 내지 않은 경우다. 본문을 다시 써도 프롬프트에
@@ -4386,7 +4535,7 @@ namespace ReSet.Core.Services
                         $"  [yellow]* {step.Code} 단계는 목차 결함으로 하한 검사를 실행할 수 없습니다 - 재생성으로 고쳐지지 않아 건너뜁니다: {reason}[/]");
                     Log.Warning(
                         "단계 하한 검사를 실행하지 못했습니다 - Step: {StepCode}, 사유: {Reason}", step.Code, reason);
-                    return (content, new StepDefect(StepDefectKind.Unverifiable, $"{step.Code} ({reason})"));
+                    return (content, new StepDefect(StepDefectKind.Unverifiable, $"{step.Code} ({reason})"), false);
                 }
 
                 adoptedErrors = string.Join(" / ", stepResult.Errors);
@@ -4411,8 +4560,10 @@ namespace ReSet.Core.Services
 
             if (adopted == null)
             {
+                // 스텁 반환 자체는 그대로다(기존 복원력) - 사유만 밖으로 꺼낸다.
                 return ($"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n",
-                    new StepDefect(StepDefectKind.GenerationFailed, $"{step.Code} (생성 실패)"));
+                    new StepDefect(StepDefectKind.GenerationFailed, $"{step.Code} (생성 실패)"),
+                    sawQuotaExhausted);
             }
 
             // [사유를 싣는다 - 2026-09-06 POQSettleBatch4 축 B 감사]
@@ -4428,7 +4579,7 @@ namespace ReSet.Core.Services
             var floorReason = string.IsNullOrWhiteSpace(adoptedErrors)
                 ? "하한 미달"
                 : $"하한 미달: {adoptedErrors}";
-            return (adopted, new StepDefect(StepDefectKind.QualityFloor, $"{step.Code} ({floorReason})"));
+            return (adopted, new StepDefect(StepDefectKind.QualityFloor, $"{step.Code} ({floorReason})"), false);
         }
 
         /// <summary>

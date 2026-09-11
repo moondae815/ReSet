@@ -358,7 +358,18 @@ namespace ReSet.Cli
             var aiResult = pipelineResult.Result;
             if (string.IsNullOrEmpty(consolidatedPlan))
             {
-                AnsiConsole.MarkupLine("[red]에러: 통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
+                if (pipelineResult.AbortReason == PipelineAbortReason.QuotaExhausted)
+                {
+                    var saved = PlanAttemptJournal.DescribeLatestRun(outputDir, jobName);
+                    AnsiConsole.MarkupLine("[yellow]쿼터 소진으로 멈췄습니다 — 실패가 아닙니다.[/]");
+                    if (saved != null) AnsiConsole.MarkupLine($"  여기까지 저장됐습니다: {Markup.Escape(saved)}");
+                    AnsiConsole.MarkupLine(
+                        $"  이어서 하려면 쿼터가 풀린 뒤 같은 Job 이름([bold]{Markup.Escape(jobName)}[/])으로 다시 실행하십시오.");
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine("[red]에러: 통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
+                }
                 return false;
             }
             else
@@ -617,9 +628,14 @@ namespace ReSet.Cli
             var endpoint = configuration[$"AiSettings:Providers:{provider}:Endpoint"] ?? string.Empty;
             var cliCommand = configuration[$"AiSettings:Providers:{provider}:Command"];
 
-            // 무인 배치 도중 구독 쿼터가 소진되거나 권한 프롬프트에서 멈추면 장시간
-            // 실행이 통째로 날아간다. 시작 직후에 막는다. 그 손실을 감수하고 구독 계정으로
-            // 돌려야 하는 사정이 있으면 AllowCliProviderInBatch로 연다(기본 false).
+            // 무인 배치 도중 구독 쿼터가 소진되거나 권한 프롬프트에서 멈추면 그 순간
+            // 프로세스가 죽는다 — 이것은 여전히 참이다. 다만 저널(PlanAttemptJournal)이
+            // 골격·결함 없는 단계·이전 회차 리뷰를 디스크에 남기므로 "실행 전체가
+            // 소실된다"는 더는 참이 아니다 — 같은 Job 이름으로 다시 실행하면 이어지도록
+            // 설계돼 있으며 실물 확인은 아직이다(설계 2026-09-11-시도-저널-재개). 그래도
+            // 중단 자체는 사람의 개입(재실행)을 요구하므로 시작 직후에 막는다. 그 중단을
+            // 감수하고 구독 계정으로 돌려야
+            // 하는 사정이 있으면 AllowCliProviderInBatch로 연다(기본 false).
             bool.TryParse(
                 configuration["AiSettings:AllowCliProviderInBatch"] ?? "false",
                 out bool allowCliProviderInBatch);
@@ -671,7 +687,9 @@ namespace ReSet.Cli
                     AnsiConsole.MarkupLine(
                         $"[yellow]경고: 배치 모드에서 CLI provider를 사용합니다. ({Markup.Escape(cliRole)} 역할)[/]");
                     AnsiConsole.MarkupLine(
-                        "[yellow]권한 프롬프트 정지나 구독 쿼터 소진이 발생하면 이번 실행 전체가 소실될 수 있습니다.[/]");
+                        "[yellow]권한 프롬프트 정지나 구독 쿼터 소진이 발생하면 이번 실행이 중단될 수 있습니다 — " +
+                        "이미 만든 단계는 저장되어 같은 Job 이름으로 다시 실행하면 이어지도록 설계돼 있습니다 " +
+                        "(실물 확인은 진행 중입니다).[/]");
                 }
             }
 
@@ -1856,7 +1874,18 @@ namespace ReSet.Cli
                             var aiResult = pipelineResult.Result;
                             if (string.IsNullOrEmpty(consolidatedPlan))
                             {
-                                AnsiConsole.MarkupLine("[red]통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
+                                if (pipelineResult.AbortReason == PipelineAbortReason.QuotaExhausted)
+                                {
+                                    var saved = PlanAttemptJournal.DescribeLatestRun(outputDir, jobName);
+                                    AnsiConsole.MarkupLine("[yellow]쿼터 소진으로 멈췄습니다 — 실패가 아닙니다.[/]");
+                                    if (saved != null) AnsiConsole.MarkupLine($"  여기까지 저장됐습니다: {Markup.Escape(saved)}");
+                                    AnsiConsole.MarkupLine(
+                                        $"  이어서 하려면 쿼터가 풀린 뒤 같은 Job 이름([bold]{Markup.Escape(jobName)}[/])으로 다시 실행하십시오.");
+                                }
+                                else
+                                {
+                                    AnsiConsole.MarkupLine("[red]통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
+                                }
                                 continue;
                             }
 
@@ -2968,6 +2997,9 @@ namespace ReSet.Cli
 
         public Task<bool> ConfirmMetadataSyncAsync(string selectedOption) =>
             _interactiveUserInteraction.ConfirmMetadataSyncAsync(selectedOption);
+
+        public Task<bool> ConfirmResumeAsync(string jobName, PlanAttemptResumeCandidate candidate) =>
+            _interactiveUserInteraction.ConfirmResumeAsync(jobName, candidate);
 
         public IMultiProgressScope CreateProgressScope(string title) =>
             _interactiveUserInteraction.CreateProgressScope(title);

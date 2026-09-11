@@ -15,7 +15,14 @@ namespace ReSet.Core.Services
         Fatal,
 
         /// <summary>사용자가 멈췄다. 삼키지 말고 그대로 올려보낸다.</summary>
-        Cancelled
+        Cancelled,
+
+        /// <summary>
+        /// 지금은 안 되고 나중엔 된다. <c>Fatal</c>(다시 해도 같다)도 <c>Transient</c>
+        /// (금방 풀린다)도 아닌 것이 없어서 종전에는 <c>Fatal</c> 로 뭉개졌다 —
+        /// 쿼터 소진이 재시도 없이 「실패」로 보고됐다(설계 §1-3).
+        /// </summary>
+        Exhausted
     }
 
     /// <summary>
@@ -63,9 +70,12 @@ namespace ReSet.Core.Services
             // CLI 프로바이더. 분류가 예외에 실려 있으므로 문구를 보지 않는다.
             if (ex is Clients.Cli.CliInvocationException cliEx)
             {
-                return cliEx.Kind == Clients.Cli.CliFailureKind.Timeout
-                    ? AiRetryVerdict.Transient
-                    : AiRetryVerdict.Fatal;
+                return cliEx.Kind switch
+                {
+                    Clients.Cli.CliFailureKind.Timeout => AiRetryVerdict.Transient,
+                    Clients.Cli.CliFailureKind.QuotaExhausted => AiRetryVerdict.Exhausted,
+                    _ => AiRetryVerdict.Fatal
+                };
             }
 
             // 파싱 실패·에러 응답 등. 같은 입력에 같은 응답이 올 이유가 크다.
