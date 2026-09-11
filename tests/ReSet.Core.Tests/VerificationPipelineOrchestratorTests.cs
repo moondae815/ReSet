@@ -2688,6 +2688,16 @@ namespace ReSet.Core.Tests
             await aiService.DidNotReceive().DraftBatchPlanStructureAsync(
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
 
+            // 골격도 재사용돼야 한다(§5-2) - lastSkeletonResult를 함께 복원해 두지
+            // 않으면 GenerateBySplitAsync의 reuseSkeleton 판정(previousSkeleton != null
+            // && previousSkeletonResult != null)이 성립하지 않아 골격이 재개마다 매번
+            // 다시 생성된다. 실측(리뷰 발견): lastSkeletonResult 대입만 지우면 이
+            // 단언이 없는 채로는 시험이 계속 초록이었다 - 단계 재사용 단언만으로는
+            // 골격 한 자리가 새는 것을 못 잡는다.
+            await aiService.DidNotReceive().GenerateBatchPlanSkeletonAsync(
+                Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>());
+
             // 새 판이 열렸고 재사용한 것이 거기 다시 기록됐다(설계 §3-5).
             var runs = Directory.GetDirectories(
                 Path.Combine(_consolidatedOutputRoot, "Jobs", "Job_Test", "raw", "attempts"), "run-*");
