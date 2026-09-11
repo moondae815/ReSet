@@ -1923,6 +1923,30 @@ namespace ReSet.Core.Tests
             _userInteraction.Received(1).NotifyValidationSuccess("Job_Test");
         }
 
+        /// <summary>
+        /// 쿼터 소진은 실패가 아니다 — 사유가 결과에 실려 CLI 까지 가야 「이어서 하십시오」를
+        /// 말할 수 있다(설계 §4-3).
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenQuotaIsExhausted_ResultCarriesTheAbortReason()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns<AiResult>(_ => throw new AiCallFailedException(
+                    "쿼터 소진", new Exception("한도"), 1, AiRetryVerdict.Exhausted));
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            Assert.Null(result.Plan);
+            Assert.Equal(PipelineAbortReason.QuotaExhausted, result.AbortReason);
+        }
+
         [Fact]
         public async Task RunConsolidatedPipelineAsync_L1ValidationError_AttemptsSelfCorrection()
         {

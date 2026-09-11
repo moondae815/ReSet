@@ -2013,6 +2013,9 @@ namespace ReSet.Core.Services
             // 초기화되어 상한이 걸리지 않는다. attempt가 실제로 올라갈 때만
             // 아래에서 명시적으로 되돌린다.
             bool reviewRetriedThisAttempt = false;
+            // 생성이 쿼터 소진으로 중단됐다는 사실. while(true) 밖에서 선언해야 그
+            // 사실이 구제 실패로 이어지는 반환(:2237 부근)까지 살아 있다(설계 §4-3).
+            PipelineAbortReason? abortReason = null;
             while (true)
             {
                 var attemptText = attempt == 1 ? "1차 분석" : $"자가 수정 보완 ({attempt}회째)";
@@ -2225,6 +2228,10 @@ namespace ReSet.Core.Services
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _userInteraction.NotifyError($"{jobName} - AI 통합 계획 생성 실패 (시도 {attempt}): {ex.Message}");
+                    if (ex is AiCallFailedException { Verdict: AiRetryVerdict.Exhausted })
+                    {
+                        abortReason = PipelineAbortReason.QuotaExhausted;
+                    }
                 }
 
                 if (!genSuccess || string.IsNullOrEmpty(consolidatedPlan))
@@ -2234,7 +2241,7 @@ namespace ReSet.Core.Services
                         bestAttempt, _criticScoreThreshold, attempt, RetryAbortReason.GenerationFailed);
                     if (rescued == null)
                     {
-                        return new ConsolidatedPipelineResult(null, null, null, planOutcome);
+                        return new ConsolidatedPipelineResult(null, null, null, planOutcome, AbortReason: abortReason);
                     }
 
                     _userInteraction.NotifyError(
@@ -3076,7 +3083,7 @@ namespace ReSet.Core.Services
             if (isBatchMode)
             {
                 _userInteraction.NotifyStatus($"[green]{jobName}[/] - 배치 모드로 인해 통합 계획서가 자동으로 최종 승인되었습니다.");
-                return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps), coverage);
+                return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps), coverage, abortReason);
             }
 
             while (true)
@@ -3090,11 +3097,11 @@ namespace ReSet.Core.Services
 
                 if (reviewResult.Decision == UserDecision.Approve)
                 {
-                    return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps), coverage);
+                    return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps), coverage, abortReason);
                 }
                 else if (reviewResult.Decision == UserDecision.Cancel)
                 {
-                    return new ConsolidatedPipelineResult(null, null, null, planOutcome);
+                    return new ConsolidatedPipelineResult(null, null, null, planOutcome, AbortReason: abortReason);
                 }
                 else if (reviewResult.Decision == UserDecision.ProvideFeedback)
                 {
