@@ -358,7 +358,18 @@ namespace ReSet.Cli
             var aiResult = pipelineResult.Result;
             if (string.IsNullOrEmpty(consolidatedPlan))
             {
-                AnsiConsole.MarkupLine("[red]에러: 통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
+                if (pipelineResult.AbortReason == PipelineAbortReason.QuotaExhausted)
+                {
+                    var saved = PlanAttemptJournal.DescribeLatestRun(outputDir, jobName);
+                    AnsiConsole.MarkupLine("[yellow]쿼터 소진으로 멈췄습니다 — 실패가 아닙니다.[/]");
+                    if (saved != null) AnsiConsole.MarkupLine($"  여기까지 저장됐습니다: {Markup.Escape(saved)}");
+                    AnsiConsole.MarkupLine(
+                        $"  이어서 하려면 쿼터가 풀린 뒤 같은 Job 이름([bold]{Markup.Escape(jobName)}[/])으로 다시 실행하십시오.");
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine("[red]에러: 통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
+                }
                 return false;
             }
             else
@@ -1856,7 +1867,18 @@ namespace ReSet.Cli
                             var aiResult = pipelineResult.Result;
                             if (string.IsNullOrEmpty(consolidatedPlan))
                             {
-                                AnsiConsole.MarkupLine("[red]통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
+                                if (pipelineResult.AbortReason == PipelineAbortReason.QuotaExhausted)
+                                {
+                                    var saved = PlanAttemptJournal.DescribeLatestRun(outputDir, jobName);
+                                    AnsiConsole.MarkupLine("[yellow]쿼터 소진으로 멈췄습니다 — 실패가 아닙니다.[/]");
+                                    if (saved != null) AnsiConsole.MarkupLine($"  여기까지 저장됐습니다: {Markup.Escape(saved)}");
+                                    AnsiConsole.MarkupLine(
+                                        $"  이어서 하려면 쿼터가 풀린 뒤 같은 Job 이름([bold]{Markup.Escape(jobName)}[/])으로 다시 실행하십시오.");
+                                }
+                                else
+                                {
+                                    AnsiConsole.MarkupLine("[red]통합 배치 설계서 작성이 중단되었거나 실패했습니다.[/]");
+                                }
                                 continue;
                             }
 

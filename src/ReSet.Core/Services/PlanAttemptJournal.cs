@@ -549,6 +549,42 @@ namespace ReSet.Core.Services
                 .ToList();
         }
 
+        /// <summary>
+        /// 최신 판에 무엇이 저장됐는지 한 줄로. <b>manifest 에서 읽는다</b> — 짐작이 아니라
+        /// 실제 기록이다(설계 §4-4). 못 읽으면 null.
+        /// </summary>
+        public static string? DescribeLatestRun(string outputRoot, string jobName)
+        {
+            try
+            {
+                var attemptsRoot = Path.Combine(outputRoot, "Jobs", jobName, "raw", "attempts");
+                if (!Directory.Exists(attemptsRoot)) return null;
+
+                var newest = Directory.EnumerateDirectories(attemptsRoot, "run-*")
+                    .OrderByDescending(d => d, StringComparer.Ordinal).FirstOrDefault();
+                if (newest == null) return null;
+
+                var manifestPath = Path.Combine(newest, "manifest.json");
+                if (!File.Exists(manifestPath)) return null;
+
+                var manifest = JsonSerializer.Deserialize<PlanAttemptManifest>(
+                    File.ReadAllText(manifestPath), Options);
+                if (manifest == null) return null;
+
+                var healthy = manifest.Steps.Count(p => p.Value.DefectKind == null);
+                var reviews = Directory.Exists(Path.Combine(newest, "reviews"))
+                    ? Directory.EnumerateFiles(Path.Combine(newest, "reviews"), "attempt-*.json").Count()
+                    : 0;
+                var skeleton = manifest.Skeleton != null ? " · 골격" : "";
+                return $"run-{manifest.Run:D3} — 단계 {healthy}/{manifest.Steps.Count}{skeleton} · 회차 리뷰 {reviews}개";
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "[PlanAttemptJournal] 최신 판을 요약하지 못했습니다.");
+                return null;
+            }
+        }
+
         public static string ComputeSha256(string input)
         {
             // null 만 가드한다 - 빈 문자열은 "미계산" sentinel 이 아니라 실제 빈
