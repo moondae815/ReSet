@@ -415,5 +415,238 @@ namespace ReSet.Core.Tests
                     "저장소 밖 도구(python json·jq)가 거부하고 섹션은 이어 붙일 때 본문 중간에 낀다.");
             }
         }
+
+        /// <summary>
+        /// 재개 후보를 만드는 헬퍼 — 판 하나를 완성된 모양으로 써 둔다.
+        /// 골격 1개 · 건강한 섹션 2개 · 결함 섹션 1개 · 리뷰 2개.
+        /// </summary>
+        private PlanAttemptJournal WriteResumableRun(string planStructure = "## 목차 A")
+        {
+            var journal = NewJournal();
+            journal.OpenRun(planStructure, "run-start");
+            journal.RecordSkeleton(1, "골격 본문");
+            journal.RecordStepSection(1, "S01", "S01 건강");
+            journal.RecordStepSection(1, "S02", "S02 건강");
+            journal.RecordStepSection(2, "S03", "S03 미달",
+                new StepDefect(StepDefectKind.QualityFloor, "S03 (하한 미달: 이유)"));
+            journal.RecordReview(1, new ReviewResult
+            {
+                HasDefects = true, FeedbackComment = "회차 1 지적",
+                ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5,
+                ScoreException = 5, ScoreReadability = 5
+            });
+            journal.RecordReview(2, new ReviewResult
+            {
+                HasDefects = true, FeedbackComment = "회차 2 지적",
+                ScoreAccuracy = 7, ScoreCrud = 7, ScoreInterface = 7,
+                ScoreException = 7, ScoreReadability = 7
+            });
+            return journal;
+        }
+
+        [Fact]
+        public void TryResume_FindsTheRunAndSplitsHealthyFromDefective()
+        {
+            WriteResumableRun();
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(1, candidate!.Run);
+            Assert.Equal("골격 본문", candidate.Skeleton);
+            Assert.Equal(1, candidate.SkeletonAttempt);
+
+            // DefectKind 가 있는 S03 은 재사용 대상이 아니다 — 다시 만들 목록으로 간다.
+            Assert.Equal(new[] { "S01", "S02" }, candidate.ReusableSections.Keys.OrderBy(k => k).ToArray());
+            Assert.Equal("S01 건강", candidate.ReusableSections["S01"]);
+            Assert.Equal(new[] { "S03" }, candidate.DefectiveStepCodes.ToArray());
+            Assert.Equal(3, candidate.TotalStepsInManifest);
+
+            // 원래 Attempt 를 그대로 옮긴다(설계 §3-5) — 새 판에 다시 기록할 때 쓴다.
+            Assert.Equal(1, candidate.SectionAttempts["S01"]);
+
+            // 리뷰는 시도 번호가 큰 순으로 최근 3개까지(설계 §3-3).
+            Assert.Equal(new[] { 2, 1 }, candidate.PriorReviews.Select(r => r.Attempt).ToArray());
+            Assert.Equal("회차 2 지적", candidate.PriorReviews[0].Review.FeedbackComment);
+        }
+
+        // 일곱 항목 각각을 재야 한다 — 하나라도 안 재면 그 항목은 무방비다(설계 §5-1).
+        // ContractVersion 은 const 라 이 Theory 로 못 바꾼다 — 바로 아래 별도 시험이 맡는다.
+        [Theory]
+        [InlineData("planStructure")]
+        [InlineData("specsSha")]
+        [InlineData("provider")]
+        [InlineData("model")]
+        [InlineData("effort")]
+        [InlineData("targetLanguage")]
+        public void TryResume_WhenAnyReuseKeyItemDiffers_FindsNothing(string differing)
+        {
+            WriteResumableRun();
+
+            var journal = PlanAttemptJournal.Create(
+                _root, "Job_Test",
+                differing == "provider" ? "OtherProvider" : "OpenAI",
+                differing == "model" ? "other-model" : "gpt-4",
+                differing == "effort" ? "low" : "high",
+                differing == "targetLanguage" ? "Java" : "C#",
+                differing == "specsSha" ? "otherspecshash" : "specshash");
+
+            var candidate = journal.TryResume(differing == "planStructure" ? "## 다른 목차" : "## 목차 A");
+
+            Assert.Null(candidate);
+        }
+
+        /// <summary>
+        /// 일곱 번째 항목. <c>PlanAttemptJournal.ContractVersion</c> 은 <c>const</c> 라
+        /// 위 Theory 로 바꿀 수 없다 — manifest 를 직접 고쳐 「옛 계약으로 쓰인 판」을 만든다.
+        ///
+        /// <b>이 시험이 없으면 일곱 번째 항목이 무방비다.</b> 계약 버전이 올라간 뒤에도
+        /// 옛 판을 주워 와, 새 규약을 안 지키는 섹션이 문서에 섞인다.
+        /// </summary>
+        [Fact]
+        public void TryResume_WhenTheContractVersionDiffers_FindsNothing()
+        {
+            var journal = WriteResumableRun();
+            var manifestPath = Path.Combine(journal.CurrentRunDirectory!, "manifest.json");
+
+            var text = File.ReadAllText(manifestPath);
+            var bumped = text.Replace(
+                $"\"ContractVersion\": {PlanAttemptJournal.ContractVersion}",
+                $"\"ContractVersion\": {PlanAttemptJournal.ContractVersion + 1}");
+            Assert.NotEqual(text, bumped);          // 치환이 실제로 일어났는지 먼저 확인한다
+            File.WriteAllText(manifestPath, bumped);
+
+            Assert.Null(NewJournal().TryResume("## 목차 A"));
+        }
+
+        // 해시가 안 맞는 항목은 버린다 — 사람이 손댔거나 반쯤 쓰였다는 뜻이다(설계 §3-2).
+        [Fact]
+        public void TryResume_WhenASectionsHashDoesNotMatch_DropsThatSectionOnly()
+        {
+            var journal = WriteResumableRun();
+            var dir = journal.CurrentRunDirectory!;
+            File.WriteAllText(Path.Combine(dir, "steps", "S01.md"), "누군가 손댄 본문");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.False(candidate!.ReusableSections.ContainsKey("S01"));
+            Assert.True(candidate.ReusableSections.ContainsKey("S02"));
+        }
+
+        // 골격도 섹션도 없는 판은 재개 불가다(설계 §11-5 — 단일 호출 폴백 판).
+        [Fact]
+        public void TryResume_WhenTheRunHasNoSkeletonAndNoSections_FindsNothing()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차 A", "run-start");
+            journal.RecordReview(1, new ReviewResult { HasDefects = false });
+
+            Assert.Null(NewJournal().TryResume("## 목차 A"));
+        }
+
+        [Fact]
+        public void TryResume_WhenSeveralRunsMatch_PicksTheNewest()
+        {
+            WriteResumableRun();                 // run-001
+            var second = NewJournal();
+            second.OpenRun("## 목차 A", "run-start");
+            second.RecordSkeleton(1, "둘째 판 골격");
+            second.RecordStepSection(1, "S01", "둘째 판 S01");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.Equal(2, candidate!.Run);
+            Assert.Equal("둘째 판 골격", candidate.Skeleton);
+        }
+
+        [Fact]
+        public void TryResume_WhenNoRunExists_FindsNothing()
+        {
+            Assert.Null(NewJournal().TryResume("## 목차 A"));
+        }
+
+        // [대칭 훑기] 계획서가 준 시험은 섹션의 Sha256 불일치만 잰다(위 시험). 같은 규칙이
+        // 골격에도 §3-2 대로 적용돼야 한다 — 안 재면 골격만 손댔을 때 무방비다. 골격이
+        // 버려져도 건강한 섹션이 있으면 후보는 여전히 non-null 이어야 한다(§11-5 는
+        // "둘 다 없을 때"만 제외한다).
+        [Fact]
+        public void TryResume_WhenTheSkeletonsHashDoesNotMatch_DropsTheSkeletonButKeepsSections()
+        {
+            var journal = WriteResumableRun();
+            var dir = journal.CurrentRunDirectory!;
+            File.WriteAllText(Path.Combine(dir, "skeleton.md"), "누군가 손댄 골격");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(string.Empty, candidate!.Skeleton);
+            Assert.Equal(0, candidate.SkeletonAttempt);
+            Assert.True(candidate.ReusableSections.ContainsKey("S01"));
+        }
+
+        // [대칭 훑기] 골격 파일이 통째로 사라진 경우(해시 불일치와 다른 경로 —
+        // File.Exists 분기)도 같은 결과여야 한다. steps 쪽은 이미
+        // RecordStepSection_UnsafeCode 류로 파일 부재를 다루지만 TryResume 경로에서는
+        // 안 재고 있었다.
+        [Fact]
+        public void TryResume_WhenTheSkeletonFileIsMissing_DropsTheSkeletonButKeepsSections()
+        {
+            var journal = WriteResumableRun();
+            var dir = journal.CurrentRunDirectory!;
+            File.Delete(Path.Combine(dir, "skeleton.md"));
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(string.Empty, candidate!.Skeleton);
+            Assert.True(candidate.ReusableSections.ContainsKey("S01"));
+        }
+
+        // [대칭 훑기] 골격이 아예 기록된 적 없어도(manifest.Skeleton == null) 건강한
+        // 섹션만으로 재개 후보가 되어야 한다 — §11-5 는 "골격도 섹션도 없을 때"만
+        // 제외하지 "골격이 없을 때"를 제외하지 않는다. 주어진 시험들은 골격·섹션이
+        // 둘 다 있거나(WriteResumableRun) 둘 다 없는 경우만 쟀다.
+        [Fact]
+        public void TryResume_WhenOnlySectionsExistWithNoSkeletonEverRecorded_StillFindsTheRun()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차 A", "run-start");
+            journal.RecordStepSection(1, "S01", "S01 건강");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(string.Empty, candidate!.Skeleton);
+            Assert.Equal(0, candidate.SkeletonAttempt);
+            Assert.True(candidate.ReusableSections.ContainsKey("S01"));
+        }
+
+        // [대칭 훑기] 설계 §3-3 은 "시도 번호가 큰 순으로 최근 3개"라고 못박고
+        // CriticFeedbackLog.MaxRetainedRounds(3) 와 같은 상한이어야 한다고 적었다.
+        // 주어진 시험은 리뷰 2개만 써서 상한에 못 미친다 — 4개를 쌓아 3개로 잘리는지,
+        // 그리고 잘리는 것이 "오래된" 1회차인지(최근 3개 = 2,3,4)를 직접 잰다.
+        [Fact]
+        public void TryResume_WhenMoreReviewsThanMaxRetainedRoundsExist_KeepsOnlyTheMostRecentThree()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차 A", "run-start");
+            journal.RecordStepSection(1, "S01", "S01 건강");
+            for (var attempt = 1; attempt <= 4; attempt++)
+            {
+                journal.RecordReview(attempt, new ReviewResult
+                {
+                    HasDefects = true, FeedbackComment = $"회차 {attempt} 지적",
+                    ScoreAccuracy = 5, ScoreCrud = 5, ScoreInterface = 5,
+                    ScoreException = 5, ScoreReadability = 5
+                });
+            }
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(CriticFeedbackLog.MaxRetainedRounds, candidate!.PriorReviews.Count);
+            Assert.Equal(new[] { 4, 3, 2 }, candidate.PriorReviews.Select(r => r.Attempt).ToArray());
+        }
     }
 }

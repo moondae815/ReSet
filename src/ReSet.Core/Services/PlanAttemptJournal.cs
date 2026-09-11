@@ -38,6 +38,22 @@ namespace ReSet.Core.Services
         int Attempt, string Sha256, StepDefectKind? DefectKind = null, string? DefectReason = null);
 
     /// <summary>
+    /// 재개 후보 하나. <b>2단계가 이 타입만 보고 재개를 판단한다</b> — manifest 해석은
+    /// <c>TryResume</c> 안에서 끝난다(설계 §3-2).
+    /// </summary>
+    public sealed record PlanAttemptResumeCandidate(
+        string RunDirectory,
+        int Run,
+        string StartedAt,
+        string Skeleton,
+        int SkeletonAttempt,
+        IReadOnlyDictionary<string, string> ReusableSections,
+        IReadOnlyDictionary<string, int> SectionAttempts,
+        IReadOnlyList<string> DefectiveStepCodes,
+        IReadOnlyList<(int Attempt, ReviewResult Review)> PriorReviews,
+        int TotalStepsInManifest);
+
+    /// <summary>
     /// 판 하나의 명세. <b>이 파일이 진실이고 디렉터리의 파일 존재는 진실이 아니다</b> —
     /// 반쯤 쓰인 판이 나중에 거짓 재료가 되는 것을 막는 유일한 장치다(설계서 §8).
     /// </summary>
@@ -290,7 +306,7 @@ namespace ReSet.Core.Services
         /// <c>NormalizedScore</c> 는 계산 속성이라 직렬화에서 빠질 수 있다. 무엇이
         /// 남는지 이 자리에서 못박는다.
         /// </summary>
-        private sealed record PlanAttemptReview(
+        internal sealed record PlanAttemptReview(
             int Attempt,
             bool HasDefects,
             string? FeedbackComment,
@@ -348,6 +364,142 @@ namespace ReSet.Core.Services
                     Log.Debug(ex, "[PlanAttemptJournal] 리뷰를 남기지 못했습니다 - 시도: {Attempt}", attempt);
                 }
             }
+        }
+
+        /// <summary>
+        /// 이어서 할 수 있는 판을 찾는다. 없으면 <c>null</c>.
+        ///
+        /// [왜 쓰기와 같은 클래스인가] 1단계 설계가 「읽는 쪽이 생길 때 같은 클래스에
+        /// 들어가 규약이 갈라지지 않는다」고 약속한 자리다. manifest 의 키 대소문자·
+        /// 진실 계약(§11-1)을 아는 곳이 둘이 되면 조용히 갈린다.
+        ///
+        /// [무엇을 거르나] <c>ReuseKey</c> 일곱 항목이 전부 같아야 한다 — 특히 모델이
+        /// 다르면 문서의 목소리가 섞인다. 골격도 섹션도 없는 판(단일 호출 폴백)은
+        /// 재개 불가다(§11-5). <c>Sha256</c> 이 안 맞는 항목은 버린다.
+        ///
+        /// [왜 소프트페일인가] 못 읽는 판은 <b>없는 것으로 친다.</b> 재개는 편의이지
+        /// 파이프라인의 전제가 아니다.
+        /// </summary>
+        public PlanAttemptResumeCandidate? TryResume(string planStructure)
+        {
+            try
+            {
+                var attemptsRoot = Path.Combine(_outputRoot, "Jobs", _jobName, "raw", "attempts");
+                if (!Directory.Exists(attemptsRoot)) return null;
+
+                var wanted = new PlanAttemptReuseKey(
+                    ContractVersion, ComputeSha256(planStructure), _specsSha256,
+                    _provider, _model, _effort, _targetLanguage);
+
+                foreach (var runDir in Directory.EnumerateDirectories(attemptsRoot, "run-*")
+                             .OrderByDescending(d => d, StringComparer.Ordinal))
+                {
+                    var candidate = TryReadCandidate(runDir, wanted);
+                    if (candidate != null) return candidate;
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 처음부터 만듭니다.");
+                return null;
+            }
+        }
+
+        private static PlanAttemptResumeCandidate? TryReadCandidate(string runDir, PlanAttemptReuseKey wanted)
+        {
+            var manifestPath = Path.Combine(runDir, "manifest.json");
+            if (!File.Exists(manifestPath)) return null;
+
+            var manifest = JsonSerializer.Deserialize<PlanAttemptManifest>(
+                File.ReadAllText(manifestPath), Options);
+            if (manifest?.ReuseKey == null || !manifest.ReuseKey.Equals(wanted)) return null;
+
+            // 골격
+            string? skeleton = null;
+            var skeletonAttempt = 0;
+            var skeletonPath = Path.Combine(runDir, "skeleton.md");
+            if (manifest.Skeleton != null && File.Exists(skeletonPath))
+            {
+                var text = File.ReadAllText(skeletonPath);
+                if (ComputeSha256(text) == manifest.Skeleton.Sha256)
+                {
+                    skeleton = text;
+                    skeletonAttempt = manifest.Skeleton.Attempt;
+                }
+            }
+
+            // 섹션 — DefectKind 가 있으면 재사용하지 않고 「다시 만들 것」으로 보낸다.
+            var reusable = new Dictionary<string, string>(StringComparer.Ordinal);
+            var attempts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var defective = new List<string>();
+            foreach (var (code, artifact) in manifest.Steps.OrderBy(p => p.Key, StringComparer.Ordinal))
+            {
+                if (artifact.DefectKind != null) { defective.Add(code); continue; }
+
+                var path = Path.Combine(runDir, "steps", code + ".md");
+                if (!File.Exists(path)) { defective.Add(code); continue; }
+
+                var text = File.ReadAllText(path);
+                if (ComputeSha256(text) != artifact.Sha256) { defective.Add(code); continue; }
+
+                reusable[code] = text;
+                attempts[code] = artifact.Attempt;
+            }
+
+            // 골격도 섹션도 없으면 재개할 재료가 없다(§11-5).
+            if (skeleton == null && reusable.Count == 0) return null;
+
+            return new PlanAttemptResumeCandidate(
+                runDir, manifest.Run, manifest.StartedAt,
+                skeleton ?? string.Empty, skeletonAttempt,
+                reusable, attempts, defective,
+                ReadPriorReviews(runDir), manifest.Steps.Count);
+        }
+
+        /// <summary>
+        /// 시도 번호가 큰 순으로 최근 <c>CriticFeedbackLog.MaxRetainedRounds</c> 개.
+        /// 점수로 고르지 않는다 — <c>CriticFeedbackLog.Record</c> 가 시간순으로 쌓고
+        /// 넘치면 앞에서 버리는 그 규칙과 같아야 <b>재개 전후로 동작이 같다</b>(설계 §3-3).
+        /// </summary>
+        private static IReadOnlyList<(int Attempt, ReviewResult Review)> ReadPriorReviews(string runDir)
+        {
+            var reviewsDir = Path.Combine(runDir, "reviews");
+            if (!Directory.Exists(reviewsDir)) return new List<(int, ReviewResult)>();
+
+            var result = new List<(int Attempt, ReviewResult Review)>();
+            foreach (var path in Directory.EnumerateFiles(reviewsDir, "attempt-*.json"))
+            {
+                try
+                {
+                    var doc = JsonSerializer.Deserialize<PlanAttemptReview>(File.ReadAllText(path), Options);
+                    if (doc == null || doc.Attempt <= 0) continue;
+                    result.Add((doc.Attempt, new ReviewResult
+                    {
+                        HasDefects = doc.HasDefects,
+                        FeedbackComment = doc.FeedbackComment,
+                        DefectiveSteps = doc.DefectiveSteps?.ToList() ?? new List<string>(),
+                        SkeletonDefective = doc.SkeletonDefective,
+                        StructureDefective = doc.StructureDefective,
+                        AxisThresholdForced = doc.AxisThresholdForced,
+                        ScoreAccuracy = doc.ScoreAccuracy,
+                        ScoreCrud = doc.ScoreCrud,
+                        ScoreInterface = doc.ScoreInterface,
+                        ScoreException = doc.ScoreException,
+                        ScoreReadability = doc.ScoreReadability
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "[PlanAttemptJournal] 리뷰 파일을 건너뜁니다 - {Path}", path);
+                }
+            }
+
+            return result
+                .OrderByDescending(r => r.Attempt)
+                .Take(CriticFeedbackLog.MaxRetainedRounds)
+                .ToList();
         }
 
         public static string ComputeSha256(string input)
