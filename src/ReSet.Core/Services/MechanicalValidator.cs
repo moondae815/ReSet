@@ -9321,6 +9321,8 @@ namespace ReSet.Core.Services
 
                 var exempted = implementation.Count(IsOrchestrationOnly);
                 var originalKeys = new HashSet<string>(originalTerms.Select(t => t.Normalized), StringComparer.Ordinal);
+                // R7 - 원본의 `컬럼식 = 리터럴` 은 이행의 `컬럼식 = @V` 와도 맞는다(한 방향 - 설계 §8-1).
+                originalKeys.UnionWith(originalTerms.Select(t => t.LiteralAsParameter).OfType<string>());
                 var added = implementation
                     .Where(t => !IsOrchestrationOnly(t))
                     .Where(t => !originalKeys.Contains(t.Normalized))

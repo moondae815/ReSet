@@ -246,5 +246,90 @@ END";
 
             Assert.DoesNotContain(Validate(markdown).Errors, e => e.Contains(Marker));
         }
+
+        // ── R7 (설계 §8-1) ──────────────────────────────────────────
+        // 원본: output/Objects/dbo.UP_UTIL_SETTLE_PROC_ETC.Procedure/raw/object_definition.sql:89-99 (UPDATE 1)
+        // 이행: output/Jobs/POQSettleBatch4/agent/steps/S11.md 의 SQL_UPDATE_MISS — 코퍼스 오탐 실물(설계 §7-3 #5).
+        // 실행 자리(S11.md:71-76)는 하나이고 p_intOutState: 2 를 바인딩한다.
+        private const string ProcEtcProcedure = "UP_UTIL_SETTLE_PROC_ETC";
+
+        private const string ProcEtcDdl = @"
+CREATE PROCEDURE dbo.UP_UTIL_SETTLE_PROC_ETC
+    @pi_strYMD CHAR(8)
+AS
+BEGIN
+        IF @v_intID > 0 BEGIN
+            --TSettleMiss 수수료 업데이트
+            UPDATE TSettleMiss
+            SET    YMD          = @v_strYMD
+                  ,CLSettleAmt += @v_intCLTotal
+                  ,CLComm      += @v_intCLComm
+                  ,CLVT        += @v_intCLVT
+            WHERE  ID           = @v_intID
+            AND    ClientID     = @v_strClientID
+            AND    OutYMD       = @v_strOutYMD
+            AND    OutState     = 2
+            AND    IssueType    = @v_intIssueType
+        END
+END";
+
+        private static string ProcEtcStep(string outStateTerm, string issueTypeTerm = "IssueType = @p_intIssueType") =>
+            "### S11 단계\n\n```sql\n" +
+            "-- SQL_UPDATE_MISS (갱신 1 · 라인 89 원문)\n" +
+            "UPDATE SETTLE_POQ_DB.dbo.TSettleMiss\n" +
+            "   SET YMD         = @p_strYMD,\n" +
+            "       CLSettleAmt = CLSettleAmt + @p_intCLTotal,\n" +
+            "       CLComm      = CLComm      + @p_intCLComm,\n" +
+            "       CLVT        = CLVT        + @p_intCLVT\n" +
+            " WHERE ID        = @p_intID\n" +
+            "   AND ClientID  = @p_strClientID\n" +
+            "   AND OutYMD    = @p_strOutYMD\n" +
+            $"   AND {outStateTerm}\n" +
+            $"   AND {issueTypeTerm};\n" +
+            "```\n";
+
+        private static StepValidationResult ValidateProcEtc(string markdown) =>
+            new MechanicalValidator().ValidateBatchStep(
+                markdown,
+                new BatchStepPlan(
+                    Code: "S11", Name: "S11 단계",
+                    LegacyProcedures: new[] { $"dbo.{ProcEtcProcedure}" },
+                    TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMiss" },
+                    ErrorCodes: new[] { "4000" }, Chunkable: false, SchemaTables: Array.Empty<string>()),
+                Array.Empty<string>(), new Dictionary<string, SpecConditions>(), null, null,
+                new Dictionary<string, SpecStatementFacts>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [ProcEtcProcedure] = new SpecStatementFacts(
+                        new[]
+                        {
+                            new SpecDmlRow("UPDATE", 1, 89, "TSettleMiss",
+                                new[] { "ID", "ClientID", "OutYMD", "OutState", "IssueType" },
+                                Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>()),
+                        },
+                        Array.Empty<SpecSetTarget>(), Array.Empty<SpecLocalVariable>()),
+                },
+                null, null, null,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [ProcEtcProcedure] = ProcEtcDdl });
+
+        [Fact]
+        public void R7_StaysSilent_WhenTheStepBindsAParameterWhereTheOriginalHasALiteral()
+        {
+            Assert.DoesNotContain(
+                ValidateProcEtc(ProcEtcStep("OutState  = @p_intOutState")).Errors, e => e.Contains(Marker));
+        }
+
+        [Fact]
+        public void R7_IsOneWay_FiresWhenTheStepHardcodesALiteralWhereTheOriginalHasAVariable()
+        {
+            var error = Assert.Single(
+                ValidateProcEtc(ProcEtcStep("OutState  = 2", "IssueType = 15")).Errors, e => e.Contains(Marker));
+            Assert.Contains("IssueType = 15", error);
+        }
+
+        [Fact]
+        public void R7_StillFires_WhenTheLiteralItselfChanges()
+        {
+            Assert.Contains(ValidateProcEtc(ProcEtcStep("OutState  = 3")).Errors, e => e.Contains(Marker));
+        }
     }
 }

@@ -23,7 +23,17 @@ namespace ReSet.Core.Services
         string Normalized,
         string Raw,
         IReadOnlyList<string> Variables,
-        bool IsJoinEquality);
+        bool IsJoinEquality)
+    {
+        /// <summary>
+        /// R7(설계 §8-1) — 이 항이 `컬럼식 = 리터럴` 이면, 이행이 그 리터럴을 매개변수로 바꾼
+        /// 모양(`컬럼식 = @V`)의 정규형. 해당 없으면 null. **원본 쪽 대조 키로만 쓴다** — 한 방향이다.
+        ///
+        /// [왜 바인딩 값을 안 보나] R2 가 이미 변수 이름을 지워 이 검사는 바인딩 값을 볼 수 없다.
+        /// 그래서 이 키가 새로 버리는 정보가 없다. 대가는 설계 §5 — 다른 값을 바인딩해도 조용하다.
+        /// </summary>
+        public string? LiteralAsParameter { get; init; }
+    }
 
     public static partial class DmlScopeExtractor
     {
@@ -57,7 +67,10 @@ namespace ReSet.Core.Services
                     if (normalized.Length == 0 || !seen.Add(normalized)) continue;
 
                     terms.Add(new PredicateTerm(
-                        normalized, RawPredicateText(term), PredicateVariables(term), IsJoinEqualityTerm(term)));
+                        normalized, RawPredicateText(term), PredicateVariables(term), IsJoinEqualityTerm(term))
+                    {
+                        LiteralAsParameter = LiteralAsParameterKey(term),
+                    });
                 }
             }
 
@@ -226,6 +239,39 @@ namespace ReSet.Core.Services
             && comparison.FirstExpression is ColumnReferenceExpression left
             && comparison.SecondExpression is ColumnReferenceExpression right
             && TopLevelPredicateCollector.HaveDifferentQualifiers(left, right);
+
+        /// <summary>
+        /// R7 — `컬럼식 = 리터럴`(좌우 무관)이면 `"<컬럼식 정규형> = @V"`, 아니면 null.
+        /// `=` 만 받는다 — `<>`·부등호·IN 은 실물이 나올 때 더한다(설계 §8-1).
+        /// </summary>
+        private static string? LiteralAsParameterKey(BooleanExpression term)
+        {
+            if (StripBooleanParentheses(term) is not BooleanComparisonExpression
+                {
+                    ComparisonType: BooleanComparisonType.Equals
+                } comparison)
+            {
+                return null;
+            }
+
+            ScalarExpression? columnSide = null;
+            if (IsLiteralOperand(comparison.SecondExpression)) columnSide = comparison.FirstExpression;
+            else if (IsLiteralOperand(comparison.FirstExpression)) columnSide = comparison.SecondExpression;
+
+            if (columnSide == null || !TopLevelPredicateCollector.ContainsColumn(columnSide)) return null;
+
+            return $"{RenderNormalizedTokens(columnSide)} = @V";
+        }
+
+        /// <summary>리터럴 하나 — 부호 붙은 수(`-1`)와 괄호로 감싼 리터럴도 받는다.</summary>
+        private static bool IsLiteralOperand(ScalarExpression? expression) =>
+            expression switch
+            {
+                Literal => true,
+                UnaryExpression { Expression: Literal } => true,
+                ParenthesisExpression { Expression: var inner } => IsLiteralOperand(inner),
+                _ => false,
+            };
 
         /// <summary>
         /// R1·R2·R5 의 토큰 편집. 하위질의 안까지 내려간다(기본 방문자가 자식으로 내려간다).

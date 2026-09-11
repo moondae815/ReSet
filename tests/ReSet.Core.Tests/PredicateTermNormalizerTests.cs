@@ -144,5 +144,28 @@ namespace ReSet.Core.Tests
 
             Assert.Equal(3, terms.Count);
         }
+
+        // ── R7 (설계 §8-1) ── 원본 리터럴 등식은 매개변수로 바꾼 모양의 키도 함께 낸다.
+        [Fact]
+        public void R7_ALiteralEqualityAlsoCarriesItsParameterisedForm()
+        {
+            var literal = Assert.Single(Terms("OutState = 2"));
+            var flipped = Assert.Single(Terms("2 = OutState"));
+            var parameter = Assert.Single(Terms("OutState = @p_intOutState"));
+
+            Assert.Equal(parameter.Normalized, literal.LiteralAsParameter);
+            Assert.Equal(parameter.Normalized, flipped.LiteralAsParameter);
+            Assert.Null(parameter.LiteralAsParameter);
+        }
+
+        [Fact]
+        public void R7_OnlyPlainEqualityWithALiteralQualifies()
+        {
+            Assert.Null(Assert.Single(Terms("OutState > 2")).LiteralAsParameter);
+            Assert.Null(Assert.Single(Terms("ISNULL(OUTYMD,'') <> ''")).LiteralAsParameter);
+            Assert.Null(Assert.Single(Terms("PGNAME IN ('a', 'b')")).LiteralAsParameter);
+            Assert.Null(Assert.Single(Terms("(A.X = 1 OR B.Y = 2)")).LiteralAsParameter);
+            Assert.Null(Assert.Single(Terms("A.YMD = A.AYMD")).LiteralAsParameter);
+        }
     }
 }
