@@ -2179,6 +2179,16 @@ namespace ReSet.Core.Services
                                 lastSkeletonResult = split.Generation;
                                 lastStepSections = split.Sections;
                                 stepFloorViolations = split.FloorViolations;
+                                // [2026-09-11 최종 전체 리뷰 I1] 단계 재시도 루프는
+                                // AiCallFailedException을 삼키고 스텁을 돌려준다 -
+                                // 예외가 여기까지 안 올라오므로 바깥 catch(:2231-2238)가
+                                // 이 사유를 못 본다. split이 대신 실어 온 신호를 여기서
+                                // 세운다 - 쿼터가 가장 자주 터지는 자리(단계 호출)의
+                                // 사유가 CLI까지 가는 유일한 경로다.
+                                if (split.AnyStepQuotaExhausted)
+                                {
+                                    abortReason = PipelineAbortReason.QuotaExhausted;
+                                }
                             }
                             else
                             {
@@ -2619,6 +2629,15 @@ namespace ReSet.Core.Services
                 {
                     _userInteraction.NotifyError($"{jobName} - AI 교차 리뷰 실패 (시도 {attempt}): {ex.Message}");
                     reviewFailureReason = ex.Message;
+                    // [2026-09-11 최종 전체 리뷰 I1] 골격·단계 생성 쪽(:2234-2237)과 같은
+                    // 판정을 여기도 해야 한다 - 안 하면 L2 리뷰가 쿼터로 죽어도 사유가
+                    // 결과까지 안 올라간다. abortReason은 while 밖에서 선언돼 회차를
+                    // 넘어 산다 - 이번 회차는 구제/ReviewNotRun으로 문서를 살리더라도,
+                    // 나중 회차가 완전히 실패하면 이 값이 그 실패의 사유가 된다.
+                    if (ex is AiCallFailedException { Verdict: AiRetryVerdict.Exhausted })
+                    {
+                        abortReason = PipelineAbortReason.QuotaExhausted;
+                    }
                 }
 
                 if (reviewSuccess && l2Result != null)
@@ -3682,12 +3701,19 @@ namespace ReSet.Core.Services
         /// 있는 한 함께 살아 있어야 한다. 목록이었다면 통째 교체 시 그 기록이
         /// 사라져 배너가 조용히 과소 보고했을 것이다.
         /// </summary>
+        /// <param name="AnyStepQuotaExhausted">
+        /// [2026-09-11 최종 전체 리뷰 I1] 이번 회차의 단계 중 하나 이상이 재시도를 다
+        /// 쓰고도(스텁으로 끝났고) 그 원인에 쿼터 소진이 있었는가. RunConsolidatedPipelineAsync가
+        /// 이 값을 보고 abortReason을 세운다 - 안 그러면 쿼터가 가장 자주 터지는
+        /// 자리(단계 호출)에서만 사유가 영영 안 실린다.
+        /// </param>
         private sealed record SplitGeneration(
             string Markdown,
             AiResult Generation,
             string Skeleton,
             Dictionary<string, string> Sections,
-            Dictionary<string, StepDefect> FloorViolations);
+            Dictionary<string, StepDefect> FloorViolations,
+            bool AnyStepQuotaExhausted = false);
 
         /// <summary>
         /// 채택 후보(BestAttempt.Current)를 실제로 만들어 낸 상태 일체.
@@ -3893,7 +3919,12 @@ namespace ReSet.Core.Services
         /// 단계 하나의 생성 결과. 병렬 실행 중에는 공유 컬렉션을 만지지 않고 이
         /// 레코드로 돌려주며, 병합은 Task.WhenAll 이후 단일 스레드에서 한다.
         /// </summary>
-        private sealed record StepSectionResult(string Code, string Markdown, StepDefect? FloorViolation);
+        /// <param name="QuotaExhausted">
+        /// [2026-09-11 최종 전체 리뷰 I1] 이 단계가 쿼터 소진으로 스텁이 됐는가.
+        /// GenerateStepSectionWithFloorRetryAsync의 out 값을 그대로 옮긴다.
+        /// </param>
+        private sealed record StepSectionResult(
+            string Code, string Markdown, StepDefect? FloorViolation, bool QuotaExhausted = false);
 
         /// <summary>
         /// 골격 1회 + 단계 N회로 계획서를 만든다.
@@ -4085,7 +4116,7 @@ namespace ReSet.Core.Services
                     var taskKey = $"step_{step.Code}";
                     progressScope.AddTask(taskKey, $"3/3. 단계 본문 생성 중 ({step.Code} · {index + 1}/{pending.Count})...");
 
-                    var (markdown, violation) = await GenerateStepSectionWithFloorRetryAsync(
+                    var (markdown, violation, stepQuotaExhausted) = await GenerateStepSectionWithFloorRetryAsync(
                         step, steps, conventions, specs, targetLanguage, jobName,
                         knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, callGraph,
                         ddlByProcedure, journal, attempt, cancellationToken, PreviousBodyFor(step.Code));
@@ -4097,7 +4128,7 @@ namespace ReSet.Core.Services
                     // violation을 그대로 넘긴다 - 2단계가 "이 섹션을 재사용해도
                     // 되는가"를 manifest만으로 물을 수 있어야 한다(설계서 §4-3).
                     journal.RecordStepSection(attempt, step.Code, markdown, violation);
-                    return new StepSectionResult(step.Code, markdown, violation);
+                    return new StepSectionResult(step.Code, markdown, violation, stepQuotaExhausted);
                 }
                 finally
                 {
@@ -4175,7 +4206,8 @@ namespace ReSet.Core.Services
                 generation,
                 skeleton,
                 sections,
-                floorViolations);
+                floorViolations,
+                stepResults.Any(r => r.QuotaExhausted));
         }
 
         /// <summary>
@@ -4344,7 +4376,21 @@ namespace ReSet.Core.Services
         /// 들어가는 순서는 완료 순서를 따라 비결정적이 된다. 호출부가 Task.WhenAll
         /// 이후 단일 스레드에서 목록 순서대로 병합한다.
         /// </summary>
-        private async Task<(string Markdown, StepDefect? Defect)> GenerateStepSectionWithFloorRetryAsync(
+        /// <returns>
+        /// <c>QuotaExhausted</c> — [2026-09-11 최종 전체 리뷰 I1] 이 단계가 결국 "생성
+        /// 실패" 스텁으로 끝났고(<c>adopted == null</c>), 그 원인 중 하나가 쿼터 소진
+        /// (<see cref="AiRetryVerdict.Exhausted"/>)이었는가. 재시도 루프는 이 예외를
+        /// 삼킨다 - 그 자체는 바꾸지 않는다(한 단계 실패가 전체를 죽이지 않게 하는
+        /// 기존 복원력이다). 다만 삼킨 사유를 밖으로 꺼내지 않으면
+        /// <c>ConsolidatedPipelineResult.AbortReason</c>이 이 자리에서만 영영 null로
+        /// 남는다 - 쿼터가 가장 자주 터지는 자리인데도. 본문이 실제로 나온 경로
+        /// (성공 반환 둘)에서는 항상 false다 - 도중에 한 시도가 Exhausted를 던졌어도
+        /// 결국 본문을 얻었다면 이 회차는 실패가 아니다.
+        ///
+        /// out 매개변수가 아니라 튜플 세 번째 자리인 이유: 이 메서드는 <c>async</c>다 -
+        /// C#은 async 메서드에 ref/out 매개변수를 허용하지 않는다(CS1988).
+        /// </returns>
+        private async Task<(string Markdown, StepDefect? Defect, bool QuotaExhausted)> GenerateStepSectionWithFloorRetryAsync(
             BatchStepPlan step,
             IReadOnlyList<BatchStepPlan> steps,
             string conventions,
@@ -4372,6 +4418,9 @@ namespace ReSet.Core.Services
             // 자체라 회차 안에서 바뀌면 안 된다.
             string? previousBody = null)
         {
+            // 이번 회차 안에서 어느 시도든 Exhausted를 던졌는지. adopted == null로
+            // 끝났을 때만 반환값의 QuotaExhausted에 실린다.
+            var sawQuotaExhausted = false;
             const int maxTries = 5;   // 최초 1회 + 재시도 4회 - 근거는 위 docstring 참고
 
             // 원본이 무엇으로 거르고 어떤 순서로 반올림하는지는 명세서에만 있다.
@@ -4435,6 +4484,13 @@ namespace ReSet.Core.Services
                 {
                     previousTryThrew = true;
                     _userInteraction.NotifyError($"{jobName} - {step.Code} 단계 섹션 생성 실패: {ex.Message}");
+                    // [2026-09-11 최종 전체 리뷰 I1] 재시도 횟수·지연은 그대로 둔다 -
+                    // 이 수정은 "삼킨 사유를 기억해 둔다"만 더한다. adopted == null로
+                    // 끝날 때만(아래) 밖으로 꺼낸다.
+                    if (ex is AiCallFailedException { Verdict: AiRetryVerdict.Exhausted })
+                    {
+                        sawQuotaExhausted = true;
+                    }
                 }
 
                 if (string.IsNullOrWhiteSpace(content))
@@ -4465,7 +4521,7 @@ namespace ReSet.Core.Services
                     ddlByProcedure: ddlByProcedure);
                 if (stepResult.IsValid)
                 {
-                    return (content, null);
+                    return (content, null, false);
                 }
 
                 // 목차가 대조할 재료를 내지 않은 경우다. 본문을 다시 써도 프롬프트에
@@ -4479,7 +4535,7 @@ namespace ReSet.Core.Services
                         $"  [yellow]* {step.Code} 단계는 목차 결함으로 하한 검사를 실행할 수 없습니다 - 재생성으로 고쳐지지 않아 건너뜁니다: {reason}[/]");
                     Log.Warning(
                         "단계 하한 검사를 실행하지 못했습니다 - Step: {StepCode}, 사유: {Reason}", step.Code, reason);
-                    return (content, new StepDefect(StepDefectKind.Unverifiable, $"{step.Code} ({reason})"));
+                    return (content, new StepDefect(StepDefectKind.Unverifiable, $"{step.Code} ({reason})"), false);
                 }
 
                 adoptedErrors = string.Join(" / ", stepResult.Errors);
@@ -4504,8 +4560,10 @@ namespace ReSet.Core.Services
 
             if (adopted == null)
             {
+                // 스텁 반환 자체는 그대로다(기존 복원력) - 사유만 밖으로 꺼낸다.
                 return ($"### {step.Code} {step.Name}\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다. 원본 프로시저를 직접 확인하십시오.\n",
-                    new StepDefect(StepDefectKind.GenerationFailed, $"{step.Code} (생성 실패)"));
+                    new StepDefect(StepDefectKind.GenerationFailed, $"{step.Code} (생성 실패)"),
+                    sawQuotaExhausted);
             }
 
             // [사유를 싣는다 - 2026-09-06 POQSettleBatch4 축 B 감사]
@@ -4521,7 +4579,7 @@ namespace ReSet.Core.Services
             var floorReason = string.IsNullOrWhiteSpace(adoptedErrors)
                 ? "하한 미달"
                 : $"하한 미달: {adoptedErrors}";
-            return (adopted, new StepDefect(StepDefectKind.QualityFloor, $"{step.Code} ({floorReason})"));
+            return (adopted, new StepDefect(StepDefectKind.QualityFloor, $"{step.Code} ({floorReason})"), false);
         }
 
         /// <summary>

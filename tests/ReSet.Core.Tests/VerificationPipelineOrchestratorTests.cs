@@ -5239,6 +5239,87 @@ namespace ReSet.Core.Tests
             Assert.Null(result.AbortReason);
         }
 
+        /// <summary>
+        /// [2026-09-11 최종 전체 리뷰 I1] 단계 재시도 루프(GenerateStepSectionWithFloorRetryAsync)는
+        /// AiCallFailedException을 전부 삼키고 "생성 실패" 스텁을 돌려준다 - 그 자체는
+        /// 기존 복원력(한 단계 실패가 전체를 죽이지 않음)이라 고치기 전에도 지킨다.
+        /// 문제는 <b>왜</b> 실패했는지가 결과까지 안 실린다는 것이다 - 고치기 전에는
+        /// 모든 시도가 Exhausted를 던져도 AbortReason이 null로 남았다(리뷰어 실측).
+        /// 단계 호출은 쿼터가 가장 자주 터지는 자리인데도 설계 §4-4가 만든 안내가
+        /// 거기서만 한 번도 안 떴다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenAStepExhaustsQuotaAfterAllRetries_ReportsAbortReasonEvenThoughAStubIsProduced()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n" +
+                "    { \"Code\": \"S01\", \"Name\": \"첫\", \"LegacyProcedures\": [\"USP_Test1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] }\n" +
+                "  ]\n}\n```";
+            var planStructure = "## 목차\n" + stepsJson;
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = planStructure });
+            _aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            // 5회 전부(최초 1 + 재시도 4) 쿼터 소진으로 던진다 - 재시도 루프는 이
+            // 값을 보고도 계속 재시도한다(기존 동작 보존, 이 수정은 카운트를 안 바꾼다).
+            _aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns<AiResult>(_ => throw new AiCallFailedException(
+                    "쿼터 소진", new Exception("한도"), 1, AiRetryVerdict.Exhausted));
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 스텁은 여전히 만들어진다 - 기존 복원력을 안 건드렸다는 증거다.
+            Assert.NotNull(result.Plan);
+            Assert.Contains("이 단계는 생성에 실패했습니다", result.Plan);
+
+            // 고치기 전엔 여기가 null이었다 - 사유가 위로 전달되는 것이 이 수정의
+            // 목표다(설계 §4-4, "쿼터 소진으로 멈췄습니다 - 실패가 아닙니다" 안내는
+            // 이 값에 의존한다).
+            Assert.Equal(PipelineAbortReason.QuotaExhausted, result.AbortReason);
+        }
+
+        /// <summary>
+        /// [2026-09-11 최종 전체 리뷰 I1, 두 번째 자리] L2 리뷰 호출의 catch도 같은
+        /// 모양으로 AiCallFailedException을 삼킨다(reviewFailureReason만 남긴다).
+        /// 생성 자체는 성공했으므로 Plan은 non-null로 끝나지만, 나중 회차가 이어서
+        /// 완전히 실패하면(Plan이 null이 되면) 이 회차에서 세운 abortReason이
+        /// 그 실패까지 살아남아야 CLI가 쿼터 안내를 낼 수 있다 - abortReason은
+        /// while 루프 밖에서 선언돼 회차를 넘어 산다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenL2ReviewExhaustsQuota_ReportsAbortReason()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult
+                {
+                    Content = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트"
+                }));
+            _aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns<ReviewResult>(_ => throw new AiCallFailedException(
+                    "쿼터 소진", new Exception("한도"), 1, AiRetryVerdict.Exhausted));
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // 이 회차의 생성 자체는 성공했으므로 문서는 여전히 나온다(교차 검증 없이
+            // 확정하는 기존 경로) - 이 시험이 재는 것은 Plan의 유무가 아니라
+            // AbortReason이 이 catch에서도 살아남는가다.
+            Assert.NotNull(result.Plan);
+            Assert.Equal(PipelineAbortReason.QuotaExhausted, result.AbortReason);
+        }
+
         // finalAiResult는 생성이 성공할 때만 갱신되므로 채택본과 어긋날 수 있었다.
         // 1차가 최고점인데 2차 생성이 성공(점수는 더 낮음)하고 3차가 죽으면,
         // 채택본은 1차인데 Thinking.md/prompt-context.md는 2차를 서술했다.
