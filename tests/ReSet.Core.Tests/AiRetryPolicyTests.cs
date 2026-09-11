@@ -97,12 +97,11 @@ namespace ReSet.Core.Tests
         }
 
         [Theory]
-        [InlineData(CliFailureKind.QuotaExhausted)]
         [InlineData(CliFailureKind.NotAuthenticated)]
         [InlineData(CliFailureKind.ToolPermissionDenied)]
         public void Classify_CliFatalKinds_AreFatal(CliFailureKind kind)
         {
-            // 쿼터 소진을 재시도하면 이미 빈 지갑을 계속 두드리게 된다.
+            // 다시 해도 같은 결과다 - 인증도 도구 권한도 재시도로 안 풀린다.
             var ex = new CliInvocationException("실패", kind);
 
             Assert.Equal(AiRetryVerdict.Fatal, AiRetryPolicy.Classify(ex, CancellationToken.None));
@@ -115,6 +114,27 @@ namespace ReSet.Core.Tests
             var ex = new CliInvocationException("알 수 없음", CliFailureKind.Unknown);
 
             Assert.Equal(AiRetryVerdict.Fatal, AiRetryPolicy.Classify(ex, CancellationToken.None));
+        }
+
+        // CLI 프로바이더는 분류가 이미 있다 - 그대로 Exhausted 로 간다(설계 §4-1).
+        [Fact]
+        public void Classify_CliQuotaExhausted_IsExhaustedNotFatal()
+        {
+            var ex = new CliInvocationException("한도 소진", CliFailureKind.QuotaExhausted);
+
+            Assert.Equal(AiRetryVerdict.Exhausted, AiRetryPolicy.Classify(ex, CancellationToken.None));
+        }
+
+        // 429 는 「초당 한도에 잠깐 막힘」일 수 있다. 첫 429 에 포기하면 넘길 수 있는
+        // 막힘에 포기하는 것이다 - 재시도를 다 쓴 뒤에야 Exhausted 다(설계 §4-1).
+        // Classify 자신은 여전히 Transient 를 반환한다 - 승격은 AiCallRetry 가
+        // 재시도를 다 쓴 뒤에 한다.
+        [Fact]
+        public void Classify_Http429_IsTransientSoTheRetryStillRuns()
+        {
+            var ex = new HttpRequestException("too many requests", null, HttpStatusCode.TooManyRequests);
+
+            Assert.Equal(AiRetryVerdict.Transient, AiRetryPolicy.Classify(ex, CancellationToken.None));
         }
     }
 }

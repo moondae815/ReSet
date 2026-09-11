@@ -1,4 +1,6 @@
 using System;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Serilog;
@@ -35,10 +37,14 @@ namespace ReSet.Core.Services
     {
         public int Attempts { get; }
 
-        public AiCallFailedException(string message, Exception inner, int attempts)
+        /// <summary>왜 포기했나. 호출부가 쿼터 소진을 실패와 가르는 근거다(설계 §4-2).</summary>
+        public AiRetryVerdict Verdict { get; }
+
+        public AiCallFailedException(string message, Exception inner, int attempts, AiRetryVerdict verdict)
             : base(message, inner)
         {
             Attempts = attempts;
+            Verdict = verdict;
         }
     }
 
@@ -88,6 +94,13 @@ namespace ReSet.Core.Services
                         throw;
                     }
 
+                    // 지금은 안 된다 - 재시도해도 같다. 다만 사유를 실어 올려보낸다.
+                    if (verdict == AiRetryVerdict.Exhausted)
+                    {
+                        throw new AiCallFailedException(
+                            "AI 호출이 쿼터 소진으로 중단됐습니다.", ex, attempt, AiRetryVerdict.Exhausted);
+                    }
+
                     lastFailure = ex;
 
                     if (attempt < effectiveMaxTries)
@@ -105,10 +118,19 @@ namespace ReSet.Core.Services
                 "[재시도] AI 호출이 {MaxTries}회 모두 실패했습니다 - 마지막 사유: {Reason}",
                 effectiveMaxTries, lastFailure!.Message);
 
+            // 재시도를 다 쓴 뒤에도 마지막 실패가 429였다면 그때는 짧은 막힘이 아니다
+            // (설계 §4-1). 그 밖의 일시적 실패는 계속 Transient로 보고한다 - 승격
+            // 근거가 429 하나뿐이라서다.
+            var finalVerdict = AiRetryPolicy.Classify(lastFailure, cancellationToken) == AiRetryVerdict.Transient
+                && lastFailure is HttpRequestException { StatusCode: HttpStatusCode.TooManyRequests }
+                ? AiRetryVerdict.Exhausted
+                : AiRetryVerdict.Transient;
+
             throw new AiCallFailedException(
                 $"AI 호출이 {effectiveMaxTries}회 모두 실패했습니다: {lastFailure.Message}",
                 lastFailure,
-                effectiveMaxTries);
+                effectiveMaxTries,
+                finalVerdict);
         }
 
         /// <summary>
