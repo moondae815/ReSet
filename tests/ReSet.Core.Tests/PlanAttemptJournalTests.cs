@@ -725,5 +725,81 @@ namespace ReSet.Core.Tests
             Assert.Null(candidate.DefectiveStepKinds["S02"]);
             Assert.Equal(StepDefectKind.QualityFloor, candidate.DefectiveStepKinds["S03"]);
         }
+
+        // 설계 §4-4 형태("단계 h/n · 골격 · 회차 리뷰 k개")가 실제 값으로 채워지는지.
+        // h(healthy=2)·n(total=4)·k(reviews=3)을 모두 다른 값으로 seed한다 - 셋이
+        // 같으면 서식 안의 자리를 바꿔도(예: healthy와 reviews를 맞바꿔도) 이 시험이
+        // 못 잡는다.
+        [Fact]
+        public void DescribeLatestRun_HealthyRun_SummarizesStepsSkeletonAndReviews()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+
+            journal.RecordSkeleton(1, "골격 본문");
+            journal.RecordStepSection(1, "S01", "S01 건강");
+            journal.RecordStepSection(1, "S02", "S02 건강");
+            journal.RecordStepSection(
+                1, "S03", "### S03\n\n> [!WARNING]\n> 이 단계는 생성에 실패했습니다.",
+                new StepDefect(StepDefectKind.GenerationFailed, "S03 (생성 실패)"));
+            journal.RecordStepSection(
+                1, "S04", "### S04\n\n> [!WARNING]\n> 본문 없음 - 하한 미달",
+                new StepDefect(StepDefectKind.QualityFloor, "S04 (하한 미달)"));
+            journal.RecordReview(1, new ReviewResult { HasDefects = true, DefectiveSteps = { "S03", "S04" } });
+            journal.RecordReview(2, new ReviewResult { HasDefects = true, DefectiveSteps = { "S04" } });
+            journal.RecordReview(3, new ReviewResult { HasDefects = false });
+
+            var summary = PlanAttemptJournal.DescribeLatestRun(_root, "Job_Test");
+
+            Assert.NotNull(summary);
+            Assert.Contains("run-001", summary);
+            Assert.Contains("2/4", summary);          // healthy=2, total=4
+            Assert.Contains("골격", summary);
+            Assert.Contains("회차 리뷰 3개", summary); // reviews=3
+        }
+
+        // 다섯 갈래 모두 null - 짐작이 아니라 읽지 못하면 조용히 포기한다(설계 §4-4).
+        [Theory]
+        [InlineData("no-attempts-directory")]
+        [InlineData("no-run-directory")]
+        [InlineData("no-manifest-file")]
+        [InlineData("manifest-deserializes-to-null")]
+        [InlineData("corrupt-json-throws")]
+        public void DescribeLatestRun_MissingOrBrokenArtifacts_ReturnsNull(string scenario)
+        {
+            var jobName = $"Job_{scenario}";
+            var attemptsRoot = Path.Combine(_root, "Jobs", jobName, "raw", "attempts");
+
+            switch (scenario)
+            {
+                case "no-attempts-directory":
+                    // Jobs/{jobName}/raw/attempts 자체를 만들지 않는다.
+                    break;
+                case "no-run-directory":
+                    Directory.CreateDirectory(attemptsRoot);
+                    break;
+                case "no-manifest-file":
+                    Directory.CreateDirectory(Path.Combine(attemptsRoot, "run-001"));
+                    break;
+                case "manifest-deserializes-to-null":
+                    {
+                        var runDir = Path.Combine(attemptsRoot, "run-001");
+                        Directory.CreateDirectory(runDir);
+                        File.WriteAllText(Path.Combine(runDir, "manifest.json"), "null");
+                        break;
+                    }
+                case "corrupt-json-throws":
+                    {
+                        var runDir = Path.Combine(attemptsRoot, "run-001");
+                        Directory.CreateDirectory(runDir);
+                        File.WriteAllText(Path.Combine(runDir, "manifest.json"), "{ 이것은 JSON 이 아니다");
+                        break;
+                    }
+            }
+
+            var result = PlanAttemptJournal.DescribeLatestRun(_root, jobName);
+
+            Assert.Null(result);
+        }
     }
 }
