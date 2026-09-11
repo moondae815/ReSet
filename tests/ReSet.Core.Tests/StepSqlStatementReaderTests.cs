@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using ReSet.Core.Services;
@@ -1501,6 +1502,78 @@ UPDATE A SET A.X = 1 FROM dbo.T AS A;
         Assert.Equal(
             new[] { "TSettleMst.MPLTID=TSettleMst.PLTID" },
             Assert.Single(statements).JoinPairs.ToArray());
+    }
+
+    // ── 앵커 DML 최상위 술어 ─────────────────────────────────────
+    // 설계: docs/superpowers/specs/2026-09-11-앵커-DML-최상위-술어-대조-design.md §2-1
+    // 원본 경로와 이행 경로가 같은 정규화기를 부른다 - 이 절이 그 대칭을 잠근다.
+
+    [Fact]
+    public void PredicateTerms_AreReadForUpdateDeleteAndInsertSelect()
+    {
+        var statements = StepSqlStatementReader.Read(Fence(
+            "UPDATE A SET A.X = 1 FROM dbo.TSettleMst A WHERE A.YMD = @p AND A.USESTATE = 0;\n" +
+            "DELETE FROM dbo.TSettleByOUT WHERE ProcYMD = @p;\n" +
+            "INSERT INTO dbo.TSettleByOUT (YMD) SELECT YMD FROM dbo.TSettleMst WHERE ProcYMD = @p\n" +
+            "UNION ALL SELECT YMD FROM dbo.TSettleMst WHERE ExtraSettleFlag = 1;"));
+
+        Assert.Equal(new[] { 2, 1, 2 }, statements.Select(s => s.PredicateTerms.Count).ToArray());
+    }
+
+    [Fact]
+    public void PredicateTerms_OfTheSameStatementAgreeWithTheOriginalPath()
+    {
+        // 원본: output/Objects/dbo.UP_Util_PG_Client_CMRate_Ins.Procedure/raw/object_definition.sql:76-114 (INSERT 2)
+        // 이행: output/Jobs/POQSettleBatch6/agent/steps/S01.md 의 U4. 목록만 줄였다.
+        // 이행은 콤마 조인을 ON 으로 옮기고 청크 범위(@p_from·@p_to)를 더했다. 둘을 빼면
+        // 업무 항 넷이 같은 정규형이어야 한다 - 안 같으면 이 검사는 이 문장에서 오탐한다.
+        const string originalDdl = @"
+CREATE PROCEDURE dbo.P @pi_strYMD CHAR(8)
+AS
+BEGIN
+    INSERT INTO TClientSettleRate(YMD, CLIENTID)
+                           SELECT @pi_strYMD, B.CLIENTID
+                           FROM   TClientContract A WITH (NOLOCK)
+                                 ,TClientCMRate   B WITH (NOLOCK)
+                           WHERE  A.CLIENTID = B.CLIENTID
+                           AND    A.USESTATE IN (0,4,5,6)   --상태
+                           AND    B.USESTATE IN (0,4)       --상태
+                           UNION ALL
+                           SELECT @pi_strYMD, B.CLIENTID
+                           FROM   TClientContract A WITH (NOLOCK)
+                                 ,TClientCMRate   B WITH (NOLOCK)
+                           WHERE  A.CLIENTID = B.CLIENTID
+                           AND    B.USESTATE = 5
+                           AND   (A.ContractCancelYMD = @pi_strYMD  OR B.ContractCancelYMD = @pi_strYMD )
+END";
+
+        var step = StepSqlStatementReader.Read(Fence(
+            "/* U4: TClientSettleRate 청크 등록 (UNION ALL 2분기, 동일 컬럼 순서) */\n" +
+            "INSERT INTO SETTLE_POQ_DB.dbo.TClientSettleRate (YMD, CLIENTID)\n" +
+            "SELECT @p_ymd, B.CLIENTID\n" +
+            "  FROM SETTLE_POQ_DB.dbo.TClientContract AS A\n" +
+            "  JOIN SETTLE_POQ_DB.dbo.TClientCMRate AS B ON A.CLIENTID = B.CLIENTID\n" +
+            " WHERE A.USESTATE IN (0,4,5,6)\n" +
+            "   AND B.USESTATE IN (0,4)\n" +
+            "   AND B.PGNAME >= @p_from AND B.PGNAME <= @p_to\n" +
+            "UNION ALL\n" +
+            "SELECT @p_ymd, B.CLIENTID\n" +
+            "  FROM SETTLE_POQ_DB.dbo.TClientContract AS A\n" +
+            "  JOIN SETTLE_POQ_DB.dbo.TClientCMRate AS B ON A.CLIENTID = B.CLIENTID\n" +
+            " WHERE B.USESTATE = 5\n" +
+            "   AND (A.ContractCancelYMD = @p_ymd OR B.ContractCancelYMD = @p_ymd)\n" +
+            "   AND B.PGNAME >= @p_from AND B.PGNAME <= @p_to;"));
+
+        static string[] Business(IEnumerable<PredicateTerm> terms) => terms
+            .Where(t => !t.IsJoinEquality)
+            .Where(t => !t.Variables.Any(v => v is "@p_from" or "@p_to"))
+            .Select(t => t.Normalized)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToArray();
+
+        var original = Assert.Single(DmlScopeExtractor.Extract(originalDdl, "@pi_strYMD")).PredicateTerms;
+        Assert.Equal(Business(original), Business(Assert.Single(step).PredicateTerms));
+        Assert.Equal(4, Business(original).Length);
     }
 
     // ── 일치하는 중복은 모호가 아니다 (2026-09-08) ────────────────────────────
