@@ -424,6 +424,210 @@ END";
             Assert.Equal(0, report.Indicators.PredicateTermStatementsFired);
         }
 
+        // [Fix Round 1 리뷰] 위 세 시험(Fired·S1·E1)은 여덟 갈래 중 셋만 실제
+        // 스윕 경로로 지난다. 나머지 다섯(Matched·S2·S3·E2·E3)이 여기서부터다 -
+        // 각자 자기 계수만 1이고 나머지 침묵 계수는 0임을 함께 본다. 그래야
+        // switch의 case 라벨을 맞바꿔도(예: CursorExempt ↔ StagingExempt) 잡힌다.
+
+        // Matched - 이행이 원본과 같은 항만 쓰면 대조까지는 갔지만 발화하지 않는다.
+        [Fact]
+        public void PredicateTermMatchWithNoAddedTermIsCountedAsComparedNotFired()
+        {
+            var job = JobWithStep("UPDATE dbo.TSettleMst SET UseState = 1 WHERE YMD = @p;", withDdl: true);
+
+            var report = StepSweepService.Sweep(new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.Equal(1, report.Indicators.PredicateTermStatementsCompared);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsFired);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutDdl);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutOriginalKey);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutOriginalTerms);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByCursorGroup);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByStaging);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByBanner);
+        }
+
+        // S2 - Batch6 U-앵커 불일치의 모양. 앵커가 가리키는 서수의 원본 대상이
+        // 이행과 다르면 키가 없다(AnchoredPredicateTermCheckTests.
+        // StaysSilent_WhenTheAnchoredTargetIsNotTheOriginalsTarget 과 같은 모양).
+        [Fact]
+        public void PredicateTermSilenceWithoutOriginalKeyIsCounted()
+        {
+            var job = JobWithStep("UPDATE dbo.TSettleMst2 SET UseState = 1 WHERE YMD = @p;", withDdl: true);
+
+            var report = StepSweepService.Sweep(new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.Equal(1, report.Indicators.PredicateTermSilencedWithoutOriginalKey);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsCompared);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsFired);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutDdl);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutOriginalTerms);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByCursorGroup);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByStaging);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByBanner);
+        }
+
+        // S3 - 원본이 WHERE 없이 통째로 쓰면 「더했다」의 기준이 없다.
+        private const string DdlOneUpdateNoWhere = @"
+CREATE PROCEDURE dbo.UP_TEST
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE dbo.TSettleMst SET UseState = 1
+END";
+
+        [Fact]
+        public void PredicateTermSilenceWithoutOriginalTermsIsCounted()
+        {
+            var job = JobWithStep("UPDATE dbo.TSettleMst SET UseState = 1 WHERE YMD = @p;", withDdl: true)
+                with
+                {
+                    DdlByProcedure = new Dictionary<string, string>
+                    {
+                        ["dbo.UP_TEST"] = DdlOneUpdateNoWhere,
+                    },
+                };
+
+            var report = StepSweepService.Sweep(new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.Equal(1, report.Indicators.PredicateTermSilencedWithoutOriginalTerms);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsCompared);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsFired);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutDdl);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutOriginalKey);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByCursorGroup);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByStaging);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByBanner);
+        }
+
+        // S5 - 명세서가 L1 소진 배너를 달면 그 표는 기준값이 아니다. 배너는
+        // VerificationBanner.L1Exhausted(그 마커를 소유한 생산자)로 만든다 -
+        // 마커 문자열을 여기서 베끼면 그 문자열이 바뀌는 날 이 시험이 거짓 초록이 된다.
+        [Fact]
+        public void PredicateTermSilencedByBannerIsCounted()
+        {
+            var job = JobWithStep(
+                "UPDATE dbo.TSettleMst SET UseState = 1 WHERE YMD = @p AND PGNAME = 'x';", withDdl: true)
+                with
+                {
+                    Specs = new List<(string, string)>
+                    {
+                        ("dbo.UP_TEST", VerificationBanner.L1Exhausted(new[] { "x" })),
+                    },
+                };
+
+            var report = StepSweepService.Sweep(new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.Equal(1, report.Indicators.PredicateTermSilencedByBanner);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsCompared);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsFired);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutDdl);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutOriginalKey);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutOriginalTerms);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByCursorGroup);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByStaging);
+        }
+
+        // E2 - 커서로 집계 그룹을 순회하던 원본을 집합 연산으로 치환하면 커서
+        // 변수였던 술어는 원본에 없는 항이 아니다. CursorGroupExemptionTests 의
+        // 픽스처 모양(SELECT 1 의 GROUP BY == 쓰기 문장의 술어)을 그대로 옮긴다 -
+        // 다만 여기서는 명세서 markdown 을 실제로 추출기가 읽게 표로 적는다.
+        private const string CursorDdl = @"
+CREATE PROCEDURE dbo.UP_TEST
+    @p CHAR(8)
+AS
+BEGIN
+    DECLARE cur CURSOR FOR
+        SELECT OutYMD, ClientID, PGName FROM dbo.TSettleMst
+         WHERE EDIReqYmd = @p GROUP BY OutYMD, ClientID, PGName;
+    DELETE FROM dbo.TSettleByOUT WHERE OutYMD = @o AND ClientID = @c AND PGName = @g;
+END";
+
+        private const string CursorGroupSpec = @"
+### DML 범위 (기계 확정 — 수정 금지)
+
+| 문장 | 라인 | 대상 | 술어 컬럼 | 조인 키 | GROUP BY | ORDER BY |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| SELECT 1 | 29 | — | EDIReqYmd, AcqType, OutState | — | OutYMD, ClientID, PGName | — |
+| DELETE 1 | 46 | TSettleByOUT | OutYMD, ClientID, PGName | — | — | — |
+";
+
+        [Fact]
+        public void PredicateTermSilencedByCursorGroupIsCounted()
+        {
+            var markdown = "### S01. 정리\n\n설명.\n\n```sql\n/* U1: 정리 */\n" +
+                "DELETE FROM dbo.TSettleByOUT WHERE EDIReqYmd = @p_batchYmd AND AcqType = 1 AND OutState IN (2,9);\n" +
+                "```\n";
+
+            var job = OneJobInput().Jobs[0] with
+            {
+                StepMarkdownByCode = new Dictionary<string, string> { ["S01"] = markdown },
+                DdlByProcedure = new Dictionary<string, string> { ["dbo.UP_TEST"] = CursorDdl },
+                Specs = new List<(string, string)> { ("dbo.UP_TEST", CursorGroupSpec) },
+            };
+
+            var report = StepSweepService.Sweep(new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.Equal(1, report.Indicators.PredicateTermSilencedByCursorGroup);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsCompared);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsFired);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutDdl);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutOriginalKey);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutOriginalTerms);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByStaging);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByBanner);
+        }
+
+        // E3 - 게시문이 자기 실행이 적재한 스테이징만 되읽으려고 거는 술어는
+        // 원본 원천의 술어가 아니다. AnchoredPredicateTermCheckTests.
+        // StaysSilent_WhenTheStatementReadsOnlyStaging 과 같은 모양을 명세서
+        // markdown 으로 다시 적는다.
+        private const string StagingDdl = @"
+CREATE PROCEDURE dbo.UP_TEST
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    INSERT INTO dbo.TSettleByOUT (YMD, OUTYMD)
+    SELECT YMD, OUTYMD FROM dbo.TSettleMst WHERE YMD = @pi_strYMD
+END";
+
+        private const string StagingSpec = @"
+### DML 범위 (기계 확정 — 수정 금지)
+
+| 문장 | 라인 | 대상 | 술어 컬럼 | 조인 키 | GROUP BY | ORDER BY |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| INSERT 1 | 5 | TSettleByOUT | YMD | — | — | — |
+";
+
+        [Fact]
+        public void PredicateTermSilencedByStagingIsCounted()
+        {
+            var markdown = "### S01. 게시\n\n설명.\n\n```sql\n" +
+                "INSERT INTO batch.S01Stage (YMD, OUTYMD) SELECT YMD, OUTYMD FROM dbo.TSettleMst WHERE YMD = @p;\n" +
+                "/* U1: 게시 */\n" +
+                "INSERT INTO dbo.TSettleByOUT (YMD, OUTYMD)\n" +
+                "SELECT YMD, OUTYMD FROM batch.S01Stage WHERE ExecutionId = @p_exec;\n" +
+                "```\n";
+
+            var job = OneJobInput().Jobs[0] with
+            {
+                StepMarkdownByCode = new Dictionary<string, string> { ["S01"] = markdown },
+                DdlByProcedure = new Dictionary<string, string> { ["dbo.UP_TEST"] = StagingDdl },
+                Specs = new List<(string, string)> { ("dbo.UP_TEST", StagingSpec) },
+            };
+
+            var report = StepSweepService.Sweep(new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.Equal(1, report.Indicators.PredicateTermSilencedByStaging);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsCompared);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsFired);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutDdl);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutOriginalKey);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedWithoutOriginalTerms);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByCursorGroup);
+            Assert.Equal(0, report.Indicators.PredicateTermSilencedByBanner);
+        }
+
         // 가드가 침묵시킨 대가의 크기. 코드 앵커가 둘 이상의 문장에 붙은 단계를 센다.
         [Fact]
         public void StepsWithReusedCodeAnchorsAreCounted()
