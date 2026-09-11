@@ -219,11 +219,21 @@ namespace ReSet.Core.Tests
         [Fact]
         public async Task ExecuteAsync_WhenHttp429ExhaustsRetries_EndsAsExhausted()
         {
+            var calls = 0;
+
             var thrown = await Assert.ThrowsAsync<AiCallFailedException>(() =>
                 AiCallRetry.ExecuteAsync<string>(
-                    () => throw new HttpRequestException("429", null, HttpStatusCode.TooManyRequests),
+                    () =>
+                    {
+                        calls++;
+                        throw new HttpRequestException("429", null, HttpStatusCode.TooManyRequests);
+                    },
                     CancellationToken.None, RetryPlan.NoDelay));
 
+            // 승격 전에 재시도가 실제로 다 쓰였다는 것을 재야 한다 - 최종 Verdict 만 보면
+            // 첫 429 에 곧바로 Exhausted 로 승격하는 뮤테이션도 같은 Verdict 를 내
+            // 이 시험을 통과시킨다(설계 §5-3). 호출 횟수가 MaxTries 와 같아야 한다.
+            Assert.Equal(RetryPlan.NoDelay.MaxTries, calls);
             Assert.Equal(AiRetryVerdict.Exhausted, thrown.Verdict);
         }
 
