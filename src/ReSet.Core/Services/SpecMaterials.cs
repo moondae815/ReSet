@@ -138,6 +138,9 @@ namespace ReSet.Core.Services
                     "CheckAnchoredStatementFacts",
                     "CheckAnchoredStatementExtras",
                     "CheckStatementCountAgainstSpec",
+                    // [앵커 DML 최상위 술어 - E2·E3] 비면 검사가 꺼지는 게 아니라 커서 그룹
+                    // 면제·스테이징 면제(BuildSpecTargets)가 사라져 검사가 더 엄격해진다.
+                    "EvaluateAnchoredPredicateTerms",
                 }),
             new SpecMaterial(
                 "ErrorCodeToOrdinal",
@@ -150,6 +153,8 @@ namespace ReSet.Core.Services
                 {
                     "CheckAnchoredStatementFacts",
                     "CheckAnchoredStatementExtras",
+                    // 코드 앵커를 서수로 푸는 재료(MergeErrorCodeMaps)라 비면 앵커 도달이 준다.
+                    "EvaluateAnchoredPredicateTerms",
                 }),
             // [강제 아님 - MachineConfirmedTables.cs 직접 대조] "### UPDATE 대상 테이블:"
             // (MechanicalValidator.UpdateHeadingPrefix, 2112행)은 MachineConfirmedTables.All의
@@ -192,9 +197,9 @@ namespace ReSet.Core.Services
             // [DDL 대응물 null] 원본 DDL의 사실이 아니라 생성 파이프라인의 상태다 -
             // 「DDL 사실 수 대 명세서 행 수」라는 대조 개념 자체가 성립하지 않는다.
             //
-            // [소비 검사 - 아직 0개] 앵커 DML 최상위 술어 대조(설계
-            // docs/superpowers/specs/2026-09-11-앵커-DML-최상위-술어-대조-design.md §2-4 S5)가
-            // 다음 태스크에서 소비자로 붙는다.
+            // [소비 검사 — 앵커 DML 최상위 술어 대조(S5)] 명세서가 L1 소진 배너를 달면
+            // 그 표(커서 면제·스테이징 대상)를 기준값으로 믿지 않고 침묵한다. 설계:
+            // docs/superpowers/specs/2026-09-11-앵커-DML-최상위-술어-대조-design.md §2-4 S5
             new SpecMaterial(
                 "IsL1Exhausted",
                 nameof(SpecStatementFactsExtractor),
@@ -202,7 +207,7 @@ namespace ReSet.Core.Services
                 Enforced: false,
                 DdlCounterpart: null,
                 ReadsSpecMarkdown: true,
-                ConsumingChecks: Array.Empty<string>()),
+                ConsumingChecks: new[] { "EvaluateAnchoredPredicateTerms" }),
             // [강제 아님·헤딩 없음] SpecConditionColumnExtractor는 특정 "### " 헤딩을
             // 요구하지 않는다 - 문서 전체를 훑으며 만나는 아무 헤딩이든 UDF 소속
             // 경계로만 쓴다(CollectFrom, 129행).

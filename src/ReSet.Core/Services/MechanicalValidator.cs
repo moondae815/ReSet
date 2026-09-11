@@ -647,6 +647,8 @@ namespace ReSet.Core.Services
                         facts, statements, step, cursorExemptions, result));
                     SafeCheck(() => CheckAnchoredStatementJoinPairs(
                         facts, statements, step, ddlByProcedure, result));
+                    SafeCheck(() => CheckAnchoredStatementPredicateTerms(
+                        namedFacts, statements, step, ddlByProcedure, result));
                     SafeCheck(() => CheckSpecLocalVariablesDeclared(facts, stepMarkdown, step, result));
                     SafeCheck(() => CheckLocalVariableTableDidNotVanish(namedFacts, step, result));
                     // countCheckFacts 를 쓰는 이유: 이 검사는 앵커 계열(B·C·D)의 "앵커가
@@ -9144,9 +9146,21 @@ namespace ReSet.Core.Services
         /// <see cref="MergeErrorCodeMaps"/>와 같은 규약이다.
         /// </summary>
         internal static Dictionary<(string Kind, int Ordinal, string Target), IReadOnlyList<string>>
-            BuildOriginalJoinPairs(BatchStepPlan step, IReadOnlyDictionary<string, string> ddlByProcedure)
+            BuildOriginalJoinPairs(BatchStepPlan step, IReadOnlyDictionary<string, string> ddlByProcedure) =>
+            BuildOriginalByStatementKey(step, ddlByProcedure, fact => fact.JoinPairs);
+
+        /// <summary>
+        /// 원본 DDL 에서 <c>(종류, 서수, 대상)</c> → 값을 만든다. N5 의 조인 짝과 최상위 술어 대조가
+        /// 같은 키 규약을 쓴다 - 서수는 <see cref="DmlScopeExtractor.BuildStatementOrdinals"/>, 대상은
+        /// <see cref="DmlScopeFact.ResolvedTargetTable"/>(없으면 원문), 같은 키가 둘이면 버린다.
+        /// 규약을 두 벌 두면 한 검사만 「엉뚱한 문장과 대조한 거짓 시정 지시」를 내게 된다.
+        /// </summary>
+        private static Dictionary<(string Kind, int Ordinal, string Target), T> BuildOriginalByStatementKey<T>(
+            BatchStepPlan step,
+            IReadOnlyDictionary<string, string> ddlByProcedure,
+            Func<DmlScopeFact, T> valueOf)
         {
-            var result = new Dictionary<(string, int, string), IReadOnlyList<string>>(new JoinPairKeyComparer());
+            var result = new Dictionary<(string, int, string), T>(new JoinPairKeyComparer());
             var ambiguous = new HashSet<(string, int, string)>(new JoinPairKeyComparer());
 
             foreach (var procedure in step.LegacyProcedures)
@@ -9169,12 +9183,179 @@ namespace ReSet.Core.Services
                     var key = (fact.Operation.ToUpperInvariant(), ordinals[i], BareObjectName(target));
 
                     if (result.ContainsKey(key)) { ambiguous.Add(key); continue; }
-                    result[key] = fact.JoinPairs;
+                    result[key] = valueOf(fact);
                 }
             }
 
             foreach (var key in ambiguous) result.Remove(key);
             return result;
+        }
+
+        /// <summary>
+        /// 앵커 DML 최상위 술어 대조의 문장별 결말. 검사는 <see cref="Fired"/> 만 발화하고,
+        /// 스윕은 나머지를 침묵 분모로 센다 - 둘이 같은 판정을 읽어야 분모가 발화와 같은 규칙을 말한다.
+        /// </summary>
+        internal enum PredicateTermOutcome
+        {
+            Fired,
+            Matched,
+            /// <summary>S1 - 원본 DDL 이 없다.</summary>
+            NoOriginalDdl,
+            /// <summary>S2 - 원본에 그 (종류, 서수, 대상) 이 없거나 모호하다.</summary>
+            NoOriginalKey,
+            /// <summary>S3 - 원본 문장에 비교할 최상위 항이 없다(조인 등식 제외).</summary>
+            NoOriginalTerms,
+            /// <summary>S4·E2 - 커서 그룹 면제.</summary>
+            CursorExempt,
+            /// <summary>S4·E3 - 스테이징만 읽는다.</summary>
+            StagingExempt,
+            /// <summary>S5 - 명세서가 L1 소진 배너를 달았다.</summary>
+            SpecBannered,
+        }
+
+        internal sealed record PredicateTermEvaluation(
+            string Kind,
+            int Ordinal,
+            string TargetTable,
+            PredicateTermOutcome Outcome,
+            IReadOnlyList<PredicateTerm> Added,
+            IReadOnlyList<PredicateTerm> Original,
+            int OrchestrationTermsExempted);
+
+        /// <summary>
+        /// E1 - 오케스트레이션이 거는 변수. 청크 범위(<c>@p_from</c>·<c>@p_to</c>, 뒤에 대문자가 오는
+        /// 변형 포함)와 실행 식별자(<c>@p_runId</c>·<c>@p_stepCode</c>). 원본 SP 가 가질 수 없는 항이다.
+        /// </summary>
+        private static readonly Regex OrchestrationVariablePattern = new(
+            @"^@p_(?:from|to)(?:[A-Z]\w*)?$|^@p_(?i:runId|stepCode)$", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 항의 변수가 <b>모두</b> 오케스트레이션 변수인가. OR 묶음에 업무 변수가 하나라도 섞이면
+        /// 면제하지 않는다 - 그 묶음은 업무 행을 고른다.
+        /// </summary>
+        private static bool IsOrchestrationOnly(PredicateTerm term) =>
+            term.Variables.Count > 0 && term.Variables.All(v => OrchestrationVariablePattern.IsMatch(v));
+
+        /// <summary>
+        /// 앵커 INSERT·UPDATE·DELETE 마다 이행 최상위 항을 원본 같은 문장의 최상위 항과 견준다.
+        /// 설계: docs/superpowers/specs/2026-09-11-앵커-DML-최상위-술어-대조-design.md
+        ///
+        /// [왜 컬럼이 아니라 항인가] 실물 - Batch6·7 <c>S12</c> INSERT 4 가 DELETE 4 의
+        /// <c>OUTYMD &gt;= @v_strReqYMD</c> 를 베꼈다. <c>OUTYMD</c> 는 원본 INSERT 4 에도 다른 항으로
+        /// 있어 검사 B·C 는 조용했다.
+        ///
+        /// [침묵 순서] S5 → S1 → S2 → S3 → E2 → E3. 앞의 것이 걸리면 뒤는 보지 않는다 -
+        /// 스윕의 분모가 한 문장을 한 사유로만 세게 한다.
+        ///
+        /// [왜 internal 인가] StepSweepService 의 침묵 분모가 이 판정을 그대로 쓴다.
+        /// </summary>
+        internal static IReadOnlyList<PredicateTermEvaluation> EvaluateAnchoredPredicateTerms(
+            IReadOnlyList<(string Name, SpecStatementFacts Facts)> namedFacts,
+            IReadOnlyList<StepSqlStatement> statements,
+            BatchStepPlan step,
+            IReadOnlyDictionary<string, string>? ddlByProcedure)
+        {
+            var evaluations = new List<PredicateTermEvaluation>();
+
+            // ValidateBatchStep 이 명세서 사실이 있을 때만 앵커 검사를 돈다 - 스윕도 같은 조건을 받는다.
+            if (namedFacts.Count == 0) return evaluations;
+
+            var facts = namedFacts.Select(nf => nf.Facts).ToList();
+            var anchored = ResolveAnchoredStatements(statements, MergeErrorCodeMaps(facts));
+            if (anchored.Count == 0) return evaluations;
+
+            var bannered = facts.Any(f => f.IsL1Exhausted);
+            var hasDdl = ddlByProcedure != null && ddlByProcedure.Count > 0;
+            var original = hasDdl
+                ? BuildOriginalByStatementKey(step, ddlByProcedure!, fact => fact.PredicateTerms)
+                : new Dictionary<(string Kind, int Ordinal, string Target), IReadOnlyList<PredicateTerm>>();
+            var cursorExemptions = BuildCursorGroupExemptions(namedFacts, ddlByProcedure);
+            var rows = facts.SelectMany(f => f.DmlRows).ToList();
+            var specTargets = BuildSpecTargets(facts);
+
+            // 청크 분할된 조각을 한 문장으로 합쳐 본다 - 검사 B·N5 와 같은 묶음이다.
+            var groups = anchored.GroupBy(a => (Ordinal: a.Ordinal!.Value, Kind: a.Statement.Kind.ToUpperInvariant()));
+
+            foreach (var group in groups)
+            {
+                var target = group.First().Statement.TargetTable;
+
+                PredicateTermEvaluation Silent(PredicateTermOutcome outcome) => new(
+                    group.Key.Kind, group.Key.Ordinal, target, outcome,
+                    Array.Empty<PredicateTerm>(), Array.Empty<PredicateTerm>(), 0);
+
+                if (bannered) { evaluations.Add(Silent(PredicateTermOutcome.SpecBannered)); continue; }
+                if (!hasDdl) { evaluations.Add(Silent(PredicateTermOutcome.NoOriginalDdl)); continue; }
+
+                if (!original.TryGetValue((group.Key.Kind, group.Key.Ordinal, target), out var originalAll))
+                {
+                    evaluations.Add(Silent(PredicateTermOutcome.NoOriginalKey));
+                    continue;
+                }
+
+                var originalTerms = originalAll.Where(t => !t.IsJoinEquality).ToList();
+                if (originalTerms.Count == 0) { evaluations.Add(Silent(PredicateTermOutcome.NoOriginalTerms)); continue; }
+
+                var candidates = rows.Where(r =>
+                    r.Ordinal == group.Key.Ordinal &&
+                    r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase) &&
+                    r.TargetTable.Equals(target, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (candidates.Count == 1 && cursorExemptions.ContainsKey(candidates[0]))
+                {
+                    evaluations.Add(Silent(PredicateTermOutcome.CursorExempt));
+                    continue;
+                }
+
+                if (group.Any(a => ReadsOnlyStaging(a.Statement, specTargets)))
+                {
+                    evaluations.Add(Silent(PredicateTermOutcome.StagingExempt));
+                    continue;
+                }
+
+                var implementation = group
+                    .SelectMany(a => a.Statement.PredicateTerms)
+                    .Where(t => !t.IsJoinEquality)
+                    .GroupBy(t => t.Normalized, StringComparer.Ordinal)
+                    .Select(g => g.First())
+                    .ToList();
+
+                var exempted = implementation.Count(IsOrchestrationOnly);
+                var originalKeys = new HashSet<string>(originalTerms.Select(t => t.Normalized), StringComparer.Ordinal);
+                var added = implementation
+                    .Where(t => !IsOrchestrationOnly(t))
+                    .Where(t => !originalKeys.Contains(t.Normalized))
+                    .ToList();
+
+                evaluations.Add(new PredicateTermEvaluation(
+                    group.Key.Kind, group.Key.Ordinal, target,
+                    added.Count > 0 ? PredicateTermOutcome.Fired : PredicateTermOutcome.Matched,
+                    added, originalTerms, exempted));
+            }
+
+            return evaluations;
+        }
+
+        /// <summary>
+        /// 이행이 원본 같은 문장에 <b>없는 최상위 WHERE 항</b>을 더했는지 본다.
+        /// 판정은 <see cref="EvaluateAnchoredPredicateTerms"/> 가 하고 여기는 메시지만 쓴다.
+        /// 한 문장에 오류 하나 - 더한 항이 여럿이면 한 메시지에 모두 싣는다.
+        /// </summary>
+        private static void CheckAnchoredStatementPredicateTerms(
+            IReadOnlyList<(string Name, SpecStatementFacts Facts)> namedFacts,
+            IReadOnlyList<StepSqlStatement> statements,
+            BatchStepPlan step,
+            IReadOnlyDictionary<string, string>? ddlByProcedure,
+            StepValidationResult result)
+        {
+            foreach (var e in EvaluateAnchoredPredicateTerms(namedFacts, statements, step, ddlByProcedure)
+                         .Where(e => e.Outcome == PredicateTermOutcome.Fired))
+            {
+                result.Errors.Add(
+                    $"{step.Code} 섹션의 {e.Kind} {e.Ordinal}({e.TargetTable}) 문장이 원본에 없는 최상위 술어 " +
+                    $"`{string.Join(" AND ", e.Added.Select(t => t.Raw))}`을(를) 씁니다. 원본의 최상위 술어는 " +
+                    $"`{string.Join(" AND ", e.Original.Select(t => t.Raw))}`뿐입니다 — 행을 고르는 조건을 " +
+                    "더하면 원본이 고르던 행이 아닌 행을 고릅니다.");
+            }
         }
 
         /// <summary>
