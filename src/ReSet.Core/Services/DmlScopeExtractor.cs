@@ -224,6 +224,17 @@ namespace ReSet.Core.Services
         /// </summary>
         public string ResolvedTargetTable { get; init; } = string.Empty;
 
+        /// <summary>
+        /// 이 문장의 WHERE 최상위 AND 항을 정규화한 것(INSERT…SELECT 는 UNION 갈래의 합집합).
+        /// 앵커 DML 최상위 술어 대조의 원본 쪽 기준값이다 - 이행 쪽은
+        /// <see cref="StepSqlStatement.PredicateTerms"/> 이고, 둘 다
+        /// <see cref="DmlScopeExtractor.PredicateTermsOf"/> 하나를 부른다.
+        ///
+        /// [표에 싣지 않는다] <see cref="ResolvedTargetTable"/> 과 같은 이유 - 검사 전용이라
+        /// 프롬프트 바이트가 안 바뀌고 캐시 포맷 버전도 그대로다.
+        /// </summary>
+        public IReadOnlyList<PredicateTerm> PredicateTerms { get; init; } = Array.Empty<PredicateTerm>();
+
         /// <summary>기본값을 null이 아니라 빈 목록으로 정규화한다 - 기존 생성 자리가
         /// 이 파라미터를 생략해도 소비자는 항상 비-null 목록을 본다.</summary>
         public IReadOnlyList<string> GroupByColumns { get; init; } = GroupByColumns ?? Array.Empty<string>();
@@ -1822,6 +1833,8 @@ namespace ReSet.Core.Services
                     DateParameterAppearsInNestedQuery(node))
                 {
                     OuterJoins = outerJoins,
+                    PredicateTerms = PredicateTermsOf(
+                        SourceQuerySpecifications(node.InsertSource).Select(s => s.WhereClause)),
                 });
 
                 RecordErrorCode("INSERT", node);
@@ -2051,6 +2064,7 @@ namespace ReSet.Core.Services
                     JoinPairs = BuildJoinPairs(from, joinReferences),
                     ResolvedTargetTable = ResolveTargetTableName(from, TextOf(target)),
                     OuterJoins = outerJoins,
+                    PredicateTerms = PredicateTermsOf(new[] { where }),
                 });
 
                 RecordErrorCode(operation, statement);

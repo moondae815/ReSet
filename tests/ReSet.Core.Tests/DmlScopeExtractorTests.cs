@@ -111,6 +111,88 @@ END";
                 pairs.ToArray());
         }
 
+        // ── 앵커 DML 최상위 술어 ─────────────────────────────────────
+        // 설계: docs/superpowers/specs/2026-09-11-앵커-DML-최상위-술어-대조-design.md
+        // 원본: output/Objects/dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA.Procedure/raw/object_definition.sql:193-226
+        // (DELETE 4 · INSERT 4). 서수만 1 로 줄였고 SELECT 목록을 줄였다 - WHERE 는 축자다.
+        private const string SummaryExtraDdl = @"
+CREATE PROCEDURE dbo.UP_UTIL_SETTLE_SUMMARY_EXTRA
+    @pi_strYMD CHAR(8)
+AS
+BEGIN
+    DECLARE @v_strReqYMD CHAR(8)
+
+    DELETE TSettleByOUT
+    WHERE  ProcYMD            = @pi_strYMD
+    AND    YMD               >= @v_strReqYMD
+    AND    OUTYMD            >= @v_strReqYMD
+    AND    ISNULL(OUTYMD,'') <> ''
+    AND    PGNAME            IN ('allthegate', 'dacomcard', 'tosscard', 'nicecard') --재판매 신용카드
+    AND    CompanySalesType  IN (0,1,2,3)                               --사업자 매출구분
+    AND    ExtraSettleFlag   = 1
+
+    INSERT INTO TSettleByOUT (YMD, OUTYMD)
+                       SELECT YMD, OUTYMD
+                       FROM   TSettleMst WITH(NOLOCK)
+                       WHERE  ProcYMD            = @pi_strYMD
+                       AND    YMD               >= @v_strReqYMD
+                       AND    ISNULL(OUTYMD,'') <> ''
+                       AND    PGNAME            IN ('allthegate', 'dacomcard', 'tosscard', 'nicecard') --재판매 신용카드
+                       AND    CompanySalesType  IN (0,1,2,3)
+                       AND    ExtraSettleFlag   = 1
+                       GROUP BY YMD, OUTYMD
+END";
+
+        [Fact]
+        public void Extract_PredicateTerms_KeepEachTopLevelTermOfTheStatement()
+        {
+            var facts = DmlScopeExtractor.Extract(SummaryExtraDdl, "@pi_strYMD");
+
+            var delete = facts.Single(f => f.Operation == "DELETE");
+            var insert = facts.Single(f => f.Operation == "INSERT");
+
+            Assert.Equal(7, delete.PredicateTerms.Count);
+            Assert.Equal(6, insert.PredicateTerms.Count);
+
+            // 이 결함의 핵심 - OUTYMD >= 는 DELETE 에만 있다.
+            var outymd = Assert.Single(delete.PredicateTerms, t => t.Raw.StartsWith("OUTYMD", System.StringComparison.Ordinal)).Normalized;
+            Assert.DoesNotContain(insert.PredicateTerms, t => t.Normalized == outymd);
+        }
+
+        [Fact]
+        public void Extract_PredicateTerms_UnionTheBranchesOfAnInsertSelect()
+        {
+            // 원본: output/Objects/dbo.UP_Util_PG_Client_CMRate_Ins.Procedure/raw/object_definition.sql:76-114
+            // (INSERT 2). SELECT·INSERT 목록만 줄였다 - FROM·WHERE·UNION ALL·주석 처리된 줄은 축자다.
+            const string ddl = @"
+CREATE PROCEDURE dbo.UP_Util_PG_Client_CMRate_Ins @pi_strYMD CHAR(8)
+AS
+BEGIN
+    INSERT INTO TClientSettleRate(YMD, CLIENTID)
+                           SELECT @pi_strYMD, B.CLIENTID
+                           FROM   TClientContract A WITH (NOLOCK)
+                                 ,TClientCMRate   B WITH (NOLOCK)
+                           WHERE  A.CLIENTID = B.CLIENTID
+                           AND    A.USESTATE IN (0,4,5,6)   --상태(0:정상,1:계약신청,2:계약중,3:계약거절,4:정산중지,5:승인중지,6:정산및승인중지,7:계약해지)
+                           AND    B.USESTATE IN (0,4)       --상태(0:정상,1:계약신청,2:계약중,3:계약거절,4:승인중지,5:계약해지)
+
+                           UNION ALL
+                           SELECT @pi_strYMD, B.CLIENTID
+                           FROM   TClientContract A WITH (NOLOCK)
+                                 ,TClientCMRate   B WITH (NOLOCK)
+                           WHERE  A.CLIENTID = B.CLIENTID
+                           AND    B.USESTATE = 5
+                           AND   (A.ContractCancelYMD = @pi_strYMD  OR B.ContractCancelYMD = @pi_strYMD )
+                           --AND    B.ContractCancelYMD = @pi_strYMD
+END";
+
+            var terms = Assert.Single(DmlScopeExtractor.Extract(ddl, "@pi_strYMD")).PredicateTerms;
+
+            // 두 갈래의 조인 등식은 같은 정규형이라 하나로 접힌다 - 5 항(조인 등식 1 + 업무 항 4).
+            Assert.Equal(5, terms.Count);
+            Assert.Single(terms, t => t.IsJoinEquality);
+        }
+
         [Fact]
         public void Extract_JoinKeys_ShouldBeCaptured()
         {
