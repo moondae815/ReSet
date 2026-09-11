@@ -609,6 +609,37 @@ namespace ReSet.Core.Tests
             Assert.Null(NewJournal().TryResume("## 목차 A"));
         }
 
+        // [잔여 Minor ③ — 2026-09-11] §11-5 배제(skeleton == null && reusable.Count == 0)를
+        // "&& defective.Count == 0"으로 변이시켜도 기존 시험은 잡지 못했다 — "## 목차 A"는
+        // ```json 블록이 없어 BatchStepPlanParser.TryParse 가 null 을 돌려주고, 그러면
+        // TryReadCandidateCore의 C1 루프(698-713행)가 아예 안 돌아 defective 가 항상 0으로
+        // 남는다. 이 시험은 목차가 실제로 파싱되고(구조 단계 코드가 있고) manifest 에는
+        // 그 코드가 하나도 기록된 적이 없는 판을 만든다 — RecordSkeleton·RecordStepSection을
+        // 한 번도 부르지 않으므로 reusable.Count == 0·skeleton == null 인데, C1 루프가
+        // 목차의 세 단계를 전부 defective 로 채워 defective.Count == 3 이다. 변이된 조건이면
+        // "&& defective.Count == 0"이 거짓이 되어 이 경우를 지나쳐 버리므로 TryResume 이
+        // null 이 아닌 후보를 낸다 — 재사용할 재료가 하나도 없는데 재개 후보를 내놓는
+        // 회귀다. 현재 코드는 defective.Count 를 안 보므로 이 경우에도 null 을 낸다.
+        [Fact]
+        public void TryResume_WhenStructureParsesButNothingWasEverRecorded_FindsNothingEvenThoughStepsAreDefective()
+        {
+            var planStructure = "## 목차\n\n```json\n{ \"Steps\": [" +
+                "{ \"Code\": \"S01\", \"Name\": \"n1\" }," +
+                "{ \"Code\": \"S02\", \"Name\": \"n2\" }," +
+                "{ \"Code\": \"S03\", \"Name\": \"n3\" }" +
+                "] }\n```";
+
+            var journal = NewJournal();
+            journal.OpenRun(planStructure, "run-start");
+            // 골격도, 어떤 단계 섹션도 한 번도 기록하지 않는다 — manifest.Steps 는 비어
+            // 있고(reusable.Count == 0·skeleton == null), 그런데 C1 루프가 목차의 세
+            // 단계를 전부 defective 로 채운다(defective.Count == 3).
+
+            var candidate = NewJournal().TryResume(planStructure);
+
+            Assert.Null(candidate);
+        }
+
         [Fact]
         public void TryResume_WhenSeveralRunsMatch_PicksTheNewest()
         {
