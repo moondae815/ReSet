@@ -8465,6 +8465,80 @@ END";
             Assert.DoesNotContain(result.Errors, e => e.Contains("정의돼 있지 않습니다"));
         }
 
+        // ── 자기 가림 — 「어디에든 나오면 정의」가 인용·산문·주석에 눈이 먼다 (2026-09-11) ──
+        //
+        // 재시도가 소진되면 파이프라인이 이 검사의 오류문을 배너로 단계 머리에 인용한다. 배송본을
+        // 다시 검증하면 그 인용이 「호출부가 아닌 줄의 등장」으로 잡혀 발화가 0 이 됐다 — 실물
+        // POQSettleBatch7/S03 을 실제 검사로 쟀다(배너 포함 0 · 배너 제거 1). 산문 언급도 같은
+        // 모양으로 가린다. 정의는 SQL 펜스 안에만 산다 — 아래 셋이 그 경계를 잠근다.
+
+        [Fact]
+        public void ValidateBatchStep_BannerQuotingTheUndefinedName_DoesNotCountAsDefinition()
+        {
+            // 실물 모양 그대로다(POQSettleBatch7/S03 배송본 머리).
+            var markdown =
+                "> ⚠️ **이 단계는 품질 미달로 기록되었습니다.**\n" +
+                "> \n" +
+                "> S03 (하한 미달: S03 섹션이 이름 있는 SQL 블록을 호출하는데 그 블록이 이 절에 " +
+                "정의돼 있지 않습니다: `SQL_CURRENT_RUN_ID`. 호출한 이름마다 두 붙임표로 시작하는 주석 줄로 블록을 여십시오.)\n\n" +
+                "### S03 | 정산 기준 원장 생성\n\n" +
+                "```pseudocode\n" +
+                "runId = repository.queryScalar(SQL_CURRENT_RUN_ID, { p_jobName: \"POQSettleBatch7\", p_ymd: batchYmd })\n" +
+                "```\n\n" +
+                "```sql\n-- SQL_INSERT_1\nINSERT INTO dbo.TSettleMst (YMD) VALUES (@p_ymd);\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S03"), new[] { "dbo.TSettleMst" },
+                new Dictionary<string, SpecConditions>());
+
+            var error = Assert.Single(result.Errors, e => e.Contains("정의돼 있지 않습니다"));
+            Assert.Contains("SQL_CURRENT_RUN_ID", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ProseMentionOfTheName_DoesNotCountAsDefinition()
+        {
+            // 실물 모양이다(POQSettleBatch1/S15:150). SQL 본체는 펜스 안에 있지만 이름표가 없고,
+            // 이름은 호출부와 산문에만 나온다 — 이행자가 어느 블록이 어느 이름인지 문서에서 모른다.
+            var markdown = "### S15 단계\n\n" +
+                "```pseudocode\n" +
+                "execute(SQL_DELETE_STAT_PGCOLLECT, { p_batchYmd: batchYmd })\n" +
+                "execute(SQL_INSERT_STAT_PGCOLLECT, { p_batchYmd: batchYmd })\n" +
+                "```\n\n" +
+                "두 문장(`SQL_DELETE_STAT_PGCOLLECT`, `SQL_INSERT_STAT_PGCOLLECT`) 모두 원본 오류 코드 `-1`을 그대로 재사용한다.\n\n" +
+                "```sql\nDELETE FROM dbo.TStatPGCollect WHERE INYMD = @p_batchYmd;\n" +
+                "INSERT INTO dbo.TStatPGCollect (INYMD) VALUES (@p_batchYmd);\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S15"), new[] { "dbo.TStatPGCollect" },
+                new Dictionary<string, SpecConditions>());
+
+            var error = Assert.Single(result.Errors, e => e.Contains("정의돼 있지 않습니다"));
+            Assert.Contains("SQL_DELETE_STAT_PGCOLLECT", error);
+            Assert.Contains("SQL_INSERT_STAT_PGCOLLECT", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_PseudocodeCommentNamingTheBlock_DoesNotCountAsDefinition()
+        {
+            // 실물 모양이다(POQSettleBatch6/S13:57 의 의사코드 주석). 의사코드 펜스는 호출하는
+            // 자리이지 정의하는 자리가 아니다.
+            var markdown = "### S13 단계\n\n" +
+                "```pseudocode\n" +
+                "// SQL_NEXT_KEY로 다음 from을 읽는다 (문자열 키 직접 재사용 금지)\n" +
+                "next = queryScalar(SQL_NEXT_KEY, { p_to: to })\n" +
+                "```\n\n" +
+                "```sql\n-- SQL_DELETE_CHUNK\nDELETE FROM dbo.TSettleByOUT WHERE 1 = 0;\n```\n";
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, LegacyStep("S13"), new[] { "dbo.TSettleByOUT" },
+                new Dictionary<string, SpecConditions>());
+
+            var error = Assert.Single(result.Errors, e => e.Contains("정의돼 있지 않습니다"));
+            Assert.Contains("SQL_NEXT_KEY", error);
+            Assert.DoesNotContain("SQL_DELETE_CHUNK", error);
+        }
+
         [Fact]
         public void ValidateBatchStep_ChunkUpperBoundUsesMinOverLowerBoundedSet_IsReported()
         {

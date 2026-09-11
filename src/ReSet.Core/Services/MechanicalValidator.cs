@@ -10378,8 +10378,19 @@ namespace ReSet.Core.Services
         /// 코퍼스 실측에서 정의 표기가 셋으로 갈린다 - `-- SQL_X` 한 줄, 여러 이름을 묶은
         /// `-- SQL_A / SQL_B / SQL_C_* (…)` 한 줄, 그리고 SQL 안 블록 주석 `/* … (SQL_X) */`.
         /// 모양으로 좁히면 뒤 둘이 통째로 거짓 양성이 된다(S14 하나에서만 두 건). 그래서
-        /// 판별자는 <b>호출부가 아닌 줄에 그 이름이 나오는가</b> 하나다. 별표 접두사
-        /// (`SQL_CHECKPOINT_*`)는 그 접두사로 시작하는 이름 전부를 덮는 것으로 인정한다.
+        /// 판별자는 <b>SQL 펜스 안의, 호출부가 아닌 줄에 그 이름이 나오는가</b> 하나다. 별표
+        /// 접두사(`SQL_CHECKPOINT_*`)는 그 접두사로 시작하는 이름 전부를 덮는 것으로 인정한다.
+        ///
+        /// [왜 SQL 펜스로 좁히는가 - 2026-09-11 자기 가림]
+        /// 초판은 「호출부가 아닌 줄이면 어디든」이었다. 그러자 이 검사가 <b>자기가 발화한 단계에서</b>
+        /// 눈이 멀었다 - 재시도가 소진되면 파이프라인이 이 오류문을 배너로 단계 머리에 인용하고,
+        /// 배송본을 다시 검증하면 그 인용이 정의로 잡혀 발화가 0 이 된다. 실물 POQSettleBatch7/S03
+        /// 을 이 검사로 쟀다(배너 포함 0 · 배너 제거 1). 스윕·코퍼스 시험·감사는 전부 사후 검증이라
+        /// 가림이 그대로 결론이 된다. 산문 언급(「두 문장(`SQL_X`, …)…」)과 의사코드 주석도 같은
+        /// 모양으로 가린다. 위 세 정의 표기는 코퍼스에서 전부 SQL 펜스 안에 있고(정의로 잡히던
+        /// 866 등장 중 830), 펜스 밖 36 은 전부 산문·주석 언급이었다 - 좁혀도 잃는 정의가 없다.
+        /// 펜스 인식은 형제(<see cref="CleanedSqlFences"/>)와 같은 모양을 쓰되 원문을 지우지 않는다 -
+        /// `-- SQL_X` 주석이 곧 정의이기 때문이다.
         ///
         /// [왜 호출 동사를 열거하는가]
         /// 코퍼스 4개 Job의 호출부를 전수로 뽑아 얻은 목록이다(execute 539 · queryScalar 90 ·
@@ -10407,13 +10418,18 @@ namespace ReSet.Core.Services
 
             if (used.Count == 0) return;
 
+            // 정의는 SQL 펜스 안에만 산다. 배너·산문·의사코드는 그 이름을 말할 뿐이다.
+            var sqlFenceText = string.Join("\n", Regex.Matches(
+                    stepMarkdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline)
+                .Select(fence => fence.Groups["sql"].Value));
+
             var wildcardPrefixes = new HashSet<string>(StringComparer.Ordinal);
-            foreach (Match wild in SqlBlockWildcardRegex.Matches(stepMarkdown))
+            foreach (Match wild in SqlBlockWildcardRegex.Matches(sqlFenceText))
             {
                 wildcardPrefixes.Add("SQL_" + wild.Groups["prefix"].Value + "_");
             }
 
-            var lines = stepMarkdown.Split('\n');
+            var lines = sqlFenceText.Split('\n');
             var undefined = new List<string>();
             foreach (var name in used)
             {
