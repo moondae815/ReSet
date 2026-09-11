@@ -301,14 +301,35 @@ namespace ReSet.Cli
                 $"[bold]{Markup.Escape(jobName)}[/] - 이어서 할 수 있는 판을 찾았습니다.\n\n" +
                 $"판: run-{candidate.Run:D3} (시작 {Markup.Escape(candidate.StartedAt)})\n" +
                 $"재사용 가능한 단계: [green]{reusable}/{total}[/]\n" +
-                $"다시 만들 단계: {(candidate.DefectiveStepCodes.Count == 0 ? "없음" : Markup.Escape(string.Join(", ", candidate.DefectiveStepCodes)))}\n" +
+                $"다시 만들 단계: {Markup.Escape(DescribeDefectiveSteps(candidate.DefectiveStepKinds))}\n" +
                 $"이어받을 리뷰 피드백: {candidate.PriorReviews.Count}회차"))
             {
                 Border = BoxBorder.Rounded,
                 Header = new PanelHeader(" 재개 후보 ")
             });
 
-            return Task.FromResult(AnsiConsole.Confirm("이어서 하시겠습니까?", defaultValue: true));
+            return Task.FromResult(AnsiConsole.Confirm("이어서 하시겠습니까?", defaultValue: false));
+        }
+
+        // 다시 만들 단계 코드마다 사유를 괄호로 붙인다. null은 "결함 표시는 없지만
+        // 재사용할 재료가 없다"(파일 없음·해시 불일치)는 뜻이다 - StepDefectKind로는
+        // 표현되지 않는 세 번째 사유라 별도 문구로 옮긴다.
+        private static string DescribeDefectiveSteps(IReadOnlyDictionary<string, StepDefectKind?> defectiveStepKinds)
+        {
+            if (defectiveStepKinds.Count == 0) return "없음";
+
+            return string.Join(" · ", defectiveStepKinds.Select(pair =>
+            {
+                var reason = pair.Value switch
+                {
+                    StepDefectKind.QualityFloor => "하한 미달",
+                    StepDefectKind.Unverifiable => "대조 불가",
+                    StepDefectKind.GenerationFailed => "생성 실패",
+                    null => "재료 없음",
+                    _ => "알 수 없음"
+                };
+                return $"{pair.Key}({reason})";
+            }));
         }
 
         public IMultiProgressScope CreateProgressScope(string title)
