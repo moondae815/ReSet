@@ -50,6 +50,7 @@ namespace ReSet.Core.Services
         IReadOnlyDictionary<string, string> ReusableSections,
         IReadOnlyDictionary<string, int> SectionAttempts,
         IReadOnlyList<string> DefectiveStepCodes,
+        IReadOnlyDictionary<string, StepDefectKind?> DefectiveStepKinds,
         IReadOnlyList<(int Attempt, ReviewResult Review)> PriorReviews,
         int TotalStepsInManifest);
 
@@ -407,7 +408,28 @@ namespace ReSet.Core.Services
             }
         }
 
+        /// <summary>
+        /// 판 하나를 읽는다. <b>이 판만 포기한다</b> — manifest 가 깨진 JSON이거나
+        /// 그 밖의 방식으로 못 읽혀도, 그 사실이 <c>TryResume</c> 의 <c>foreach</c> 를
+        /// 끊어 더 오래된 건강한 판을 스캔에서 빼면 안 된다(리뷰 발견 Important 1,
+        /// 2026-09-11). <c>ReadPriorReviews</c> 가 리뷰 파일 하나마다 개별
+        /// try/catch 로 이미 지키는 것과 같은 「부분 실패는 그 항목만 버린다」
+        /// 규칙을 판 단위에도 적용한다.
+        /// </summary>
         private static PlanAttemptResumeCandidate? TryReadCandidate(string runDir, PlanAttemptReuseKey wanted)
+        {
+            try
+            {
+                return TryReadCandidateCore(runDir, wanted);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "[PlanAttemptJournal] 판을 읽지 못해 건너뜁니다 - {RunDir}", runDir);
+                return null;
+            }
+        }
+
+        private static PlanAttemptResumeCandidate? TryReadCandidateCore(string runDir, PlanAttemptReuseKey wanted)
         {
             var manifestPath = Path.Combine(runDir, "manifest.json");
             if (!File.Exists(manifestPath)) return null;
@@ -431,18 +453,39 @@ namespace ReSet.Core.Services
             }
 
             // 섹션 — DefectKind 가 있으면 재사용하지 않고 「다시 만들 것」으로 보낸다.
+            // DefectiveStepCodes 에는 세 부류가 섞인다: (1) DefectKind 가 있는 것,
+            // (2) 파일이 없는 것, (3) 해시가 안 맞는 것. DefectiveStepKinds 는 (1)만
+            // 실제 종류를 옮기고 (2)·(3)은 null 이다 - "결함 표시는 없지만 재료가
+            // 없어 다시 만들어야 함"을 화면이 가를 수 있어야 한다(리뷰 발견,
+            // Task 2 의 ConfirmResumeAsync 가 사유를 못 보이던 근본 원인, 2026-09-11).
             var reusable = new Dictionary<string, string>(StringComparer.Ordinal);
             var attempts = new Dictionary<string, int>(StringComparer.Ordinal);
             var defective = new List<string>();
+            var defectiveKinds = new Dictionary<string, StepDefectKind?>(StringComparer.Ordinal);
             foreach (var (code, artifact) in manifest.Steps.OrderBy(p => p.Key, StringComparer.Ordinal))
             {
-                if (artifact.DefectKind != null) { defective.Add(code); continue; }
+                if (artifact.DefectKind != null)
+                {
+                    defective.Add(code);
+                    defectiveKinds[code] = artifact.DefectKind;
+                    continue;
+                }
 
                 var path = Path.Combine(runDir, "steps", code + ".md");
-                if (!File.Exists(path)) { defective.Add(code); continue; }
+                if (!File.Exists(path))
+                {
+                    defective.Add(code);
+                    defectiveKinds[code] = null;
+                    continue;
+                }
 
                 var text = File.ReadAllText(path);
-                if (ComputeSha256(text) != artifact.Sha256) { defective.Add(code); continue; }
+                if (ComputeSha256(text) != artifact.Sha256)
+                {
+                    defective.Add(code);
+                    defectiveKinds[code] = null;
+                    continue;
+                }
 
                 reusable[code] = text;
                 attempts[code] = artifact.Attempt;
@@ -454,7 +497,7 @@ namespace ReSet.Core.Services
             return new PlanAttemptResumeCandidate(
                 runDir, manifest.Run, manifest.StartedAt,
                 skeleton ?? string.Empty, skeletonAttempt,
-                reusable, attempts, defective,
+                reusable, attempts, defective, defectiveKinds,
                 ReadPriorReviews(runDir), manifest.Steps.Count);
         }
 

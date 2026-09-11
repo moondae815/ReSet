@@ -648,5 +648,82 @@ namespace ReSet.Core.Tests
             Assert.Equal(CriticFeedbackLog.MaxRetainedRounds, candidate!.PriorReviews.Count);
             Assert.Equal(new[] { 4, 3, 2 }, candidate.PriorReviews.Select(r => r.Attempt).ToArray());
         }
+
+        // [FIX ROUND 1 - Important 1] 최신 판의 manifest.json 이 깨진 JSON 이어도
+        // TryResume 은 그 판만 포기해야 한다 — foreach 전체가 끊겨 더 오래된 건강한
+        // 판까지 못 찾으면 안 된다. run-002(깨진 manifest)가 run-001(재사용 가능)보다
+        // 최신이라 스캔 순서상 먼저 걸린다.
+        [Fact]
+        public void TryResume_WhenTheNewestRunsManifestIsCorrupt_StillFindsAnOlderHealthyRun()
+        {
+            var journal = WriteResumableRun();               // run-001, 재사용 가능
+            var attemptsRoot = Path.GetDirectoryName(journal.CurrentRunDirectory!)!;
+            var corruptRunDir = Path.Combine(attemptsRoot, "run-002");
+            Directory.CreateDirectory(corruptRunDir);
+            File.WriteAllText(Path.Combine(corruptRunDir, "manifest.json"), "{ 이건 유효한 JSON 이 아니다");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(1, candidate!.Run);
+            Assert.Equal("골격 본문", candidate.Skeleton);
+        }
+
+        // [FIX ROUND 1 - Minor] ReadPriorReviews 의 "리뷰 파일 하나가 깨져도 나머지가
+        // 산다"는 동작(파일별 try/catch)은 코드로는 맞았지만 이를 직접 재는 시험이
+        // 없었다 - 무방비였다. attempt-01.json 을 깨뜨려도 attempt-02.json 의 리뷰는
+        // 남아야 한다.
+        [Fact]
+        public void TryResume_WhenOneReviewFileIsCorrupt_TheOtherReviewsSurvive()
+        {
+            var journal = WriteResumableRun();                // reviews: attempt-01, attempt-02
+            var reviewsDir = Path.Combine(journal.CurrentRunDirectory!, "reviews");
+            File.WriteAllText(Path.Combine(reviewsDir, "attempt-01.json"), "{ 이건 유효한 JSON 이 아니다");
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Single(candidate!.PriorReviews);
+            Assert.Equal(2, candidate.PriorReviews[0].Attempt);
+            Assert.Equal("회차 2 지적", candidate.PriorReviews[0].Review.FeedbackComment);
+        }
+
+        // [FIX ROUND 1 - Task 2 리뷰가 지목한 근본 원인] 설계 §3-4 는 화면에 다시 만들
+        // 단계의 "사유"까지 보이라고 요구한다. DefectKind 가 manifest 에 실제로 있는
+        // 단계(S03·QualityFloor)는 그 종류가 그대로 옮겨져야 한다.
+        [Fact]
+        public void TryResume_DefectiveStepKinds_CarriesTheManifestsDefectKindForActualDefects()
+        {
+            WriteResumableRun();       // S03 은 QualityFloor 로 기록된다
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.True(candidate!.DefectiveStepKinds.ContainsKey("S03"));
+            Assert.Equal(StepDefectKind.QualityFloor, candidate.DefectiveStepKinds["S03"]);
+        }
+
+        // DefectiveStepCodes 에는 세 부류가 섞인다: (1) DefectKind 가 있는 것,
+        // (2) 파일이 없는 것, (3) 해시가 안 맞는 것. 뒤의 둘은 결함 "표시"가 없었을
+        // 뿐 재료가 없어 다시 만들어야 하므로 DefectiveStepKinds 에서 null 이어야
+        // 한다 — 화면이 "표시된 결함"과 "재료 없음"을 가를 수 있어야 한다.
+        [Fact]
+        public void TryResume_DefectiveStepKinds_IsNullForStepsDroppedByMissingFileOrHashMismatch()
+        {
+            var journal = WriteResumableRun();
+            var dir = journal.CurrentRunDirectory!;
+            File.WriteAllText(Path.Combine(dir, "steps", "S01.md"), "누군가 손댄 본문"); // 해시 불일치
+            File.Delete(Path.Combine(dir, "steps", "S02.md"));                            // 파일 없음
+
+            var candidate = NewJournal().TryResume("## 목차 A");
+
+            Assert.NotNull(candidate);
+            Assert.Equal(new[] { "S01", "S02", "S03" }, candidate!.DefectiveStepCodes.OrderBy(c => c).ToArray());
+            Assert.True(candidate.DefectiveStepKinds.ContainsKey("S01"));
+            Assert.Null(candidate.DefectiveStepKinds["S01"]);
+            Assert.True(candidate.DefectiveStepKinds.ContainsKey("S02"));
+            Assert.Null(candidate.DefectiveStepKinds["S02"]);
+            Assert.Equal(StepDefectKind.QualityFloor, candidate.DefectiveStepKinds["S03"]);
+        }
     }
 }
