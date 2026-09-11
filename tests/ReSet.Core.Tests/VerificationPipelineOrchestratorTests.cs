@@ -5122,6 +5122,34 @@ namespace ReSet.Core.Tests
                 specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
 
             Assert.Null(result.Plan);
+            // 쿼터 소진이 아닌 예외 타입이다 — AbortReason이 QuotaExhausted로
+            // 잘못 번지면 CLI가 진짜 실패를 "실패가 아닙니다"로 오안내한다.
+            Assert.Null(result.AbortReason);
+        }
+
+        /// <summary>
+        /// AiCallFailedException이되 Verdict가 Exhausted가 아니면(Fatal) AbortReason은
+        /// null이어야 한다. 타입만 보고 판정하면(Verdict를 안 보면) 이 시험이 빨개진다 —
+        /// 조건이 넓어지는 방향의 회귀를 잡는 유일한 시험이다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenAiCallFailsWithNonExhaustedVerdict_AbortReasonStaysNull()
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "내용") };
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Plan Structure" });
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns<AiResult>(_ => throw new AiCallFailedException(
+                    "치명적 오류", new Exception("복구 불가"), 1, AiRetryVerdict.Fatal));
+
+            var result = await _orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+
+            Assert.Null(result.Plan);
+            Assert.Null(result.AbortReason);
         }
 
         // finalAiResult는 생성이 성공할 때만 갱신되므로 채택본과 어긋날 수 있었다.
