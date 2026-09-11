@@ -2099,7 +2099,7 @@ namespace ReSet.Core.Services
                                     // 유일한 화면 기록이다(설계 §3-4-b). manifest의 ResumedFrom과 짝이다.
                                     _userInteraction.NotifyStatus(
                                         $"[yellow]{jobName}[/] - run-{found.Run:D3} 에서 이어서 합니다 " +
-                                        $"(재사용 {found.ReusableSections.Count}/{found.TotalStepsInManifest}, " +
+                                        $"(재사용 {found.ReusableSections.Count}/{found.TotalStepsInStructure}, " +
                                         $"브레인스토밍·목차 생성을 건너뜁니다)" +
                                         (isBatchMode ? " — 무인 모드라 묻지 않았습니다." : "."));
                                 }

@@ -52,7 +52,7 @@ namespace ReSet.Core.Services
         IReadOnlyList<string> DefectiveStepCodes,
         IReadOnlyDictionary<string, StepDefectKind?> DefectiveStepKinds,
         IReadOnlyList<(int Attempt, ReviewResult Review)> PriorReviews,
-        int TotalStepsInManifest);
+        int TotalStepsInStructure);
 
     /// <summary>
     /// 판 하나의 명세. <b>이 파일이 진실이고 디렉터리의 파일 존재는 진실이 아니다</b> —
@@ -421,13 +421,24 @@ namespace ReSet.Core.Services
                     ContractVersion, ComputeSha256(planStructure), _specsSha256,
                     _provider, _model, _effort, _targetLanguage);
 
+                // [2026-09-11 최종 전체 리뷰 C1] 목차가 선언하는 단계 코드 전체. 쿼터는
+                // 단계 생성 도중에 나므로 manifest.Steps 에는 그 회차까지만 기록돼 있다
+                // - 목차에는 있는데 manifest 에는 아예 없는 코드가 생긴다. 이 목록이
+                // 없으면 그 코드는 재사용 대상도 결함 표시도 아니게 되어(둘 다 manifest
+                // 를 순회해서 나온다) 재생성 후보에서 영영 빠진다(TryReadCandidateCore
+                // 참고). 못 파싱하면(§11-5 단일 호출 폴백 등) null 이고, 그러면 차집합을
+                // 낼 기준이 없어 예전처럼 manifest 만 본다 - "있는 파서를 쓴다"
+                // (BatchStepPlanParser, 이미 오케스트레이터가 같은 텍스트로 부르는 것과
+                // 같은 함수라 결과가 갈리지 않는다).
+                var structureSteps = BatchStepPlanParser.TryParse(planStructure);
+
                 var runDirs = Directory.EnumerateDirectories(attemptsRoot, "run-*")
                     .OrderByDescending(d => d, StringComparer.Ordinal)
                     .ToList();
 
                 foreach (var runDir in runDirs)
                 {
-                    var candidate = TryReadCandidate(runDir, wanted);
+                    var candidate = TryReadCandidate(runDir, wanted, structureSteps);
                     if (candidate != null) return candidate;
                 }
 
@@ -605,11 +616,12 @@ namespace ReSet.Core.Services
         /// try/catch 로 이미 지키는 것과 같은 「부분 실패는 그 항목만 버린다」
         /// 규칙을 판 단위에도 적용한다.
         /// </summary>
-        private static PlanAttemptResumeCandidate? TryReadCandidate(string runDir, PlanAttemptReuseKey wanted)
+        private static PlanAttemptResumeCandidate? TryReadCandidate(
+            string runDir, PlanAttemptReuseKey wanted, IReadOnlyList<BatchStepPlan>? structureSteps)
         {
             try
             {
-                return TryReadCandidateCore(runDir, wanted);
+                return TryReadCandidateCore(runDir, wanted, structureSteps);
             }
             catch (Exception ex)
             {
@@ -618,7 +630,8 @@ namespace ReSet.Core.Services
             }
         }
 
-        private static PlanAttemptResumeCandidate? TryReadCandidateCore(string runDir, PlanAttemptReuseKey wanted)
+        private static PlanAttemptResumeCandidate? TryReadCandidateCore(
+            string runDir, PlanAttemptReuseKey wanted, IReadOnlyList<BatchStepPlan>? structureSteps)
         {
             var manifestPath = Path.Combine(runDir, "manifest.json");
             if (!File.Exists(manifestPath)) return null;
@@ -642,11 +655,13 @@ namespace ReSet.Core.Services
             }
 
             // 섹션 — DefectKind 가 있으면 재사용하지 않고 「다시 만들 것」으로 보낸다.
-            // DefectiveStepCodes 에는 세 부류가 섞인다: (1) DefectKind 가 있는 것,
-            // (2) 파일이 없는 것, (3) 해시가 안 맞는 것. DefectiveStepKinds 는 (1)만
-            // 실제 종류를 옮기고 (2)·(3)은 null 이다 - "결함 표시는 없지만 재료가
-            // 없어 다시 만들어야 함"을 화면이 가를 수 있어야 한다(리뷰 발견,
-            // Task 2 의 ConfirmResumeAsync 가 사유를 못 보이던 근본 원인, 2026-09-11).
+            // DefectiveStepCodes 에는 네 부류가 섞인다: (1) DefectKind 가 있는 것,
+            // (2) 파일이 없는 것, (3) 해시가 안 맞는 것, (4) 목차엔 있으나 manifest에
+            // 코드 자체가 없는 것(아래 별도 루프, 2026-09-11 최종 전체 리뷰 C1).
+            // DefectiveStepKinds 는 (1)만 실제 종류를 옮기고 (2)·(3)·(4)는 null 이다 -
+            // "결함 표시는 없지만 재료가 없어 다시 만들어야 함"을 화면이 가를 수
+            // 있어야 한다(리뷰 발견, Task 2 의 ConfirmResumeAsync 가 사유를 못 보이던
+            // 근본 원인, 2026-09-11).
             var reusable = new Dictionary<string, string>(StringComparer.Ordinal);
             var attempts = new Dictionary<string, int>(StringComparer.Ordinal);
             var defective = new List<string>();
@@ -680,14 +695,38 @@ namespace ReSet.Core.Services
                 attempts[code] = artifact.Attempt;
             }
 
-            // 골격도 섹션도 없으면 재개할 재료가 없다(§11-5).
+            // [2026-09-11 최종 전체 리뷰 C1] 목차가 선언하지만 manifest 에는 코드
+            // 자체가 없는 단계 - (1)~(3)과 다른 네 번째 부류다. 쿼터가 단계 생성
+            // 도중에 나면 정확히 이 모양이 남는다: 목차는 17단계인데 manifest 는
+            // 거기까지만(13단계) 기록됐다. 위 foreach 는 manifest.Steps 만 순회하므로
+            // 이 코드들은 reusable 에도 defective 에도 안 들어가 있었다 - 재사용도
+            // 재생성도 안 되고 최종 문서에서 조용히 사라지는 원인이다. "결함 표시"가
+            // 있었던 게 아니라 재료 자체가 없으므로 (2)·(3)과 같이 DefectKind는 null.
+            if (structureSteps != null)
+            {
+                foreach (var step in structureSteps)
+                {
+                    if (reusable.ContainsKey(step.Code) || defectiveKinds.ContainsKey(step.Code)) continue;
+                    defective.Add(step.Code);
+                    defectiveKinds[step.Code] = null;
+                }
+            }
+
+            // 골격도 섹션도 없으면 재개할 재료가 없다(§11-5). 위에서 새로 추가한
+            // "manifest에 없는" 코드는 이 판정과 무관하다 - reusable.Count 를 안 바꾼다.
             if (skeleton == null && reusable.Count == 0) return null;
+
+            // 분모는 manifest 가 아니라 목차 단계 수다(설계 §3-4) - manifest 기준이면
+            // "13/13"처럼 빠진 4단계가 화면에서 안 드러난다. 목차를 못 파싱했으면
+            // (예: §11-5 단일 호출 폴백 판) manifest 기준으로 떨어진다 - 그 경우
+            // 목차 단계 수 자체를 알 방법이 없다.
+            var totalStepsInStructure = structureSteps?.Count ?? manifest.Steps.Count;
 
             return new PlanAttemptResumeCandidate(
                 runDir, manifest.Run, manifest.StartedAt,
                 skeleton ?? string.Empty, skeletonAttempt,
                 reusable, attempts, defective, defectiveKinds,
-                ReadPriorReviews(runDir), manifest.Steps.Count);
+                ReadPriorReviews(runDir), totalStepsInStructure);
         }
 
         /// <summary>

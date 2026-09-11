@@ -467,7 +467,9 @@ namespace ReSet.Core.Tests
             Assert.Equal(new[] { "S01", "S02" }, candidate.ReusableSections.Keys.OrderBy(k => k).ToArray());
             Assert.Equal("S01 건강", candidate.ReusableSections["S01"]);
             Assert.Equal(new[] { "S03" }, candidate.DefectiveStepCodes.ToArray());
-            Assert.Equal(3, candidate.TotalStepsInManifest);
+            // 목차를 못 파싱하는 입력("## 목차 A"엔 ```json 블록이 없다)이라 목차
+            // 단계 수를 알 수 없다 - 예전처럼 manifest 기준으로 떨어진다.
+            Assert.Equal(3, candidate.TotalStepsInStructure);
 
             // 원래 Attempt 를 그대로 옮긴다(설계 §3-5) — 새 판에 다시 기록할 때 쓴다.
             Assert.Equal(1, candidate.SectionAttempts["S01"]);
@@ -475,6 +477,61 @@ namespace ReSet.Core.Tests
             // 리뷰는 시도 번호가 큰 순으로 최근 3개까지(설계 §3-3).
             Assert.Equal(new[] { 2, 1 }, candidate.PriorReviews.Select(r => r.Attempt).ToArray());
             Assert.Equal("회차 2 지적", candidate.PriorReviews[0].Review.FeedbackComment);
+        }
+
+        /// <summary>
+        /// [PROBE A — 2026-09-11 최종 전체 리뷰 C1, 영구 시험으로 승격] 목차
+        /// (PlanStructure)가 선언하는 단계인데 manifest 에 <b>아예 없는</b> 코드는
+        /// 재사용 대상도(ReusableSections) 결함 표시도(구 DefectiveStepCodes) 아니었다
+        /// - <c>TryReadCandidateCore</c>가 <c>manifest.Steps</c>만 순회했기 때문이다.
+        ///
+        /// 리뷰어가 실물로 관측한 사슬: 쿼터는 단계 생성 도중에 나므로 <c>RecordStepSection</c>이
+        /// 그 회차까지만 쓴 채 중단된다 - manifest 에는 그 시점까지 기록된 코드만 있다.
+        /// 다음 실행에서 재개하면 목차(17단계)와 manifest(13단계)의 차이 4단계가
+        /// <b>재사용도 재생성도 안 되고</b> 최종 문서에서 조용히 사라지며, 파이프라인은
+        /// <c>Passed</c>로 끝난다(PROBE-A regenerated=[]·plan contains S03: False·
+        /// outcome=Passed).
+        ///
+        /// 이 시험은 그 사슬의 근원(TryReadCandidateCore)만 잡는다 - "재생성됐는가"는
+        /// VerificationPipelineOrchestrator.cs:4034-4036(<c>pending = steps.Where(...
+        /// defectiveSteps.Contains(...))</c>)이 DefectiveStepCodes를 그대로 pending 판정에
+        /// 쓰므로, 여기서 S03이 DefectiveStepCodes에 들어가면 그 자리가 자동으로 S03을
+        /// 다시 부른다(오케스트레이터 쪽은 별도 통합 시험이 잰다).
+        /// </summary>
+        [Fact]
+        public void TryResume_WhenStructureDeclaresAStepMissingFromTheManifest_MarksItDefectiveNotSilentlyDropped()
+        {
+            var planStructure = "## 목차\n\n```json\n{ \"Steps\": [" +
+                "{ \"Code\": \"S01\", \"Name\": \"n1\" }," +
+                "{ \"Code\": \"S02\", \"Name\": \"n2\" }," +
+                "{ \"Code\": \"S03\", \"Name\": \"n3\" }" +
+                "] }\n```";
+
+            var journal = NewJournal();
+            journal.OpenRun(planStructure, "run-start");
+            journal.RecordSkeleton(1, "골격 본문");
+            journal.RecordStepSection(1, "S01", "S01 건강");
+            journal.RecordStepSection(1, "S02", "S02 건강");
+            // S03 은 회차 도중 쿼터가 나서 한 번도 기록되지 않았다 - manifest.Steps 에
+            // 키 자체가 없다. 파일 없음(§S02 유사)·해시 불일치와는 다른 세 번째 부재다.
+
+            var candidate = NewJournal().TryResume(planStructure);
+
+            Assert.NotNull(candidate);
+            Assert.Equal(
+                new[] { "S01", "S02" }, candidate!.ReusableSections.Keys.OrderBy(k => k).ToArray());
+
+            // S03 이 다시 만들 목록에 들어가야 한다 - 여기 빠지면 S03 은 재사용도
+            // 재생성도 안 되고 최종 문서에서 사라진다.
+            Assert.Contains("S03", candidate.DefectiveStepCodes);
+            Assert.True(candidate.DefectiveStepKinds.ContainsKey("S03"));
+            // 결함 "표시"가 있었던 게 아니라 재료 자체가 없다 - null 로 구분한다
+            // (§698-700 주석과 같은 세 번째 부류).
+            Assert.Null(candidate.DefectiveStepKinds["S03"]);
+
+            // 분모는 manifest 가 아니라 목차 단계 수다 - "재사용 2/2"가 아니라
+            // "2/3"이어야 사람이 보고 하나가 빠졌다는 것을 알 수 있다(설계 §3-4).
+            Assert.Equal(3, candidate.TotalStepsInStructure);
         }
 
         // 일곱 항목 각각을 재야 한다 — 하나라도 안 재면 그 항목은 무방비다(설계 §5-1).

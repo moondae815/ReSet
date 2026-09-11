@@ -295,7 +295,7 @@ namespace ReSet.Cli
         public Task<bool> ConfirmResumeAsync(string jobName, PlanAttemptResumeCandidate candidate)
         {
             var reusable = candidate.ReusableSections.Count;
-            var total = candidate.TotalStepsInManifest;
+            var total = candidate.TotalStepsInStructure;
 
             AnsiConsole.Write(new Panel(new Markup(
                 $"[bold]{Markup.Escape(jobName)}[/] - 이어서 할 수 있는 판을 찾았습니다.\n\n" +

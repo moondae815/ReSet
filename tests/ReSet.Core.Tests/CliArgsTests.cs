@@ -185,7 +185,7 @@ namespace ReSet.Core.Tests
                 DefectiveStepCodes: new List<string> { "S02" },
                 DefectiveStepKinds: new Dictionary<string, StepDefectKind?> { ["S02"] = StepDefectKind.QualityFloor },
                 PriorReviews: new List<(int Attempt, ReviewResult Review)>(),
-                TotalStepsInManifest: 2);
+                TotalStepsInStructure: 2);
 
             var answer = await adapter.ConfirmResumeAsync("Job_Test", candidate);
 

@@ -2732,6 +2732,93 @@ namespace ReSet.Core.Tests
             Assert.Equal(1, manifest.GetProperty("Steps").GetProperty("S01").GetProperty("Attempt").GetInt32());
         }
 
+        /// <summary>
+        /// [PROBE A, 오케스트레이터 층 — 2026-09-11 최종 전체 리뷰 C1] 위 시험과 다른
+        /// 것: S02(결함 표시)가 아니라 <b>manifest.Steps 에 코드 자체가 없는 S03</b>를
+        /// 다룬다. 쿼터는 단계 생성 도중에 나므로, 목차가 3단계(S01·S02·S03)를
+        /// 선언해도 <c>RecordStepSection</c>이 S03까지 못 미치고 중단되면 manifest 에는
+        /// S01·S02까지만 있다. 고치기 전 코드는 이 코드를 재사용 대상에도 다시 만들
+        /// 목록에도 넣지 않았다 - <c>TryReadCandidateCore</c>가 <c>manifest.Steps</c>만
+        /// 순회했기 때문이다. 그 결과가 리뷰어의 실측이다: 재생성 호출 0회, 최종
+        /// 문서에 S03 없음, 그런데도 <c>Passed</c>로 끝난다.
+        ///
+        /// 이 시험은 그 사슬 전체(저널의 진단 → 오케스트레이터의 pending 판정 →
+        /// 최종 조립)를 공개 진입점 하나로 관통해서 잰다 - PlanAttemptJournalTests의
+        /// PROBE A는 저널 한 겹만 재므로, 오케스트레이터가 DefectiveStepCodes를 실제로
+        /// pending에 반영해 AI를 다시 부르고 그 결과를 최종 문서에 꿰매 넣는지는
+        /// 이 시험만이 잰다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenTocStepIsMissingFromTheManifest_RegeneratesItInsteadOfDroppingItSilently()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n" +
+                "    { \"Code\": \"S01\", \"Name\": \"첫\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] },\n" +
+                "    { \"Code\": \"S02\", \"Name\": \"둘\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T2\"], \"ErrorCodes\": [\"-2\"] },\n" +
+                "    { \"Code\": \"S03\", \"Name\": \"셋\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T3\"], \"ErrorCodes\": [\"-3\"] }\n" +
+                "  ]\n}\n```";
+            var planStructure = "## 목차\n" + stepsJson;
+            var skeleton = SkeletonMarkdownFor("S01", "S02", "S03");
+
+            // 이어서 할 판을 미리 써 둔다 - S01·S02만 건강하게 기록됐고, S03은 한 번도
+            // 기록되지 않았다(쿼터 소진이 S02 이후 S03 호출 도중 났다고 가정).
+            // manifest.Steps 에는 S03 키 자체가 없다 - "결함 표시"·"파일 없음"·
+            // "해시 불일치"와 다른 네 번째 부재다.
+            var seed = PlanAttemptJournal.Create(
+                _consolidatedOutputRoot, "Job_Test", "OpenAI", "gpt-4", "default", "C#",
+                PlanAttemptJournal.ComputeSha256("dbo.USP_Spec1\ncontent1"));
+            seed.OpenRun(planStructure, "run-start");
+            seed.RecordSkeleton(1, skeleton);
+            seed.RecordStepSection(1, "S01", HealthyStepSection("S01", "dbo.T1", "-1"));
+            seed.RecordStepSection(1, "S02", HealthyStepSection("S02", "dbo.T2", "-2"));
+
+            var rawDir = Path.Combine(_consolidatedOutputRoot, "Jobs", "Job_Test", "raw");
+            Directory.CreateDirectory(rawDir);
+            File.WriteAllText(Path.Combine(rawDir, "PlanStructure.md"), planStructure);
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.ModelName.Returns("gpt-4");
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = planStructure });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = skeleton });
+
+            var regenerated = new List<string>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    regenerated.Add(step.Code);
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var interaction = Substitute.For<IVerificationUserInteraction>();
+            interaction.ConfirmResumeAsync("Job_Test", Arg.Any<PlanAttemptResumeCandidate>())
+                .Returns(Task.FromResult(true));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                interaction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                new List<(string, string)> { ("dbo.USP_Spec1", "content1") },
+                "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            // S01·S02는 재사용됐으므로 AI가 안 불린다. manifest에 없던 S03만 다시
+            // 만든다 - 고치기 전에는 이 목록이 비어 있었다(리뷰어 실측: regenerated=[]).
+            Assert.Equal(new[] { "S03" }, regenerated.Distinct().ToArray());
+
+            // 최종 문서에 S03의 본문이 실제로 있어야 한다 - 고치기 전에는 여기서
+            // "plan contains S03: False"가 났다. 비어 있지 않은 문서(Passed)이면서
+            // 단계 하나가 조용히 빠지는 것이 이 결함의 핵심 증상이었다.
+            Assert.NotNull(result.Plan);
+            Assert.Contains("S03", result.Plan);
+            Assert.Contains("dbo.T3", result.Plan);
+        }
+
         /// <summary>거절하면 재사용 없이 전량을 다시 만든다. Effort·raw/PlanStructure.md 수정은
         /// 위 「승인」시험과 같은 사유다.</summary>
         [Fact]
