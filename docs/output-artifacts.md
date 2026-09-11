@@ -188,7 +188,7 @@ ReSet의 산출물은 전부 AI가 만든 것이 아니다. **어느 주체가 �
 | `docs/Thinking.md` | 🤖 AI (추론 부분) | 계획서와 한 쌍 | 채택된 시도의 사고 과정. 계획서와 짝이라 한쪽만 나가면 안 된다 |
 
 `raw/attempts/`는 재현과 감사를 위한 원본이면서, **같은 Job 이름으로 다시 실행하면 이어서
-하는 재료**이기도 하다(`PlanAttemptJournal.TryResume`). 후보가 되려면 `raw/PlanStructure.md`가
+하도록 설계된 재료**이기도 하다(`PlanAttemptJournal.TryResume`, 실물 확인은 아직이다). 후보가 되려면 `raw/PlanStructure.md`가
 남아 있고, 최신 판(`run-NNN`)의 `manifest.json`에 적힌 `ReuseKey` **일곱 항목**
 (`ContractVersion`·`PlanStructureSha256`·`SpecsSha256`·`Provider`·`Model`·`Effort`·
 `TargetLanguage`)이 이번 실행이 만들려는 값과 **전부** 같아야 한다 — 하나라도 어긋나면
