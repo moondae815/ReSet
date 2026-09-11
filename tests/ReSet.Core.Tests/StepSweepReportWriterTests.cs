@@ -480,6 +480,58 @@ namespace ReSet.Core.Tests
             Assert.Contains("| 스테이징 원천의 총수 | 1010 |", section);
         }
 
+        // 앵커 DML 최상위 술어의 분모 아홉. 서로 다른 값을 넣어 라벨과 값이 뒤바뀌면 잡는다.
+        [Fact]
+        public void SilenceDenominatorsSectionPrintsThePredicateTermCounters()
+        {
+            var report = new SweepReport(
+                Array.Empty<SweepFinding>(),
+                new SweepIndicators(0, 0, 0)
+                {
+                    PredicateTermStatementsCompared = 11,
+                    PredicateTermStatementsFired = 12,
+                    PredicateTermSilencedWithoutDdl = 13,
+                    PredicateTermSilencedWithoutOriginalKey = 14,
+                    PredicateTermSilencedWithoutOriginalTerms = 15,
+                    PredicateTermSilencedByCursorGroup = 16,
+                    PredicateTermSilencedByStaging = 17,
+                    PredicateTermSilencedByBanner = 18,
+                    PredicateTermsExemptedAsOrchestration = 19,
+                },
+                new HarnessGaps(
+                    new List<string>(), 0, 0, 0,
+                    StepInterfacesWereNull: false,
+                    RunRowOwnedTablesWereNull: false,
+                    KnownTableNamesWereEmpty: false));
+
+            var section = Section(StepSweepReportWriter.Render(report, "abc1234", "16", 0), "## 침묵 분모");
+
+            Assert.Contains("| 최상위 술어 - 원본과 대조까지 간 앵커 DML 문장 수 | 11 |", section);
+            Assert.Contains("| 최상위 술어 - 발화한 문장 수 | 12 |", section);
+            Assert.Contains("| 최상위 술어 - 원본 DDL 이 없어 침묵(S1) | 13 |", section);
+            Assert.Contains("| 최상위 술어 - 원본에 키가 없거나 모호해 침묵(S2) | 14 |", section);
+            Assert.Contains("| 최상위 술어 - 원본 문장에 최상위 항이 없어 침묵(S3) | 15 |", section);
+            Assert.Contains("| 최상위 술어 - 커서 그룹 면제(E2) | 16 |", section);
+            Assert.Contains("| 최상위 술어 - 스테이징만 읽어 면제(E3) | 17 |", section);
+            Assert.Contains("| 최상위 술어 - 명세서 L1 소진 배너로 침묵(S5) | 18 |", section);
+            Assert.Contains("| 최상위 술어 - 오케스트레이션 항으로 면제한 항 수(E1) | 19 |", section);
+        }
+
+        [Fact]
+        public void PredicateTermFindingsAreListedWithTheirCoordinates()
+        {
+            var markdown = StepSweepReportWriter.Render(
+                Report(new SweepFinding("POQSettleBatch6", "S12", SweepCheck.P, SweepCondition.AsIs, "m")
+                {
+                    Kind = "INSERT",
+                    Ordinal = 4,
+                }),
+                "abc1234", "16", 0);
+
+            var section = Section(markdown, "## 검사 P 발화 목록");
+            Assert.Contains("| 1 | A | POQSettleBatch6 | S12 | INSERT 4 |  |", section);
+        }
+
         // 2026-08-27 staging-lineage 최종 리뷰 Critical 1 - 이 계수가 0이면 방어가
         // 도달하지 못한 것이지 수정이 살아 있다는 증거가 아니다. 그 읽는 법을 절이
         // 스스로 적어야 한다.
