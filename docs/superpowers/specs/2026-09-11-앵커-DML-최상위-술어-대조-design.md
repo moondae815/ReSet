@@ -180,3 +180,147 @@ Job 별 도달(앵커 DML / 도달):
 | Batch6 / S01 INSERT 2 · INSERT 4 | 2 | v0 흔적(키) | `CMRate_Ins` 다섯 INSERT 는 E1·R2 만 적용해도 원본과 글자까지 같다. v0 가 `U2`→INSERT 2, `U4`→INSERT 4 로 **U 번호를 종류별 서수로 읽었다**. 실제 키는 대상 테이블에서 어긋나 S2 로 떨어진다 |
 | 커서 SP — Batch1/S12 AcqManual DELETE 1 · INSERT 1, Batch4/S11 PROC_ETC, Batch4/S15 SUMMARY_ETC | 4 | E2 면제 예상 | 스윕에서 확인한다 |
 | Batch6 / S13 SUMMARY_ETC | 1 | **열지 않음** | E2 가 덮지 못하는 자리다. §3-2 에서 반드시 연다 |
+
+---
+
+## 7. 실측 (2026-09-11, BASE 58da1f1a · AFTER 6e5365c0)
+
+**결론 먼저.** §4 의 되돌림 조건 넷은 문자 그대로는 하나도 걸리지 않았다. 다섯 발화 모두 원인을 설명할 수 있고, 기존 검사 차분은 0 이다. S12 두 발화가 나왔고, 양성 대조군 둘도 튀었다. **그러나 §3-2 합격선 둘이 깨졌다.** ④ 는 「정확히 S12 둘」이어야 하는데 발화 좌표가 **다섯**이다. ⑤ 는 「오탐 0」이어야 하는데 오탐이 **1**이다(Batch4/S11). 나머지 둘은 v0 가 E2 로 예상했던 자리에서 나온 **참양성**이다. 병합은 사람이 정한다. 면제·정규화·시험은 한 줄도 바꾸지 않았다.
+
+### 7-1. 코퍼스 조립
+
+- 각 워크트리 루트에 `output` 심링크 하나(`→ /Users/payletter/git-root/ReSet/output`)만 걸었다. 조립본은 만들지 않았다. `appsettings.local.json` 에 `OutputSettings` 가 없어서 두 워크트리 모두 기본값 `./output` 을 읽는다. 곧 **같은 코퍼스**다.
+- 시작 목록(`ls output/Jobs/`): `POQSettleBatch1 · POQSettleBatch4 · POQSettleBatch5 · POQSettleBatch6 · POQSettleBatch7`. `-resume` 은 없다.
+- 게이트 뒤 목록: `POQSettleBatch1 · POQSettleBatch4 · POQSettleBatch5 · POQSettleBatch6 · POQSettleBatch7`. 시작 목록과 같다. 측정 창 안에 복사본이 끼지 않았다.
+- 두 보고서의 실행 조건은 같다. 측정 쌍 83(Job 5) · 캐시 `FormatVersion` {22}·항목 31 · 명세서 세대 2026-09-10 · 작업 트리 깨끗 · 미해결 프로시저 참조 0.
+- 보고서 둘의 위치:
+  - BASE: `docs/audit-reports/sweeps/2026-09-11-step-sweep-base.md`. BASE 워크트리에 `2026-09-11-step-sweep.md` 로 생긴 것을 이름만 바꿔 옮겼다(바이트 동일 확인). 커밋은 본문 「커밋: `58da1f1a`」 줄로 가린다.
+  - AFTER: `docs/audit-reports/sweeps/2026-09-11-step-sweep.md`.
+- 스윕은 조건 (A)·(B) 로 한 번씩 돈다. 그래서 P 목록의 좌표 하나가 두 행으로 실린다. 아래의 「좌표」는 `(Job, 단계, 종류, 서수)` 를 중복 없이 센 것이다.
+
+### 7-2. 합격선
+
+| 합격선 | 기대 | 실측 | 판정 |
+| :--- | :--- | :--- | :--- |
+| A·B·C·D·E·미분류 | BASE = AFTER | 두 조건 모두 A 0 · B 14 · C 2 · D 0 · E 0 · 미분류 48 로 같다. Job 별 표도 P 행을 빼면 같다. B·C 발화 목록 32 행도 같다 | 통과 |
+| P 발화 좌표(중복 제거) | 정확히 Batch6·7 `S12` INSERT 4 | **5** — Batch4/S11 UPDATE 1 · Batch4/S15 INSERT 1 · Batch6/S12 INSERT 4 · Batch6/S13 DELETE 1 · Batch7/S12 INSERT 4. (A)·(B) 가 같은 좌표라 10 행이다 | **불통과** |
+| S12 표적 둘 | 발화 | 둘 다 발화 | 통과 |
+| COMM_UPD UPDATE 3 다섯 곳 | P 에 없다 | 없다. 다섯 곳(Batch1/S07 · Batch4/S08 · Batch5/S05 · Batch6/S05 · Batch7/S06) 모두 **일치(Matched)** | 통과 |
+| 오탐 | 0 | **1**(Batch4/S11 UPDATE 1, §7-3) | **불통과** |
+| 도달 = 원본과 대조까지 간 문장 | v0 376 보다 낮다 | **383 / 434**(88.2 %). v0 는 376 / 403(93.3 %) | 수는 예측과 반대이고 비율은 예측대로다 — 아래 |
+
+**도달의 분자·분모·자.**
+- 분자는 `PredicateTermStatementsCompared`(Fired + Matched = 5 + 378)다.
+- 분모는 `ResolveAnchoredStatements` 가 푼 `(Kind, Ordinal)` 묶음 434 이고, 「앵커가 서수로 해결된 문장 수」 434 와 같다.
+- 자는 조건 (B) 사전이다.
+- v0 의 분모(403)는 다른 자다. 앵커 수가 Job 마다 다르다.
+
+| Job | C# 앵커 / 도달 | v0 앵커 / 도달 |
+| :--- | ---: | ---: |
+| Batch1 | 92 / 83 | 91 / 86 |
+| Batch4 | 78 / 73 | 75 / 71 |
+| Batch5 | 92 / 83 | 89 / 84 |
+| Batch6 | 80 / 61 | 67 / 57 |
+| Batch7 | 92 / 83 | 81 / 78 |
+| **계** | **434 / 383** | **403 / 376** |
+
+분모가 31 다르므로 「v0 가 상한」은 **수로는 성립하지 않는다**. 도달률은 모든 Job 에서 v0 이하다. 분모 31 의 차이는 v0 코드가 저장소에 없어서 이 창에서 귀속하지 못했다. 발화가 아니라 비교 기준의 차이이므로 되돌림 조건은 아니다.
+
+### 7-3. P 전 좌표 판정 (원본 DDL · 단계 파일 대조)
+
+원본은 `output/Objects/<SP>.Procedure/raw/object_definition.sql` 을, 이행은 `output/Jobs/<Job>/agent/steps/<단계>.md` 를 읽었다. 항 원문은 스윕과 같은 재료로 뽑았다. `EvaluateAnchoredPredicateTerms` 결과를 문장마다 덤프하는 임시 한 줄을 넣었다가 되돌렸다. 커밋하지 않았다.
+
+| # | 좌표 | SP · 대상 | 더한 항(이행 원문) | 판정 | 근거 |
+| ---: | :--- | :--- | :--- | :--- | :--- |
+| 1 | Batch6/S12 INSERT 4 | SUMMARY_EXTRA · TSettleByOUT | `OUTYMD >= @v_strReqYMD` (S12.md:331) | **참양성** | 원본 INSERT 4(210행)의 WHERE(223~228행)에는 이 항이 없다. DELETE 4(196행)에만 있다. 설계 동기의 결함 그대로다 |
+| 2 | Batch7/S12 INSERT 4 | SUMMARY_EXTRA · TSettleByOUT | `OUTYMD >= @p_reqYmd` (S12.md:209) | **참양성** | 1 과 같다 |
+| 3 | Batch4/S15 INSERT 1 | SUMMARY_ETC · TSettleByOUT | `A.OUTSTATE = 9` · `A.USESTATE = 0` · `A.OUTYMD IS NOT NULL` (S15.md:161) | **참양성** | 결함을 만드는 항은 `A.OUTSTATE = 9` 하나다(아래 첫째 글머리). 나머지 둘은 커서가 넘긴 값과 겹쳐 무해하다 |
+| 4 | Batch6/S13 DELETE 1 | SUMMARY_ETC · TSettleByOUT | `EXISTS (SELECT 1 FROM (커서 SELECT DISTINCT …) K WHERE K.YMD = …TSettleByOUT.YMD AND … AND K.OUTSTATE = …TSettleByOUT.OUTSTATE AND K.CompanySalesType = …TSettleByOUT.CompanySalesType …)` (S13.md:130~155) | **참양성(내용 기준)** | 커서 행 단위 DELETE(원본 59~72행, 변수 등식 13)를 EXISTS 한 항으로 바꿨다. 그 항 안에 원본에 없는 조건이 둘 있다(아래 둘째 글머리). 고르는 행이 원본과 다르다 |
+| 5 | Batch4/S11 UPDATE 1 | PROC_ETC · TSettleMiss | `OutState = @p_intOutState` (S11.md:221) | **오탐** | 원본은 `OutState = 2`(97행)다. 이행은 리터럴 2 를 매개변수로 올렸고 호출마다 `p_intOutState: 2` 를 바인딩한다(S11.md:56·62·75). 고르는 행이 같다. 원인은 아래 셋째 글머리 |
+
+- **3 의 결함.** 원본 INSERT 1(81행)의 WHERE(97~109행)는 커서 변수 등식뿐이고 OUTSTATE 를 거르지 않는다. 그래서 같은 키의 OUTSTATE ≠ 9 행까지 다시 집계한다. GROUP BY 에도 OUTSTATE 가 있다. 앞선 DELETE 1(S15.md:124, 원본 59행과 일치)은 OUTSTATE 와 무관하게 그 키의 행을 모두 지운다. 따라서 이행은 **OUTSTATE ≠ 9 집계 행을 지우고 다시 넣지 않는다.** `A.USESTATE = 0` 과 `A.OUTYMD IS NOT NULL` 은 커서가 넘긴 `@p_UseState`(=0)·`@p_OutYMD`(비 NULL)와 겹친다.
+- **4 의 조건 둘과 발화 모양.**
+  - (가) `K.OUTSTATE = …OUTSTATE`: 원본 DELETE 는 OUTSTATE 를 보지 않는다. 이행은 OUTSTATE = 9 행만 지운다.
+  - (나) NULL 비안전 등식 `K.CompanySalesType = …`·`K.ExtraSettleFlag = …`: 원본은 `ISNULL(CompanySalesType,4) = ISNULL(@v,4)` 라 NULL 행도 지운다. 이행은 NULL 행을 못 지운다.
+  - 다만 **이 검사가 그 둘을 짚어 발화한 것은 아니다.** EXISTS 항 통째가 원본에 없어서 발화했다. 그래서 충실한 집합 치환이었어도 같은 자리에서 발화했을 것이다. 예컨대 같은 SP 를 옮긴 Batch4/S15 의 `SQL_CREATE_AND_CAPTURE_SHADOW`(S15.md:87~101)는 ISNULL 을 지키고 OUTSTATE 를 대조하지 않는다. 이것은 **「커서 → EXISTS 집합 치환」 모양의 잠재 오탐**이다. 이번 코퍼스에서는 내용이 결함이라 참양성이 됐을 뿐이다.
+- **5 의 원인.** R3 은 리터럴을 남기고 R2 는 변수를 `@V` 로 지운다. 그래서 `OUTSTATE = 2` ≠ `OUTSTATE = @V` 가 된다. 설계 §2-2 「알려진 대가 2 — 동치 재작성은 미리 만들지 않는다」의 실물이다(리터럴 → 바인딩 매개변수). 원인은 설명된다.
+- **v0 의 「E2 면제 예상」이 3·5 에서 빗나간 이유.** `BuildCursorGroupExemptions`(MechanicalValidator.cs:9724)는 쓰기 문장의 술어 집합이 어떤 SELECT 의 GROUP BY 와 **같을 때만** 면제한다.
+  - PROC_ETC: 커서 SELECT 의 GROUP BY 는 `[ClientID, YMD, OutYMD]` 이고 UPDATE 1 의 술어는 `[ID, ClientID, OutYMD, OutState, IssueType]` 이라 다르다.
+  - SUMMARY_ETC: 커서가 행을 순회해 GROUP BY 가 없다.
+  - 그 함수의 주석(:9708~9713)이 「후자는 술어가 사라지면 진짜 결함이다」라고 이미 적고 있다. 곧 결함이 아니라 설계대로의 비면제다.
+- **Batch6/S13 을 열었다(§6 의 약속).** DELETE 1 은 위 4 다. INSERT 2 는 S2 로 침묵했다. 이행 앵커는 `U2 … (INSERT 1)`(S13.md:198)인데, 앵커가 `(INSERT, 2)` 로 풀려 원본 키 `(INSERT, 1, TSettleByOUT)` 와 어긋난다(Batch6 U-앵커 불일치). 그런데 이 INSERT 는 3 과 같은 `A.OUTSTATE = 9` 를 싣고 있다(S13.md:262). 곧 **S2 가 가린 참양성 후보**다. 검사가 거기까지 가지 못한 것은 §5 「키가 어긋난 U-앵커 자리는 도달하지 못한다」의 실물이다.
+
+### 7-4. v0 후보 14 의 결말
+
+| 후보 | 건수 | §6 사전 판정 | C# 결말 |
+| :--- | ---: | :--- | :--- |
+| Batch6·7 / S12 INSERT 4 | 2 | 참양성 | **발화 2**(참양성) |
+| COMM_UPD UPDATE 3 (Batch1/S07 · 4/S08 · 5/S05 · 6/S05 · 7/S06) | 5 | v0 흔적 | **일치 5** |
+| Batch6 / S01 INSERT 2 · INSERT 4 | 2 | v0 흔적(키) | **S2 2** — 대상 `TPGSettleRate`·`TClientSettleRate`. S01 은 DELETE 1 만 일치했고 나머지 9 문장이 S2 다 |
+| 커서 — Batch1/S12 AcqManual DELETE 1 · INSERT 1 | 2 | E2 | **E2 2** |
+| 커서 — Batch4/S11 PROC_ETC | 1 | E2 | **발화**(UPDATE 1, 오탐). 같은 단계 INSERT 1 은 S3 |
+| 커서 — Batch4/S15 SUMMARY_ETC | 1 | E2 | **발화**(INSERT 1, 참양성). 같은 단계 DELETE 1 은 일치 |
+| Batch6 / S13 SUMMARY_ETC | 1 | 열지 않음 | **발화**(DELETE 1, 참양성). 같은 단계 INSERT 2 는 S2 |
+
+사전 판정과 결말이 갈린 것은 둘이다(Batch4/S11·S15 는 E2 가 아니라 발화). 나머지 12 는 사전 판정대로 갔다.
+
+### 7-5. 침묵 분모 아홉 (AFTER, 조건 (B) 사전)
+
+| 분모 | 값 |
+| :--- | ---: |
+| 원본과 대조까지 간 앵커 DML 문장 | 383 |
+| 발화한 문장 | 5 |
+| S1 원본 DDL 없음 | 0 |
+| S2 키 없음·모호 | 12 |
+| S3 원본 최상위 항 없음 | 31 |
+| E2 커서 그룹 면제 | 8 |
+| E3 스테이징만 읽음 | 0 |
+| S5 L1 소진 배너 | 0 |
+| E1 오케스트레이션 항으로 면제한 **항** 수 | 18 |
+
+- **합이 앵커 창을 덮는다.** 383 + 12 + 31 + 8 + 0 + 0 + 0 = **434** = 「앵커가 서수로 해결된 문장 수」. 빠진 문장이 없다.
+- **S2 12 는 전부 Batch6 이다.** 내역은 S01 CMRate_Ins 9(DELETE 3 ~ INSERT 10) · S09 PGCOLLECT_INS DELETE 22·INSERT 31 · S13 SUMMARY_ETC INSERT 2 다. §2-4 가 예고한 「Batch6 U-앵커 불일치가 대상 테이블 불일치로 S2 에 떨어진다」와 맞는다(`AnchorKindOrdinalPairTests` 의 불일치 8 과는 다른 자이므로 수를 맞대지 않는다).
+- **S3 31 의 SP 별 내역.** CMRate_Ins 3 · COMM_UPD 5(UPDATE 7, Job 마다) · INS 5 · INS_EXTRA 4 · INS_EXTRA4PLCARD 5 · PROC_ETC 5(INSERT 1 `VALUES`, Job 마다) · PGCOLLECT_INS 4.
+- **E2 8 의 내역.** AcqManual DELETE 1·INSERT 1 × 4 Job(Batch1/S12 · Batch5/S11 · Batch6/S11 · Batch7/S11).
+- **E3 0 은 「안전하다」가 아니라 「재지 않았다」로 읽는다.** 같은 보고서의 「계보 원천을 가진 문장 수」가 0 이다. `ReadsOnlyStaging` 은 계보 원천이 있어야 참이 되므로, 이 코퍼스에서 E3 는 **도달 불가**다. 그러니 §5 의 경고(명세서가 DML 표를 잃으면 E3 가 넓어진다)는 여기서 급증으로 나타날 수가 없다. 명세서마다 DML 표가 있는지는 따로 재지 않았다. 재료 분모에 DmlRows 명세서 행 102(14 프로시저)가 있지만 프로시저별 존재는 「잴 수 없음」이다.
+- **「발화한 문장」 지표는 배선을 재지 않는다.** 되돌림 ① 에서 검사 호출을 끄자 P 가 0 이 됐지만 이 지표는 5 로 남았다. 지표는 판정 함수를 직접 부르기 때문이다. 배선을 재는 자는 P 발화 수 쪽이다.
+
+### 7-6. 없앴을 때 셋
+
+실험마다 한 파일을 고치고 스윕을 돈 뒤 `git checkout -- <파일>` 로 되돌렸다. 커밋하지 않았다. 실험 보고서(`-b`)도 워크트리 밖으로 옮겼고 커밋하지 않았다.
+
+| 실험 | 바꾼 것 | 기대 | 실측 | 판정 |
+| :--- | :--- | :--- | :--- | :--- |
+| ① 배선 | `MechanicalValidator.cs:650~651` 의 `SafeCheck(() => CheckAnchoredStatementPredicateTerms(…))` 주석 처리 | P = 0, 나머지는 AFTER 와 같다 | P 0 / 0 · A 0 · B 14 · C 2 · D 0 · E 0 · 미분류 48 · B·C 목록 32 행이 AFTER 와 같다 | 통과 |
+| ② R2 | `DmlScopeExtractor.PredicateTerms.cs:263` `Visit(VariableReference)` → `{ }` | COMM_UPD 다섯 곳이 P 에 나온다 | 다섯 곳 모두 나왔다(각 A·B 2 행). P 좌표 366(Job 별 81·73·70·61·81). A~E·미분류는 그대로 | 통과(거친 대조군) |
+| ③ R5 | 같은 파일 `Visit(NamedTableReference)` → `{ }` | COMM_UPD 다섯 곳이 P 에 나온다 | 다섯 곳 모두 나왔다. P 좌표 15 | 통과(좁은 대조군) |
+
+- **② 가 거친 이유.** 변수를 쓰는 거의 모든 항이 튄다. 그래서 COMM_UPD 만의 증거는 아니고 「R2 가 전역에서 일한다」의 증거다.
+- **③ 의 15 좌표.** AFTER 의 5 에, COMM_UPD UPDATE 3 다섯과 `UP_UTIL_SETTLE_EXCEPTION_PROC` UPDATE 18 다섯(Batch1/S08 · 4/S07 · 5/S04 · 6/S04 · 7/S05)이 더해진 것이다. 이 코퍼스에서 R5 에 기대는 문장은 이 둘(× 5 Job)뿐이다. 그래서 좁은 대조군이다.
+
+### 7-7. 게이트
+
+| 명령 | 결과 |
+| :--- | :--- |
+| `dotnet build -warnaserror --no-incremental` | 경고 0 · 오류 0. `CoreCompile` 8 회, 5 프로젝트(ReSet.Core · Validator.Core · Validator.Cli · Cli · Core.Tests)를 새로 컴파일했다 |
+| `dotnet test tests/ReSet.Core.Tests` | 실패 1 · 통과 4205 · **건너뜀 0** · 전체 4206 |
+
+- **빌드를 비증분으로 다시 잰 이유.** 첫 빌드는 되돌림 직후인데도 1.7 초 만에 「경고 0」으로 끝났다. 컴파일 없이 통과했을 수 있어 비증분으로 다시 쟀다.
+- **실패는 `AnchorKindOrdinalPairTests.EveryUAnchorPointsAtAStatementTheSpecActuallyDeclares` 하나다.** 의도된 실패다(§3-3). 출력 꼬리는 「대조한 단계 70 · 앵커 보유 문장 434 · 불일치 8」이다.
+  - 불일치 8 은 전부 Batch6 이다. S01 앵커 6~10 · S09 앵커 22·31 · S13 INSERT 앵커 2.
+  - 이 시험의 「앵커 보유 문장 434」는 스윕의 「앵커가 서수로 해결된 문장 수」 434 와 같다. 두 자가 같은 앵커 창을 보고 있다.
+
+### 7-8. 되돌림 조건 대조 (§4)
+
+| 조건 | 결과 |
+| :--- | :--- |
+| 1. 원인을 설명할 수 없는 발화·오탐 | 없다. 다섯 발화 모두 원인을 댔다(§7-3). 다만 **설명된 오탐 1** 이 있다 |
+| 2. 기존 검사 발화 차분 ≠ 0 | 아니다(차분 0) |
+| 3. S12 둘 중 미발화 | 아니다(둘 다 발화) |
+| 4. 양성 대조군 미발현 | 아니다(② ③ 모두 발현) |
+
+§4 는 걸리지 않았다. §3-2 합격선 ④(정확히 둘)와 ⑤(오탐 0)는 깨졌다. 사람이 정할 것은 셋이다. 이 창에서는 셋 다 손대지 않았다.
+
+1. Batch4/S11 의 리터럴 → 바인딩 매개변수를 동치로 볼 규칙을 둘 것인가(§2-2 대가 2 가 말한 「실물로 나올 때」가 이것이다).
+2. 「커서 → EXISTS 집합 치환」 모양의 구조적 발화를 어떻게 다룰 것인가(Batch6/S13).
+3. 새로 드러난 참양성 둘(Batch4/S15 INSERT 1 · Batch6/S13 DELETE 1)과 S2 가 가린 후보 하나(Batch6/S13 INSERT 2)를 결함 목록에 올릴 것인가.
