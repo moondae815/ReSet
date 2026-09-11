@@ -200,10 +200,26 @@ namespace ReSet.Core.Services
                 JsonSerializer.Serialize(_manifest, Options));
         }
 
+        /// <summary>
+        /// BOM 없는 UTF-8.
+        ///
+        /// <c>Encoding.UTF8</c> 은 <b>BOM 을 쓴다</b> — 실물에서 저널이 쓴 파일 25개
+        /// 전부에 붙어 python <c>json</c> 이 「Unexpected UTF-8 BOM」으로 거부했다
+        /// (2026-09-11, `POQSettleBatch7`). C# 은 <c>File.ReadAllText</c> 가 BOM 을
+        /// 벗겨 읽으므로 이 저장소의 왕복 시험 스물둘이 전부 초록이었다 —
+        /// <c>EveryWrittenFile_HasNoUtf8Bom</c> 이 바이트로 잠근다.
+        ///
+        /// 자매 클래스 <c>L1AttemptLog</c> 는 인코딩 인자를 안 줘 기본값(BOM 없음)을
+        /// 쓴다. 여기서 값을 명시하는 것은 <b>BOM 없음이 의도라는 것</b>을 코드가
+        /// 말하게 하려는 것이다 — 인자를 지우면 다음 사람이 다시 `Encoding.UTF8` 을
+        /// 넣는다.
+        /// </summary>
+        private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+
         private static void WriteAtomic(string path, string content)
         {
             var temporary = path + ".tmp";
-            File.WriteAllText(temporary, content, Encoding.UTF8);
+            File.WriteAllText(temporary, content, Utf8NoBom);
             File.Move(temporary, path, overwrite: true);
         }
 

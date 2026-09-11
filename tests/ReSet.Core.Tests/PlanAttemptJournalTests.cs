@@ -371,5 +371,49 @@ namespace ReSet.Core.Tests
             Assert.False(Directory.Exists(
                 Path.Combine(journal.CurrentRunDirectory!, "reviews")));
         }
+
+        /// <summary>
+        /// 저널이 쓰는 파일에 UTF-8 BOM 이 붙으면 안 된다.
+        ///
+        /// [왜 바이트로 재는가 - 2026-09-11 실물에서 났다] C# 은 <c>File.ReadAllText</c> 가
+        /// BOM 을 자동으로 벗겨 읽으므로 <b>왕복 시험으로는 안 잡힌다.</b> 이 클래스의
+        /// 다른 시험 스물둘이 전부 통과하는 동안 실물 판(`POQSettleBatch7`)의 파일
+        /// <b>25개 전부</b>에 BOM 이 붙어 있었고, python <c>json</c> 이
+        /// 「Unexpected UTF-8 BOM」으로 거부해서야 드러났다. 검사가 보는 통로가 결함을
+        /// 가린 자리다 — 그래서 여기서는 파일을 <b>바이트로</b> 연다.
+        ///
+        /// manifest 와 리뷰는 JSON 이라 저장소 밖 도구(jq·승격 스크립트)가 읽고, 섹션은
+        /// 2단계가 본문 중간에 이어 붙인다 — 어느 쪽도 BOM 을 견디지 못한다. 자매 클래스
+        /// <c>L1AttemptLog</c> 는 인코딩 인자를 안 줘 기본값(BOM 없음)을 쓴다.
+        /// </summary>
+        [Fact]
+        public void EveryWrittenFile_HasNoUtf8Bom()
+        {
+            var journal = NewJournal();
+            journal.OpenRun("## 목차", "run-start");
+            journal.RecordSkeleton(1, "골격 본문");
+            journal.RecordStepSection(1, "S01", "섹션 본문");
+            journal.RecordReview(1, new ReviewResult { HasDefects = false });
+
+            var files = Directory
+                .EnumerateFiles(journal.CurrentRunDirectory!, "*", SearchOption.AllDirectories)
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .ToList();
+
+            // 판에 파일이 없으면 이 시험은 아무것도 안 재고 초록이 된다.
+            Assert.Equal(4, files.Count);
+
+            foreach (var path in files)
+            {
+                var head = new byte[3];
+                int read;
+                using (var stream = File.OpenRead(path)) read = stream.Read(head, 0, 3);
+
+                var hasBom = read == 3 && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF;
+                Assert.False(hasBom,
+                    $"{Path.GetFileName(path)} 에 UTF-8 BOM 이 붙었다 — " +
+                    "저장소 밖 도구(python json·jq)가 거부하고 섹션은 이어 붙일 때 본문 중간에 낀다.");
+            }
+        }
     }
 }
