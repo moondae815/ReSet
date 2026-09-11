@@ -525,7 +525,7 @@ namespace ReSet.Core.Services
     /// CTE 기반 UPDATE가 나타나도 처리는 된다 - 다만 실측 코퍼스에는 이 형태가 없어
     /// 실물로 검증하지는 못했다.
     /// </summary>
-    public static class DmlScopeExtractor
+    public static partial class DmlScopeExtractor
     {
         /// <summary>
         /// 「DML 범위」 표의 문장 번호를 매긴다 - 목록 순서대로 연산(UPDATE·INSERT·DELETE·
@@ -2797,7 +2797,7 @@ namespace ReSet.Core.Services
             /// 여기서 벗기지 않고 <see cref="TryDecompose"/>가 분해할 때만 벗긴다 -
             /// 그래야 원문 칸이 괄호까지 원본 그대로 진다.
             /// </summary>
-            private static IEnumerable<BooleanExpression> TopLevelAndTerms(BooleanExpression? node)
+            internal static IEnumerable<BooleanExpression> TopLevelAndTerms(BooleanExpression? node)
             {
                 if (node == null) yield break;
 
@@ -2999,7 +2999,7 @@ namespace ReSet.Core.Services
             /// 식 어딘가에 컬럼 참조가 있는가. 하위 질의 안으로는 내려가지 않는다 -
             /// 그 스코프의 컬럼은 이 술어의 좌변이 아니다.
             /// </summary>
-            private static bool ContainsColumn(ScalarExpression expression)
+            internal static bool ContainsColumn(ScalarExpression expression)
             {
                 var probe = new ColumnPresenceProbe();
                 expression.Accept(probe);
@@ -3096,7 +3096,7 @@ namespace ReSet.Core.Services
             /// 값·연산자를 보지 않는 것과 같은 원칙으로, 이름 그 자체 말고는
             /// 아무것도 추측하지 않는다.
             /// </summary>
-            private static bool HaveDifferentQualifiers(
+            internal static bool HaveDifferentQualifiers(
                 ColumnReferenceExpression left, ColumnReferenceExpression right)
             {
                 var leftQualifier = QualifierOf(left);
