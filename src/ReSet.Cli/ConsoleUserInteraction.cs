@@ -312,8 +312,9 @@ namespace ReSet.Cli
         }
 
         // 다시 만들 단계 코드마다 사유를 괄호로 붙인다. null은 "결함 표시는 없지만
-        // 재사용할 재료가 없다"(파일 없음·해시 불일치)는 뜻이다 - StepDefectKind로는
-        // 표현되지 않는 세 번째 사유라 별도 문구로 옮긴다.
+        // 재사용할 재료가 없다"(파일 없음·해시 불일치·목차엔 있으나 manifest에 코드
+        // 자체가 없는 미생성, 2026-09-11 최종 전체 리뷰 C1)는 뜻이다 - StepDefectKind로는
+        // 표현되지 않는 네 부류 중 셋을 하나로 뭉뚱그린 사유라 별도 문구로 옮긴다.
         private static string DescribeDefectiveSteps(IReadOnlyDictionary<string, StepDefectKind?> defectiveStepKinds)
         {
             if (defectiveStepKinds.Count == 0) return "없음";
