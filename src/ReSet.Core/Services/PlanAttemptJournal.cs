@@ -474,12 +474,44 @@ namespace ReSet.Core.Services
         {
             try
             {
+                var runName = Path.GetFileName(newestRunDir);
                 var manifestPath = Path.Combine(newestRunDir, "manifest.json");
-                if (!File.Exists(manifestPath)) return;
+                if (!File.Exists(manifestPath))
+                {
+                    Log.Information(
+                        "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 판 {RunsExamined}개를 봤고 " +
+                        "가장 최근 판({RunDir})에 manifest.json이 없습니다.",
+                        runsExamined, runName);
+                    return;
+                }
 
-                var manifest = JsonSerializer.Deserialize<PlanAttemptManifest>(
-                    File.ReadAllText(manifestPath), Options);
-                if (manifest?.ReuseKey == null) return;
+                // [대칭 훑기] ReuseKey 불일치와 같은 모양의 실패 - manifest 가 있어도
+                // 못 읽으면(깨진 JSON 등) ReuseKey 를 비교조차 못 한다. 이 사실도
+                // 말해야 한다 - 아니면 TryReadCandidate 의 개별 Log.Debug 뒤에서
+                // 다시 조용해진다.
+                PlanAttemptManifest? manifest;
+                try
+                {
+                    manifest = JsonSerializer.Deserialize<PlanAttemptManifest>(
+                        File.ReadAllText(manifestPath), Options);
+                }
+                catch (Exception readEx)
+                {
+                    Log.Information(
+                        "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 판 {RunsExamined}개를 봤고 " +
+                        "가장 최근 판({RunDir})의 manifest.json을 읽지 못했습니다: {Reason}",
+                        runsExamined, runName, readEx.Message);
+                    return;
+                }
+
+                if (manifest?.ReuseKey == null)
+                {
+                    Log.Information(
+                        "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 판 {RunsExamined}개를 봤고 " +
+                        "가장 최근 판({RunDir})의 manifest에 ReuseKey가 없습니다.",
+                        runsExamined, runName);
+                    return;
+                }
 
                 var diffs = DiffReuseKey(wanted, manifest.ReuseKey, _specsFileNames, manifest.SpecsFileNames);
                 if (diffs.Count == 0) return;
@@ -487,7 +519,7 @@ namespace ReSet.Core.Services
                 Log.Information(
                     "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 판 {RunsExamined}개를 봤고 " +
                     "가장 최근 판({RunDir})과 다음 항목이 어긋났습니다: {Diffs}",
-                    runsExamined, Path.GetFileName(newestRunDir), string.Join(", ", diffs));
+                    runsExamined, runName, string.Join(", ", diffs));
             }
             catch (Exception ex)
             {

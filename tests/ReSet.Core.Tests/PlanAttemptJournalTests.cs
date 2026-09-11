@@ -854,6 +854,24 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
         }
 
+        // [대칭 훑기] ReuseKey 불일치와 같은 모양의 다른 자리 - 가장 최근 판의
+        // manifest.json 자체가 깨져 있으면 지금까지는 TryReadCandidate 의 개별
+        // Log.Debug 로 그 판만 건너뛰고(§설계 의도), 최종적으로 후보가 없으면
+        // 역시 조용했다. ReuseKey 를 비교할 수조차 없다는 사실도 말해야 한다.
+        [Fact]
+        public void TryResume_WhenNewestRunManifestIsCorrupt_LogsThatItCouldNotBeRead()
+        {
+            var journal = WriteResumableRun();
+            File.WriteAllText(
+                Path.Combine(journal.CurrentRunDirectory!, "manifest.json"), "{ 이것은 JSON 이 아니다");
+
+            var lines = CaptureLogs(() => NewJournal().TryResume("## 목차 A"));
+
+            var line = Assert.Single(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("run-001", line);
+            Assert.Contains("읽지 못했습니다", line);
+        }
+
         // 판이 여럿이면 전부 쏟아내지 않는다 - 가장 최근 판 하나만 진단하고,
         // 몇 개를 봤는지는 남긴다.
         [Fact]
