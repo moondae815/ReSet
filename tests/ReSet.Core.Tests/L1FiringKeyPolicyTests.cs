@@ -13,15 +13,19 @@ namespace ReSet.Core.Tests
     /// 이 있다 — 키 없이 만든 수렴 탐지기는 정확히 사고를 낸 검사들에 눈이 먼 채
     /// 초록을 찍는다.
     ///
-    /// **「97 자리 치환」은 일어나지 않았다** - 관할이 갈린다(HEAD 실측):
+    /// **「97 자리 치환」은 일어나지 않았다** - 관할이 갈린다(2026-09-10 HEAD 실측):
     ///   `ValidationResult` 59 자리 - 전부 `Report()` 로 옮겨 이 시험이 잠근다.
-    ///   `StepValidationResult` 38 자리(`Errors.Add` 37 + `AddRange` 1) - 그대로
-    ///   남았다. 이 타입엔 애초 `Report`/`Firings` 통로가 없고(`ValidateBatchStep`
+    ///   `StepValidationResult` 38 자리(`Errors.Add` 37 + `AddRange` 1, 2026-09-10 당시) -
+    ///   그대로 남았다. 이 타입엔 애초 `Report`/`Firings` 통로가 없고(`ValidateBatchStep`
     ///   재시도 루프가 `L1AttemptLog.Append` 를 부르지도 않는다), 자기강화 게이트의
     ///   관할 밖으로 명시적으로 남겨졌다(자세한 근거는
     ///   `tests/ReSet.Core.Tests/l1-firing-key-baseline.txt` 와
-    ///   `StepValidationResult` 클래스 요약 참고). 59+38=97 로 총수는 그대로다 -
+    ///   `StepValidationResult` 클래스 요약 참고). 59+38=97 로 총수는 그대로였다 -
     ///   숫자가 틀린 게 아니라 「전부 옮겨졌다」는 서술이 틀렸었다.
+    ///
+    ///   [2026-09-11 갱신] 앵커 DML 최상위 술어 대조가 `StepValidationResult.Errors.Add`
+    ///   직접 호출 하나를 더해 그 갈래가 39 자리(`Errors.Add` 38 + `AddRange` 1)가
+    ///   됐다 - 현재 총수는 59+39=98이다.
     /// </summary>
     public class L1FiringKeyPolicyTests
     {

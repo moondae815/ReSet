@@ -138,8 +138,12 @@ namespace ReSet.Core.Services
                     "CheckAnchoredStatementFacts",
                     "CheckAnchoredStatementExtras",
                     "CheckStatementCountAgainstSpec",
-                    // [앵커 DML 최상위 술어 - E2·E3] 비면 검사가 꺼지는 게 아니라 커서 그룹
-                    // 면제·스테이징 면제(BuildSpecTargets)가 사라져 검사가 더 엄격해진다.
+                    // [앵커 DML 최상위 술어 - E2·E3] 비면 검사가 꺼지는 게 아니라 두 면제가
+                    // 반대 방향으로 움직인다. 커서 그룹 면제(E2)는 BuildCursorGroupExemptions가
+                    // 받을 행이 없어 사라진다(더 엄격해진다). 스테이징 면제(E3)는
+                    // BuildSpecTargets(facts)가 빈 집합이 되어 ReadsOnlyStaging의
+                    // `LineageSources.All(l => !specTargets.Contains(l.SourceTable))`가
+                    // 행 원천을 가진 모든 문장에서 참이 되므로 오히려 넓어진다(더 조용해진다).
                     "EvaluateAnchoredPredicateTerms",
                 }),
             new SpecMaterial(

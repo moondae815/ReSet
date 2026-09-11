@@ -9199,7 +9199,7 @@ namespace ReSet.Core.Services
         {
             Fired,
             Matched,
-            /// <summary>S1 - 원본 DDL 이 없다.</summary>
+            /// <summary>S1 - 원본 DDL 사전이 통째로 없다(이 SP 의 DDL 만 없으면 S2 로 센다).</summary>
             NoOriginalDdl,
             /// <summary>S2 - 원본에 그 (종류, 서수, 대상) 이 없거나 모호하다.</summary>
             NoOriginalKey,
