@@ -292,6 +292,25 @@ namespace ReSet.Cli
             return Task.FromResult(result);
         }
 
+        public Task<bool> ConfirmResumeAsync(string jobName, PlanAttemptResumeCandidate candidate)
+        {
+            var reusable = candidate.ReusableSections.Count;
+            var total = candidate.TotalStepsInManifest;
+
+            AnsiConsole.Write(new Panel(new Markup(
+                $"[bold]{Markup.Escape(jobName)}[/] - 이어서 할 수 있는 판을 찾았습니다.\n\n" +
+                $"판: run-{candidate.Run:D3} (시작 {Markup.Escape(candidate.StartedAt)})\n" +
+                $"재사용 가능한 단계: [green]{reusable}/{total}[/]\n" +
+                $"다시 만들 단계: {(candidate.DefectiveStepCodes.Count == 0 ? "없음" : Markup.Escape(string.Join(", ", candidate.DefectiveStepCodes)))}\n" +
+                $"이어받을 리뷰 피드백: {candidate.PriorReviews.Count}회차"))
+            {
+                Border = BoxBorder.Rounded,
+                Header = new PanelHeader(" 재개 후보 ")
+            });
+
+            return Task.FromResult(AnsiConsole.Confirm("이어서 하시겠습니까?", defaultValue: true));
+        }
+
         public IMultiProgressScope CreateProgressScope(string title)
         {
             return new ConsoleProgressScope(title);

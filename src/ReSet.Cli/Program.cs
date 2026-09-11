@@ -2969,6 +2969,11 @@ namespace ReSet.Cli
         public Task<bool> ConfirmMetadataSyncAsync(string selectedOption) =>
             _interactiveUserInteraction.ConfirmMetadataSyncAsync(selectedOption);
 
+        // 무인 경로다 - 물을 사람이 없으므로 재개하지 않는다. 조용히 재사용하면
+        // 산출물이 왜 그 모양인지 설명할 수 없다(설계 §2 사람 결정).
+        public Task<bool> ConfirmResumeAsync(string jobName, PlanAttemptResumeCandidate candidate)
+            => Task.FromResult(false);
+
         public IMultiProgressScope CreateProgressScope(string title) =>
             _interactiveUserInteraction.CreateProgressScope(title);
     }

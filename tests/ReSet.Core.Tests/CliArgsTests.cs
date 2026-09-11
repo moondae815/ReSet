@@ -236,6 +236,16 @@ namespace ReSet.Core.Tests
             public Task<HumanReviewResult> RequestHumanReviewAsync(string selectedOption, string specificationMarkdown, VerificationOutcome outcome, bool structureRedraftSupported = false, IReadOnlyList<BatchStepPlan>? steps = null) =>
                 Task.FromResult(new HumanReviewResult());
             public Task<bool> ConfirmMetadataSyncAsync(string selectedOption) => Task.FromResult(false);
+
+            public PlanAttemptResumeCandidate? ResumeAsked { get; private set; }
+            public bool ResumeAnswer { get; set; }
+
+            public Task<bool> ConfirmResumeAsync(string jobName, PlanAttemptResumeCandidate candidate)
+            {
+                ResumeAsked = candidate;
+                return Task.FromResult(ResumeAnswer);
+            }
+
             public IMultiProgressScope CreateProgressScope(string title)
             {
                 LastProgressTitle = title;

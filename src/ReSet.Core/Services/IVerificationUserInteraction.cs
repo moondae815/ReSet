@@ -52,6 +52,14 @@ namespace ReSet.Core.Services
         // AI가 유추한 메타데이터 설명을 DB에 동기화할지 사용자 동의 요청
         Task<bool> ConfirmMetadataSyncAsync(string selectedOption);
 
+        /// <summary>
+        /// 이어서 할 수 있는 판을 찾았을 때 사람에게 묻는다. <c>true</c> 면 재개한다.
+        ///
+        /// [왜 자동이 아닌가 - 2026-09-11 사람 결정] 조용한 재사용은 이 저장소가 반복해
+        /// 덴 모양이다 — 산출물이 왜 그 모양인지 나중에 설명할 수 없다.
+        /// </summary>
+        Task<bool> ConfirmResumeAsync(string jobName, PlanAttemptResumeCandidate candidate);
+
         // 멀티태스크 진행률 상황 표시 스코프 생성
         IMultiProgressScope CreateProgressScope(string title);
     }
