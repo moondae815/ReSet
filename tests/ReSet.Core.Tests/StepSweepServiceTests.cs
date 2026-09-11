@@ -364,6 +364,66 @@ END";
             Assert.DoesNotContain(report.Findings, f => f.Message.Contains("조인 짝"));
         }
 
+        // [앵커 DML 최상위 술어] 발화는 P 로 분류되고, 대조까지 간 문장과 침묵 사유가 분모로 남는다.
+        // 설계: docs/superpowers/specs/2026-09-11-앵커-DML-최상위-술어-대조-design.md §2-4
+        private const string DdlOneUpdate = @"
+CREATE PROCEDURE dbo.UP_TEST
+    @pi_strYMD VARCHAR(8)
+AS
+BEGIN
+    UPDATE dbo.TSettleMst SET UseState = 1 WHERE YMD = @pi_strYMD
+END";
+
+        private static SweepJob JobWithStep(string sql, bool withDdl) => OneJobInput().Jobs[0] with
+        {
+            StepMarkdownByCode = new Dictionary<string, string>
+            {
+                ["S01"] = "### S01. 갱신\n\n설명.\n\n```sql\n/* U1: 상태 갱신 */\n" + sql + "\n```\n",
+            },
+            DdlByProcedure = withDdl
+                ? new Dictionary<string, string> { ["dbo.UP_TEST"] = DdlOneUpdate }
+                : new Dictionary<string, string>(),
+        };
+
+        [Fact]
+        public void PredicateTermFindingsAreClassifiedAndCounted()
+        {
+            var job = JobWithStep(
+                "UPDATE dbo.TSettleMst SET UseState = 1 WHERE YMD = @p AND PGNAME = 'x';", withDdl: true);
+
+            var report = StepSweepService.Sweep(new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.Contains(report.Findings, f => f.Check == SweepCheck.P);
+            Assert.Equal(1, report.Indicators.PredicateTermStatementsCompared);
+            Assert.Equal(1, report.Indicators.PredicateTermStatementsFired);
+        }
+
+        [Fact]
+        public void PredicateTermSilenceWithoutDdlIsCounted()
+        {
+            var job = JobWithStep(
+                "UPDATE dbo.TSettleMst SET UseState = 1 WHERE YMD = @p AND PGNAME = 'x';", withDdl: false);
+
+            var report = StepSweepService.Sweep(new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.DoesNotContain(report.Findings, f => f.Check == SweepCheck.P);
+            Assert.Equal(1, report.Indicators.PredicateTermSilencedWithoutDdl);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsCompared);
+        }
+
+        [Fact]
+        public void OrchestrationTermsAreCountedAsExempted()
+        {
+            var job = JobWithStep(
+                "UPDATE dbo.TSettleMst SET UseState = 1 WHERE YMD = @p AND PGNAME >= @p_from AND PGNAME <= @p_to;",
+                withDdl: true);
+
+            var report = StepSweepService.Sweep(new SweepInput(new List<SweepJob> { job }, new List<string>(), 0));
+
+            Assert.Equal(2, report.Indicators.PredicateTermsExemptedAsOrchestration);
+            Assert.Equal(0, report.Indicators.PredicateTermStatementsFired);
+        }
+
         // 가드가 침묵시킨 대가의 크기. 코드 앵커가 둘 이상의 문장에 붙은 단계를 센다.
         [Fact]
         public void StepsWithReusedCodeAnchorsAreCounted()

@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace ReSet.Core.Services
 {
     /// <summary>단계 검사 다섯 개. 미분류는 조용히 접지 않고 따로 센다.</summary>
-    public enum SweepCheck { A, B, C, D, E, Unclassified }
+    public enum SweepCheck { A, B, C, D, E, P, Unclassified }
 
     /// <summary>
     /// AsIs = 오늘 그대로(캐시 16, 「오류 코드」 표 없음).
@@ -265,6 +265,39 @@ namespace ReSet.Core.Services
 
         /// <inheritdoc cref="AnchorsResolved"/>
         public int StagingSourceTotal { get; init; }
+
+        /// <summary>
+        /// [앵커 DML 최상위 술어] 원본과 대조까지 간 문장 수(발화 + 일치) - 이 검사의 도달이다.
+        /// 아래 침묵 사유 여섯과 합치면 앵커 DML 문장 전체가 된다. 판정은
+        /// <c>MechanicalValidator.EvaluateAnchoredPredicateTerms</c> 한 곳이 한다.
+        /// </summary>
+        public int PredicateTermStatementsCompared { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermStatementsFired { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedWithoutDdl { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedWithoutOriginalKey { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedWithoutOriginalTerms { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedByCursorGroup { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedByStaging { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedByBanner { get; init; }
+
+        /// <summary>
+        /// 대조까지 간 문장에서 오케스트레이션 항(E1)이라 면제한 <b>항</b> 수. 문장 수가 아니다.
+        /// </summary>
+        public int PredicateTermsExemptedAsOrchestration { get; init; }
 
         /// <summary>
         /// 명세서 재료가 원본 DDL 대비 소실됐는지, 프로시저 단위로 센다

@@ -11,6 +11,7 @@ namespace ReSet.Core.Tests
         [InlineData("S01 섹션의 UPDATE 2(갱신 2) 문장이 명세서에 없는 술어 컬럼 USESTATE을(를) 씁니다.", SweepCheck.C)]
         [InlineData("S01 섹션이 `@v_cnt`을(를) 선언 없이 씁니다. 명세서 지역 변수 표는 이 변수의 타입을 `INT`으로 확정합니다.", SweepCheck.D)]
         [InlineData("S01 섹션이 `@v_err`을(를) `-13`로 초기화하고 CATCH에서 그 값을 `@po_intRetVal`로 돌려줍니다.", SweepCheck.E)]
+        [InlineData("S12 섹션의 INSERT 4(TSettleByOUT) 문장이 원본에 없는 최상위 술어 `OUTYMD >= @v`을(를) 씁니다. 원본의 최상위 술어는 `YMD >= @v`뿐입니다 — 행을 고르는 조건을 더하면 원본이 고르던 행이 아닌 행을 고릅니다.", SweepCheck.P)]
         public void ClassifiesEachCheckByItsMessage(string message, SweepCheck expected)
         {
             Assert.Equal(expected, StepSweepClassifier.Classify(message));
@@ -118,6 +119,18 @@ namespace ReSet.Core.Tests
             Assert.Equal(SweepCheck.B, finding.Check);
             Assert.Null(finding.Kind);
             Assert.Empty(finding.Items);
+        }
+
+        [Fact]
+        public void PredicateTermFindingsCarryTheirStatementCoordinate()
+        {
+            var finding = StepSweepClassifier.Describe(
+                "J", "S12", SweepCheck.P, SweepCondition.AsIs,
+                "S12 섹션의 INSERT 4(TSettleByOUT) 문장이 원본에 없는 최상위 술어 `A, B`을(를) 씁니다.");
+
+            Assert.Equal("INSERT", finding.Kind);
+            Assert.Equal(4, finding.Ordinal);
+            Assert.Empty(finding.Items);   // 원문 항은 쉼표를 품는다 - 항목으로 쪼개지 않는다
         }
     }
 }

@@ -27,6 +27,9 @@ namespace ReSet.Core.Services
         private const string MarkerD = "을(를) 선언 없이 씁니다. 명세서 지역 변수 표는";
         private const string MarkerE = "로 초기화하고 CATCH에서 그 값을";
 
+        // 앵커 DML 최상위 술어 - MechanicalValidator.CheckAnchoredStatementPredicateTerms.
+        private const string MarkerP = "원본에 없는 최상위 술어";
+
         public static SweepCheck Classify(string? message)
         {
             if (string.IsNullOrWhiteSpace(message)) return SweepCheck.Unclassified;
@@ -36,6 +39,7 @@ namespace ReSet.Core.Services
             if (message.Contains(MarkerC, StringComparison.Ordinal)) return SweepCheck.C;
             if (message.Contains(MarkerD, StringComparison.Ordinal)) return SweepCheck.D;
             if (message.Contains(MarkerE, StringComparison.Ordinal)) return SweepCheck.E;
+            if (message.Contains(MarkerP, StringComparison.Ordinal)) return SweepCheck.P;
 
             return SweepCheck.Unclassified;
         }
@@ -73,7 +77,7 @@ namespace ReSet.Core.Services
             SweepCondition condition, string message)
         {
             var finding = new SweepFinding(jobName, stepCode, check, condition, message);
-            if (check != SweepCheck.B && check != SweepCheck.C) return finding;
+            if (check != SweepCheck.B && check != SweepCheck.C && check != SweepCheck.P) return finding;
 
             var coordinate = CoordinatePattern.Match(message);
             if (coordinate.Success)
@@ -84,6 +88,9 @@ namespace ReSet.Core.Services
                     Ordinal = int.Parse(coordinate.Groups["ordinal"].Value),
                 };
             }
+
+            // P 의 항목은 원문 항이라 쉼표를 품는다(IN 목록) - 쪼개면 거짓 항목이 생긴다.
+            if (check == SweepCheck.P) return finding;
 
             var items = check == SweepCheck.B
                 ? MissingItemsPattern.Match(message)
