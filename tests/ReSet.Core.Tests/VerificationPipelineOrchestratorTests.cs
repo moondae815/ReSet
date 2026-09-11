@@ -2950,6 +2950,120 @@ namespace ReSet.Core.Tests
         }
 
         /// <summary>
+        /// 진행률 스코프가 살아 있는 동안 카운트를 올리고, Dispose에서 내리는 계측용
+        /// <see cref="IMultiProgressScope"/>. 실제 Spectre.Console 없이도 "동적 표시가
+        /// 지금 활성인가"라는 사실만 잰다 - CreateProgressScope가 이 스코프를 돌려줄
+        /// 때마다 ActiveCount가 1 오르고, using이 끝나 Dispose되면 1 내려간다.
+        /// </summary>
+        private sealed class ProgressScopeActivityTracker
+        {
+            public int ActiveCount;
+        }
+
+        private sealed class TrackingProgressScope : IMultiProgressScope
+        {
+            private readonly ProgressScopeActivityTracker _tracker;
+
+            public TrackingProgressScope(ProgressScopeActivityTracker tracker)
+            {
+                _tracker = tracker;
+                _tracker.ActiveCount++;
+            }
+
+            public void AddTask(string taskName, string description) { }
+            public void UpdateTask(string taskName, double value, string? description = null) { }
+            public void CompleteTask(string taskName) { }
+            public void FailTask(string taskName) { }
+            public void Dispose() => _tracker.ActiveCount--;
+        }
+
+        /// <summary>
+        /// [2026-09-11 실물 장애] 대화형으로 배치 계획을 돌렸는데 재개 후보가 발견되자
+        /// "Trying to run one or more interactive functions concurrently"로 죽었다 -
+        /// ConfirmResumeAsync(프롬프트)가 CreateProgressScope("배치 계획 수립")(진행률
+        /// 표시)가 아직 살아 있는 using 블록 안에서 불렸기 때문이다. Spectre.Console은
+        /// 동적 표시 둘을 동시에 못 돌린다.
+        ///
+        /// 이 시험은 진짜 Spectre 없이 그 조건 자체("진행률 표시가 활성인 동안 프롬프트가
+        /// 불린다")를 잡는다: CreateProgressScope는 ActiveCount를 세는 TrackingProgressScope를
+        /// 돌려주고, ConfirmResumeAsync가 불리는 순간의 ActiveCount를 기록한다. 고치기
+        /// 전 코드로 되돌리면(프롬프트를 다시 progressScope using 블록 안으로) 이 시험은
+        /// ActiveCount=1을 관측해 빨개진다 - 고친 채로는 프롬프트가 progressScope가
+        /// 열리기 전에 불려 ActiveCount=0을 관측하고 초록이다.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_WhenResumeCandidateFound_PromptIsNotCalledWhileProgressScopeIsActive()
+        {
+            var stepsJson = "```json\n{\n  \"Steps\": [\n" +
+                "    { \"Code\": \"S01\", \"Name\": \"첫\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T1\"], \"ErrorCodes\": [\"-1\"] },\n" +
+                "    { \"Code\": \"S02\", \"Name\": \"둘\", \"LegacyProcedures\": [\"USP_Spec1\"], \"TargetTables\": [\"dbo.T2\"], \"ErrorCodes\": [\"-2\"] }\n" +
+                "  ]\n}\n```";
+            var planStructure = "## 목차\n" + stepsJson;
+
+            var seed = PlanAttemptJournal.Create(
+                _consolidatedOutputRoot, "Job_Test", "OpenAI", "gpt-4", "default", "C#",
+                PlanAttemptJournal.ComputeSha256("dbo.USP_Spec1\ncontent1"));
+            seed.OpenRun(planStructure, "run-start");
+            seed.RecordSkeleton(1, SkeletonMarkdown);
+            seed.RecordStepSection(1, "S01", HealthyStepSection("S01", "dbo.T1", "-1"));
+            seed.RecordStepSection(1, "S02", "## S02\n(하한 미달)",
+                new StepDefect(StepDefectKind.QualityFloor, "S02 (하한 미달)"));
+
+            var rawDir = Path.Combine(_consolidatedOutputRoot, "Jobs", "Job_Test", "raw");
+            Directory.CreateDirectory(rawDir);
+            File.WriteAllText(Path.Combine(rawDir, "PlanStructure.md"), planStructure);
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.ModelName.Returns("gpt-4");
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = planStructure });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<IReadOnlyDictionary<string, IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var tracker = new ProgressScopeActivityTracker();
+            int? activeCountWhenPrompted = null;
+
+            var interaction = Substitute.For<IVerificationUserInteraction>();
+            interaction.CreateProgressScope(Arg.Any<string>())
+                .Returns(_ => new TrackingProgressScope(tracker));
+            interaction.ConfirmResumeAsync("Job_Test", Arg.Any<PlanAttemptResumeCandidate>())
+                .Returns(_ =>
+                {
+                    activeCountWhenPrompted = tracker.ActiveCount;
+                    return Task.FromResult(true);
+                });
+            // 대화형(isBatchMode:false) 경로를 타므로 L3 승인 루프까지 닿는다 -
+            // 「거절」시험과 같은 이유로 함께 스텁한다.
+            interaction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>?>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                interaction, "2", "gpt-4", null, aiService, aiService, "high", "high", "default", 8);
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                new List<(string, string)> { ("dbo.USP_Spec1", "content1") },
+                "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: false);
+
+            // 실제로 물었다 - 그렇지 않으면 아래 단언이 공허하게 통과한다.
+            await interaction.Received(1).ConfirmResumeAsync("Job_Test", Arg.Any<PlanAttemptResumeCandidate>());
+
+            Assert.NotNull(activeCountWhenPrompted);
+            Assert.Equal(0, activeCountWhenPrompted);
+        }
+
+        /// <summary>
         /// [FIX ROUND 1 정정] 이름·주석이 원래 "회차 1의 계획서가 L1에 걸려 회차 2로
         /// 넘어가는 판"이라고 적었으나 <b>사실이 아니다</b> — 이 시험의 Critic mock은
         /// 항상 <c>HasDefects=false</c>를 돌려주므로 <c>RunConsolidatedPipelineAsync</c>의
