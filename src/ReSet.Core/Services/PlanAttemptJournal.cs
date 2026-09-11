@@ -68,6 +68,9 @@ namespace ReSet.Core.Services
         public PlanAttemptReuseKey? ReuseKey { get; set; }
         public PlanAttemptArtifact? Skeleton { get; set; }
         public Dictionary<string, PlanAttemptArtifact> Steps { get; set; } = new(StringComparer.Ordinal);
+
+        /// <summary>이 판이 어느 판에서 재개했나. 재개가 아니면 null(설계 §3-5).</summary>
+        public string? ResumedFrom { get; set; }
     }
 
     /// <summary>
@@ -158,7 +161,7 @@ namespace ReSet.Core.Services
         /// 지키기 때문이다 — 옛 판을 덮어쓰면 그 판이 실제로 끝난 시각(<c>StartedAt</c>)이
         /// 거짓이 된다.
         /// </summary>
-        public void OpenRun(string planStructure, string openedBy)
+        public void OpenRun(string planStructure, string openedBy, string? resumedFrom = null)
         {
             lock (_gate)
             {
@@ -178,6 +181,7 @@ namespace ReSet.Core.Services
                         Job = _jobName,
                         StartedAt = DateTimeOffset.Now.ToString("o"),
                         OpenedBy = openedBy,
+                        ResumedFrom = resumedFrom,
                         ReuseKey = new PlanAttemptReuseKey(
                             ContractVersion,
                             ComputeSha256(planStructure),
