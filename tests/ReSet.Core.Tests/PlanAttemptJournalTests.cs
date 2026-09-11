@@ -1052,16 +1052,23 @@ namespace ReSet.Core.Tests
 
         // 실물 회귀 표본 - output/Jobs/POQSettleBatch7/raw/attempts/run-001/manifest.json 을
         // 그대로 읽어도(SpecsFileNames 필드가 없다) TryResume 이 던지지 않아야 한다.
-        [Fact]
+        //
+        // [2026-09-11 최종 전체 리뷰 I2] 예전에는 이 시험이 사설 FindRepoRoot()(아래,
+        // .git 을 디렉터리로만 판정)를 썼다. 워크트리에서 .git 은 파일이라
+        // Directory.Exists 가 false 를 돌려주고, 부모로 계속 올라가 저장소 밖에서
+        // 던진다 - :1027 이 던지면 위 "코퍼스 없으면 건너뛴다" 가드에 도달조차
+        // 못 한다. CorpusPaths.RepoRoot() 는 애초에 .git 을 안 본다 - ReSet.slnx
+        // (모든 워크트리에 있는 커밋된 파일)로 잡는다(CorpusPaths 클래스 주석,
+        // 2026-09-07 재정박). 새 판정기를 짓지 않고 이 저장소의 기존 수단을 쓴다.
+        [SkippableFact]
         public void TryResume_ReadsTheRealPOQSettleBatch7Manifest_WithoutThrowing()
         {
             var fixturePath = Path.Combine(
-                FindRepoRoot(), "output", "Jobs", "POQSettleBatch7", "raw", "attempts", "run-001", "manifest.json");
-            if (!File.Exists(fixturePath))
-            {
-                // 코퍼스 심링크가 없는 워크트리 - 이 시험은 그 재료에 의존하므로 조용히 건너뛴다.
-                return;
-            }
+                CorpusPaths.RepoRoot(), "output", "Jobs", "POQSettleBatch7", "raw", "attempts", "run-001", "manifest.json");
+            // 조용한 return 이 아니라 Skip 이어야 한다 - 이 저장소는 「건너뜀 0」을
+            // 유일한 탐지기로 쓴다(CorpusSkip.Reason). return 은 그 탐지기에 안 걸려
+            // 코퍼스가 없어도 "통과"로 보인다.
+            Skip.If(!File.Exists(fixturePath), CorpusSkip.Reason);
 
             var runDir = Path.Combine(_root, "Jobs", "Job_Real", "raw", "attempts", "run-001");
             Directory.CreateDirectory(runDir);
@@ -1072,16 +1079,6 @@ namespace ReSet.Core.Tests
 
             var ex = Record.Exception(() => CaptureLogs(() => journal.TryResume("## 다른 목차")));
             Assert.Null(ex);
-        }
-
-        private static string FindRepoRoot()
-        {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir != null && !Directory.Exists(Path.Combine(dir.FullName, ".git")))
-            {
-                dir = dir.Parent;
-            }
-            return dir?.FullName ?? throw new InvalidOperationException("저장소 루트를 못 찾았습니다.");
         }
 
         private static List<string> CaptureLogs(Action action)
