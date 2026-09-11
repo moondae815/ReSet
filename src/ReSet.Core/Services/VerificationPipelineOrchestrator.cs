@@ -1743,7 +1743,10 @@ namespace ReSet.Core.Services
                 outputRoot, jobName, provider, _consolidatorService.ModelName,
                 _consolidatorEffort, targetLanguage,
                 PlanAttemptJournal.ComputeSha256(
-                    string.Join("\n", specs.Select(s => s.FileName + "\n" + s.Content))));
+                    string.Join("\n", specs.Select(s => s.FileName + "\n" + s.Content))),
+                // SpecsSha256 이 무엇으로 계산됐는지 - 재개가 실패했을 때 그 이유를
+                // 진단하는 자리에만 쓰인다(Task 7 §Step 2). 본문은 절대 안 싣는다.
+                specs.Select(s => s.FileName).ToList());
 
             // 미지 테이블 검사의 재료. definitions가 없으면 빈 집합이 되고,
             // 검증기는 그때 검사를 건너뛴다(소프트 스킵). 조립 근거는

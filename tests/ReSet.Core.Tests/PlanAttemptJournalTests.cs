@@ -1,12 +1,19 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 using Xunit;
 using ReSet.Core.Services;
 
 namespace ReSet.Core.Tests
 {
+    // Task 7 시험들이 전역 Serilog.Log.Logger 를 갈아 끼운다 - GlobalSerilogLoggerCollection.cs
+    // 의 규칙대로 이 컬렉션에 들어간다.
+    [Collection(GlobalSerilogLoggerCollection.Name)]
     public class PlanAttemptJournalTests : IDisposable
     {
         private readonly string _root =
@@ -800,6 +807,231 @@ namespace ReSet.Core.Tests
             var result = PlanAttemptJournal.DescribeLatestRun(_root, jobName);
 
             Assert.Null(result);
+        }
+
+        // ---------------------------------------------------------------
+        // Task 7 - 재개가 조용히 안 되는 것을 말하게 한다
+        // ---------------------------------------------------------------
+
+        // 판이 있는데 ReuseKey 가 안 맞으면 지금까지는 완전히 조용했다(2026-09-11
+        // 실물 실패 - POQSettleBatch7-resume). 어느 항이 어긋났는지 남겨야 한다.
+        [Fact]
+        public void TryResume_WhenReuseKeyMismatches_LogsWhichItemsDifferedForTheNewestRun()
+        {
+            WriteResumableRun(); // run-001 - Model=gpt-4, SpecsSha256=specshash
+
+            var mismatched = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "other-model", "high", "C#", "other-specshash");
+
+            var lines = CaptureLogs(() => mismatched.TryResume("## 목차 A"));
+
+            var line = Assert.Single(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("SpecsSha256", line);
+            Assert.Contains("Model", line);
+            // 안 바뀐 항목은 소음이니 안 실려야 한다.
+            Assert.DoesNotContain("TargetLanguage", line);
+            Assert.DoesNotContain("Provider", line);
+        }
+
+        // 판이 아예 없으면(첫 실행) 조용해야 한다 - 매 실행 경고는 소음이다.
+        [Fact]
+        public void TryResume_WhenNoRunExists_LogsNothing()
+        {
+            var lines = CaptureLogs(() => NewJournal().TryResume("## 목차 A"));
+
+            Assert.DoesNotContain(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+        }
+
+        // [대칭 훑기 - 반대 방향] 일곱 항목이 전부 맞아 후보가 잡히면 이 진단이
+        // 발화하면 안 된다 - 발화하면 정상 재개마다 경고가 뜬다.
+        [Fact]
+        public void TryResume_WhenReuseKeyFullyMatches_LogsNothing()
+        {
+            WriteResumableRun();
+
+            var lines = CaptureLogs(() => NewJournal().TryResume("## 목차 A"));
+
+            Assert.DoesNotContain(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+        }
+
+        // 판이 여럿이면 전부 쏟아내지 않는다 - 가장 최근 판 하나만 진단하고,
+        // 몇 개를 봤는지는 남긴다.
+        [Fact]
+        public void TryResume_WhenSeveralRunsAllMismatch_DiagnosesOnlyTheNewestRun()
+        {
+            // run-001 은 Model 이 어긋나고, run-002(최신)는 Effort 가 어긋난다 - 쿼리
+            // 본인과 둘 다 다르지만 이유가 서로 달라야 "가장 최근 것만" 진단됨을 잰다.
+            var first = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "model-run1", "high", "C#", "specshash");
+            first.OpenRun("## 목차 A", "run-start");
+            first.RecordSkeleton(1, "run-001 골격");
+            first.RecordStepSection(1, "S01", "run-001 S01");
+
+            var second = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "model-query", "low", "C#", "specshash");
+            second.OpenRun("## 목차 A", "run-start");
+            second.RecordSkeleton(1, "run-002 골격");
+            second.RecordStepSection(1, "S01", "run-002 S01");
+
+            var query = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "model-query", "high", "C#", "specshash");
+
+            var lines = CaptureLogs(() => query.TryResume("## 목차 A"));
+
+            var line = Assert.Single(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("run-002", line);              // 가장 최근 판
+            Assert.Contains("Effort", line);                // run-002 가 어긋난 항목
+            Assert.DoesNotContain("model-run1", line);       // run-001 항목(Model)은 안 쏟아낸다
+            Assert.Contains("판 2개", line);                 // 판 몇 개를 봤는지
+        }
+
+        // SpecsSha256 이 다를 때, 파일 이름 목록이 양쪽에 다 있으면 "무엇이" 다른지도
+        // 말해야 한다(§Step 2) - 여기서는 개수 차이를 잰다.
+        [Fact]
+        public void TryResume_WhenSpecsSha256DiffersAndFileNamesAreKnown_ReportsCountDifference()
+        {
+            var withNames = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "gpt-4", "high", "C#",
+                PlanAttemptJournal.ComputeSha256("A\nbodyA\nB\nbodyB"),
+                new[] { "Schema.A", "Schema.B" });
+            withNames.OpenRun("## 목차 A", "run-start");
+            withNames.RecordSkeleton(1, "골격");
+            withNames.RecordStepSection(1, "S01", "S01 본문");
+
+            var fewerSpecs = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "gpt-4", "high", "C#",
+                PlanAttemptJournal.ComputeSha256("A\nbodyA"),
+                new[] { "Schema.A" });
+
+            var lines = CaptureLogs(() => fewerSpecs.TryResume("## 목차 A"));
+
+            var line = Assert.Single(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("SpecsSha256", line);
+            Assert.Contains("개수", line);
+            Assert.Contains("2", line);
+            Assert.Contains("1", line);
+        }
+
+        // 이름 집합 자체가 다르면(개수는 같아도) "개수" 대신 "이름 다름"을 말해야
+        // 한다.
+        [Fact]
+        public void TryResume_WhenSpecsSha256DiffersWithSameCountButDifferentNames_ReportsNameDifference()
+        {
+            var original = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "gpt-4", "high", "C#",
+                PlanAttemptJournal.ComputeSha256("A\nbodyA"),
+                new[] { "Schema.A" });
+            original.OpenRun("## 목차 A", "run-start");
+            original.RecordSkeleton(1, "골격");
+            original.RecordStepSection(1, "S01", "S01 본문");
+
+            var renamed = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "gpt-4", "high", "C#",
+                PlanAttemptJournal.ComputeSha256("Z\nbodyZ"),
+                new[] { "Schema.Z" });
+
+            var lines = CaptureLogs(() => renamed.TryResume("## 목차 A"));
+
+            var line = Assert.Single(lines, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("이름", line);
+            Assert.Contains("Schema.A", line);
+            Assert.Contains("Schema.Z", line);
+        }
+
+        // 옛 manifest(SpecsFileNames 필드가 없던 시절)를 읽어도 깨지면 안 된다 -
+        // run-001 실물 회귀 표본과 같은 모양(필드 자체가 JSON에 없음)을 흉내 낸다.
+        [Fact]
+        public void TryResume_WhenStoredManifestHasNoSpecsFileNames_StillDiagnosesWithoutThrowing()
+        {
+            var journal = NewJournal(); // specsSha256="specshash"
+            journal.OpenRun("## 목차 A", "run-start");
+            journal.RecordSkeleton(1, "골격");
+            journal.RecordStepSection(1, "S01", "S01 본문");
+
+            // 옛 manifest 는 SpecsFileNames 필드가 JSON에 아예 없었다(이 필드를 도입하기
+            // 전 판) - 손으로 지워 그 모양을 흉내 낸다. System.Text.Json 은 없는 필드를
+            // null 로 두고 역직렬화해야 한다(전제).
+            var manifestPath = Path.Combine(journal.CurrentRunDirectory!, "manifest.json");
+            var withField = JsonDocument.Parse(File.ReadAllText(manifestPath)).RootElement;
+            var withoutField = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            foreach (var prop in withField.EnumerateObject())
+            {
+                if (prop.Name == "SpecsFileNames") continue;
+                withoutField[prop.Name] = prop.Value.Clone();
+            }
+            var legacyJson = JsonSerializer.Serialize(withoutField);
+            Assert.DoesNotContain("SpecsFileNames", legacyJson); // 전제 확인
+            File.WriteAllText(manifestPath, legacyJson);
+
+            var mismatched = PlanAttemptJournal.Create(
+                _root, "Job_Test", "OpenAI", "gpt-4", "high", "C#", "otherspecshash",
+                new[] { "Schema.Current" });
+
+            List<string>? lines = null;
+            var ex = Record.Exception(() => lines = CaptureLogs(() => mismatched.TryResume("## 목차 A")));
+            Assert.Null(ex);
+
+            var line = Assert.Single(lines!, l => l.Contains("재개 후보를 찾지 못했습니다"));
+            Assert.Contains("SpecsSha256", line);
+        }
+
+        // 실물 회귀 표본 - output/Jobs/POQSettleBatch7/raw/attempts/run-001/manifest.json 을
+        // 그대로 읽어도(SpecsFileNames 필드가 없다) TryResume 이 던지지 않아야 한다.
+        [Fact]
+        public void TryResume_ReadsTheRealPOQSettleBatch7Manifest_WithoutThrowing()
+        {
+            var fixturePath = Path.Combine(
+                FindRepoRoot(), "output", "Jobs", "POQSettleBatch7", "raw", "attempts", "run-001", "manifest.json");
+            if (!File.Exists(fixturePath))
+            {
+                // 코퍼스 심링크가 없는 워크트리 - 이 시험은 그 재료에 의존하므로 조용히 건너뛴다.
+                return;
+            }
+
+            var runDir = Path.Combine(_root, "Jobs", "Job_Real", "raw", "attempts", "run-001");
+            Directory.CreateDirectory(runDir);
+            File.Copy(fixturePath, Path.Combine(runDir, "manifest.json"));
+
+            var journal = PlanAttemptJournal.Create(
+                _root, "Job_Real", "claude-cli", "claude-sonnet-5", "high", "C#", "다른-specs-해시");
+
+            var ex = Record.Exception(() => CaptureLogs(() => journal.TryResume("## 다른 목차")));
+            Assert.Null(ex);
+        }
+
+        private static string FindRepoRoot()
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir != null && !Directory.Exists(Path.Combine(dir.FullName, ".git")))
+            {
+                dir = dir.Parent;
+            }
+            return dir?.FullName ?? throw new InvalidOperationException("저장소 루트를 못 찾았습니다.");
+        }
+
+        private static List<string> CaptureLogs(Action action)
+        {
+            var sink = new CapturingSink();
+            var previousLogger = Log.Logger;
+            Log.Logger = new LoggerConfiguration()
+                .MinimumLevel.Verbose().WriteTo.Sink(sink).CreateLogger();
+            try
+            {
+                action();
+            }
+            finally
+            {
+                Log.CloseAndFlush();
+                Log.Logger = previousLogger;
+            }
+
+            return sink.Messages;
+        }
+
+        private sealed class CapturingSink : ILogEventSink
+        {
+            public List<string> Messages { get; } = new();
+            public void Emit(LogEvent logEvent) => Messages.Add(logEvent.RenderMessage());
         }
     }
 }

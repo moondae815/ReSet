@@ -71,6 +71,20 @@ namespace ReSet.Core.Services
 
         /// <summary>이 판이 어느 판에서 재개했나. 재개가 아니면 null(설계 §3-5).</summary>
         public string? ResumedFrom { get; set; }
+
+        /// <summary>
+        /// <see cref="PlanAttemptReuseKey.SpecsSha256"/> 이 무엇으로 계산됐는지 -
+        /// 파일 <b>이름</b> 목록만이다(본문은 절대 안 넣는다, 파일이 거대해진다).
+        ///
+        /// <b>ReuseKey 밖의 형제 필드다</b> - ReuseKey 는 비교 계약이라 항을 늘리면
+        /// 기존 판이 전부 불일치가 된다(Task 7 §Step 2). 이 필드는 비교에 안 쓰이고
+        /// 오직 「SpecsSha256 이 왜 다른가」를 사람이 물을 때만 읽힌다.
+        ///
+        /// 옛 manifest(이 필드가 없던 시절)를 읽으면 null 이다 - 역직렬화가 깨지면
+        /// 안 되므로 nullable 이고, null 이면 SpecsSha256 불일치의 원인까지는 못
+        /// 밝히고 「다르다」까지만 말한다.
+        /// </summary>
+        public IReadOnlyList<string>? SpecsFileNames { get; set; }
     }
 
     /// <summary>
@@ -108,6 +122,7 @@ namespace ReSet.Core.Services
         private readonly string? _effort;
         private readonly string _targetLanguage;
         private readonly string _specsSha256;
+        private readonly IReadOnlyList<string>? _specsFileNames;
 
         private readonly object _gate = new();
         private string? _runDirectory;
@@ -125,7 +140,8 @@ namespace ReSet.Core.Services
 
         private PlanAttemptJournal(
             string outputRoot, string jobName, string provider, string model,
-            string? effort, string targetLanguage, string specsSha256)
+            string? effort, string targetLanguage, string specsSha256,
+            IReadOnlyList<string>? specsFileNames)
         {
             _outputRoot = outputRoot;
             _jobName = jobName;
@@ -134,12 +150,20 @@ namespace ReSet.Core.Services
             _effort = effort;
             _targetLanguage = targetLanguage;
             _specsSha256 = specsSha256;
+            _specsFileNames = specsFileNames;
         }
 
+        /// <param name="specsFileNames">
+        /// <c>specsSha256</c> 을 계산한 파일 <b>이름</b> 목록(순서 그대로) - 재개가
+        /// 실패했을 때 <c>SpecsSha256</c> 불일치의 원인(개수·순서·이름)을 진단하는
+        /// 자리에만 쓰인다(Task 7 §Step 2). 생략하면(기존 호출부) 그 세부 진단만
+        /// 빠지고 나머지 동작은 그대로다.
+        /// </param>
         public static PlanAttemptJournal Create(
             string outputRoot, string jobName, string provider, string model,
-            string? effort, string targetLanguage, string specsSha256) =>
-            new(outputRoot, jobName, provider, model, effort, targetLanguage, specsSha256);
+            string? effort, string targetLanguage, string specsSha256,
+            IReadOnlyList<string>? specsFileNames = null) =>
+            new(outputRoot, jobName, provider, model, effort, targetLanguage, specsSha256, specsFileNames);
 
         /// <summary>열린 판의 디렉터리. 열린 판이 없으면 null(비활성).</summary>
         public string? CurrentRunDirectory
@@ -182,6 +206,7 @@ namespace ReSet.Core.Services
                         StartedAt = DateTimeOffset.Now.ToString("o"),
                         OpenedBy = openedBy,
                         ResumedFrom = resumedFrom,
+                        SpecsFileNames = _specsFileNames,
                         ReuseKey = new PlanAttemptReuseKey(
                             ContractVersion,
                             ComputeSha256(planStructure),
@@ -396,11 +421,23 @@ namespace ReSet.Core.Services
                     ContractVersion, ComputeSha256(planStructure), _specsSha256,
                     _provider, _model, _effort, _targetLanguage);
 
-                foreach (var runDir in Directory.EnumerateDirectories(attemptsRoot, "run-*")
-                             .OrderByDescending(d => d, StringComparer.Ordinal))
+                var runDirs = Directory.EnumerateDirectories(attemptsRoot, "run-*")
+                    .OrderByDescending(d => d, StringComparer.Ordinal)
+                    .ToList();
+
+                foreach (var runDir in runDirs)
                 {
                     var candidate = TryReadCandidate(runDir, wanted);
                     if (candidate != null) return candidate;
+                }
+
+                // [Task 7 §Step 1] 판은 있는데 후보가 하나도 안 잡혔다 - 이 자리가
+                // 지금까지 완전히 조용했던 자리다(2026-09-11, POQSettleBatch7-resume
+                // 실물 실패). 판이 아예 없으면(첫 실행) 이 분기 자체를 안 타므로
+                // 조용하다 - "재료가 없다"는 정상이지 실패가 아니다.
+                if (runDirs.Count > 0)
+                {
+                    LogResumeMiss(runDirs[0], wanted, runDirs.Count);
                 }
 
                 return null;
@@ -410,6 +447,122 @@ namespace ReSet.Core.Services
                 Log.Debug(ex, "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 처음부터 만듭니다.");
                 return null;
             }
+        }
+
+        /// <summary>
+        /// 재개 후보가 하나도 안 잡혔을 때 사람이 볼 수 있는 자리에 이유를 남긴다.
+        ///
+        /// <b>가장 최근 판 하나만 진단한다</b> - 판이 여럿이면 전부 쏟아내는 것은
+        /// 소음이라 안 읽힌다(Task 7 지시). 판을 몇 개 봤는지는 남겨 "얼마나
+        /// 뒤졌는지"를 알 수 있게 한다.
+        ///
+        /// <b>Log.Information 을 쓴다</b> - 이 실행 내내 조용했던 <c>Log.Debug</c> 가
+        /// 이번 실물 실패를 못 건졌다(설계서 동기). 이 저장소의 사용자 대면 상태
+        /// 알림(<c>_userInteraction.NotifyStatus</c> 로 못 미치는 진단성 정보)은
+        /// <c>ApiUsageLoggingTests</c>·<c>CliUsageLoggingTests</c> 가 이미
+        /// <c>Log.Information</c> 을 그 층으로 쓰고 있다 - 같은 관례를 따른다.
+        /// <c>Warning</c> 은 이 저장소에서 "재시도 소진"·"상한 초과" 같은 파이프라인
+        /// 이상에 쓰이는데, 재개 실패는 파이프라인 이상이 아니라 정상 동작(처음부터
+        /// 다시 만듦)이므로 그 급으로 올리지 않는다.
+        ///
+        /// ReuseKey 가 완전히 같은데 다른 이유(골격도 섹션도 없음, §11-5)로 후보가
+        /// 없는 경우는 이 진단의 범위 밖이다 - 조용히 돌아간다. 그 경로는 이미
+        /// 코드가 이유를 문서화하고 있고, 이번 실물 실패의 미스터리는 ReuseKey
+        /// 불일치였다(설계 동기).
+        /// </summary>
+        private void LogResumeMiss(string newestRunDir, PlanAttemptReuseKey wanted, int runsExamined)
+        {
+            try
+            {
+                var manifestPath = Path.Combine(newestRunDir, "manifest.json");
+                if (!File.Exists(manifestPath)) return;
+
+                var manifest = JsonSerializer.Deserialize<PlanAttemptManifest>(
+                    File.ReadAllText(manifestPath), Options);
+                if (manifest?.ReuseKey == null) return;
+
+                var diffs = DiffReuseKey(wanted, manifest.ReuseKey, _specsFileNames, manifest.SpecsFileNames);
+                if (diffs.Count == 0) return;
+
+                Log.Information(
+                    "[PlanAttemptJournal] 재개 후보를 찾지 못했습니다 - 판 {RunsExamined}개를 봤고 " +
+                    "가장 최근 판({RunDir})과 다음 항목이 어긋났습니다: {Diffs}",
+                    runsExamined, Path.GetFileName(newestRunDir), string.Join(", ", diffs));
+            }
+            catch (Exception ex)
+            {
+                // 진단 자체가 실패해도 파이프라인은 계속한다 - 이 로그는 편의이지
+                // 전제가 아니다.
+                Log.Debug(ex, "[PlanAttemptJournal] 재개 실패 사유를 진단하지 못했습니다 - {RunDir}", newestRunDir);
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="wanted"/>(이번 실행이 계산한 것)과 <paramref name="found"/>
+        /// (저장된 판의 ReuseKey)가 어긋난 항목을 사람이 읽을 문구로 만든다. 해시
+        /// 항목은 <see cref="ShortHash"/>로 앞자리만 싣는다(64자 두 개는 안 읽힌다).
+        /// </summary>
+        private static List<string> DiffReuseKey(
+            PlanAttemptReuseKey wanted, PlanAttemptReuseKey found,
+            IReadOnlyList<string>? currentSpecsFileNames, IReadOnlyList<string>? storedSpecsFileNames)
+        {
+            var diffs = new List<string>();
+
+            if (wanted.ContractVersion != found.ContractVersion)
+                diffs.Add($"ContractVersion({wanted.ContractVersion}→{found.ContractVersion})");
+
+            if (!string.Equals(wanted.PlanStructureSha256, found.PlanStructureSha256, StringComparison.Ordinal))
+                diffs.Add(
+                    $"PlanStructureSha256({ShortHash(wanted.PlanStructureSha256)}→{ShortHash(found.PlanStructureSha256)})");
+
+            if (!string.Equals(wanted.SpecsSha256, found.SpecsSha256, StringComparison.Ordinal))
+            {
+                var entry = $"SpecsSha256({ShortHash(wanted.SpecsSha256)}→{ShortHash(found.SpecsSha256)})";
+                var detail = DescribeSpecsDiff(currentSpecsFileNames, storedSpecsFileNames);
+                if (detail != null) entry += $" [{detail}]";
+                diffs.Add(entry);
+            }
+
+            if (!string.Equals(wanted.Provider, found.Provider, StringComparison.Ordinal))
+                diffs.Add($"Provider({wanted.Provider}→{found.Provider})");
+
+            if (!string.Equals(wanted.Model, found.Model, StringComparison.Ordinal))
+                diffs.Add($"Model({wanted.Model}→{found.Model})");
+
+            if (!string.Equals(wanted.Effort, found.Effort, StringComparison.Ordinal))
+                diffs.Add($"Effort({wanted.Effort ?? "(없음)"}→{found.Effort ?? "(없음)"})");
+
+            if (!string.Equals(wanted.TargetLanguage, found.TargetLanguage, StringComparison.Ordinal))
+                diffs.Add($"TargetLanguage({wanted.TargetLanguage}→{found.TargetLanguage})");
+
+            return diffs;
+        }
+
+        private static string ShortHash(string? sha) =>
+            string.IsNullOrEmpty(sha) ? "(없음)" : sha.Substring(0, Math.Min(10, sha.Length));
+
+        /// <summary>
+        /// [Task 7 §Step 2] <c>SpecsSha256</c> 이 다를 때 <b>왜</b> 다른지 - 개수가
+        /// 다른가, 이름 집합이 다른가, 순서가 다른가. 어느 쪽 목록이든 null 이면
+        /// (옛 manifest·이름 재료를 안 넘긴 호출부) 판단할 근거가 없어 null 을
+        /// 돌려준다 - 해시 불일치까지만 말하고 세부는 침묵한다.
+        /// </summary>
+        private static string? DescribeSpecsDiff(IReadOnlyList<string>? current, IReadOnlyList<string>? stored)
+        {
+            if (current == null || stored == null) return null;
+
+            if (current.Count != stored.Count)
+                return $"개수 {stored.Count}→{current.Count}";
+
+            var storedOnly = stored.Except(current, StringComparer.Ordinal).Take(3).ToList();
+            var currentOnly = current.Except(stored, StringComparer.Ordinal).Take(3).ToList();
+            if (storedOnly.Count > 0 || currentOnly.Count > 0)
+                return $"이름 다름(이전 판: {string.Join(",", storedOnly)} / 이번: {string.Join(",", currentOnly)})";
+
+            if (!stored.SequenceEqual(current, StringComparer.Ordinal))
+                return "순서 다름";
+
+            return "내용만 다름"; // 이름·순서는 같은데 파일 본문이 달라졌다.
         }
 
         /// <summary>
