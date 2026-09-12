@@ -117,5 +117,44 @@ namespace ReSet.Core.Tests
             // (d) Few-Shot 블록 안 주석도 관할이 붙은 문장이다 - 지우면 여기서 깨진다.
             Assert.Contains("원본이 초기값과 함께 선언한 상수는 바인딩 목록에 넣지 않는다", text);
         }
+
+        /// <summary>
+        /// 규칙 5-2(Parameter Type Contract)가 조용히 사라지지 않게 잠근다.
+        ///
+        /// [왜 5-1 검사로 안 충분한가] 5-2는 5-1과 별개 규칙 번호·별개 문단이다 - 5-1을
+        /// 지켜도 5-2 문단이 통째로 사라질 수 있고, 위 검사들은 그것을 못 잡는다.
+        ///
+        /// [무엇이 유일한 표식인가] `[Parameter Type Contract]`(대괄호 포함)와 `5-2.`는
+        /// 파일 전체에서 이 한 줄(AiService.cs:2464)에만 나타난다 - Few-Shot 절 제목
+        /// (:2745)은 대괄호 없이 "Parameter Type Contract"만 쓰고 "rule 5-2"라고 적어
+        /// 문구가 다르다. 그래서 이 대괄호 형태를 지우면 이 검사만 빨강이 되고
+        /// Few-Shot 잠금 검사는 영향받지 않는다 - 두 층이 독립적으로 잠긴다.
+        /// </summary>
+        [Fact]
+        public void BatchStepPrompt_CarriesParameterTypeContractRule()
+        {
+            var text = PromptText();
+
+            Assert.Contains("5-2. [Parameter Type Contract]", text);
+            Assert.Contains(
+                "so a `CHAR(8)` that the driver sends as `NVARCHAR` makes the comparison non-sargable",
+                text);
+        }
+
+        /// <summary>
+        /// 규칙 5-2 의 Few-Shot 예시 줄이 사라지지 않게 잠근다.
+        ///
+        /// [왜 예시까지 따로 잠그는가] 이 클래스 상단 docstring의 선례와 같다 - 생성물은
+        /// 예시를 베끼지 규칙 문단을 베끼지 않는다. 규칙 5-2만 잠그고 이 Few-Shot 블록이
+        /// 사라지면, 배송본은 "파라미터마다 선언 타입을 적으라"는 말은 들어도 그 형태
+        /// (`@원본이름 타입 -> 바인딩이름`)를 본 적이 없어 초록 상태로 형태를 놓친다.
+        /// </summary>
+        [Fact]
+        public void BatchStepPrompt_ShowsParameterTypeContractFewShotLine()
+        {
+            var text = PromptText();
+
+            Assert.Contains("// @pi_strYMD CHAR(8) -> p_ymd", text);
+        }
     }
 }
