@@ -215,7 +215,8 @@ namespace ReSet.Core.Tests
             // 31: 2026-09-10 에 CheckDocumentInstructsItsAuthor 가 무조건 검사로 더해졌다.
             Assert.Equal(31, counts["Validate"]);
             Assert.Equal(9, counts["ValidateConsolidated"]);
-            Assert.Equal(26, counts["ValidateBatchStep"]);
+            // 27: 2026-09-11 에 CheckAnchoredStatementPredicateTerms(앵커 DML 최상위 술어 대조)가 더해졌다.
+            Assert.Equal(27, counts["ValidateBatchStep"]);
         }
 
         private static string ValidatorSourcePath() =>

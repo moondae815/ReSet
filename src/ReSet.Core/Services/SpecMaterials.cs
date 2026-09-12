@@ -56,8 +56,8 @@ namespace ReSet.Core.Services
     /// 거짓·존재하지 않는 검사 이름 셋을 각각 막는다.
     ///
     /// [2026-08-29 다섯 리더 전수 판정 - 판정 근거 요약]
-    /// 리더는 다섯이지만 산출하는 재료는 여덟이다 - SpecStatementFactsExtractor 하나가
-    /// DmlRows·SetTargets·LocalVariables·ErrorCodeToOrdinal 네 재료를 한 레코드
+    /// 리더는 다섯이지만 산출하는 재료는 아홉이다 - SpecStatementFactsExtractor 하나가
+    /// DmlRows·SetTargets·LocalVariables·ErrorCodeToOrdinal·IsL1Exhausted 다섯 재료를 한 레코드
     /// (SpecStatementFacts)에 함께 담기 때문이다. 아래는 재료별 요약이고, 각 재료 항목의
     /// 주석에 더 자세한 근거가 있다.
     ///
@@ -138,6 +138,13 @@ namespace ReSet.Core.Services
                     "CheckAnchoredStatementFacts",
                     "CheckAnchoredStatementExtras",
                     "CheckStatementCountAgainstSpec",
+                    // [앵커 DML 최상위 술어 - E2·E3] 비면 검사가 꺼지는 게 아니라 두 면제가
+                    // 반대 방향으로 움직인다. 커서 그룹 면제(E2)는 BuildCursorGroupExemptions가
+                    // 받을 행이 없어 사라진다(더 엄격해진다). 스테이징 면제(E3)는
+                    // BuildSpecTargets(facts)가 빈 집합이 되어 ReadsOnlyStaging의
+                    // `LineageSources.All(l => !specTargets.Contains(l.SourceTable))`가
+                    // 행 원천을 가진 모든 문장에서 참이 되므로 오히려 넓어진다(더 조용해진다).
+                    "EvaluateAnchoredPredicateTerms",
                 }),
             new SpecMaterial(
                 "ErrorCodeToOrdinal",
@@ -150,6 +157,8 @@ namespace ReSet.Core.Services
                 {
                     "CheckAnchoredStatementFacts",
                     "CheckAnchoredStatementExtras",
+                    // 코드 앵커를 서수로 푸는 재료(MergeErrorCodeMaps)라 비면 앵커 도달이 준다.
+                    "EvaluateAnchoredPredicateTerms",
                 }),
             // [강제 아님 - MachineConfirmedTables.cs 직접 대조] "### UPDATE 대상 테이블:"
             // (MechanicalValidator.UpdateHeadingPrefix, 2112행)은 MachineConfirmedTables.All의
@@ -186,6 +195,23 @@ namespace ReSet.Core.Services
                 DdlCounterpart: nameof(SpecMaterialCensus),
                 ReadsSpecMarkdown: true,
                 ConsumingChecks: new[] { "CheckSpecLocalVariablesDeclared" }),
+            // [강제 아님·헤딩 없음] 표가 아니라 문서 전체에서 L1 소진 배너 표식
+            // (VerificationBanner.L1ExhaustedMarker)을 찾는다 - 특정 "### " 헤딩을 요구하지 않는다.
+            //
+            // [DDL 대응물 null] 원본 DDL의 사실이 아니라 생성 파이프라인의 상태다 -
+            // 「DDL 사실 수 대 명세서 행 수」라는 대조 개념 자체가 성립하지 않는다.
+            //
+            // [소비 검사 — 앵커 DML 최상위 술어 대조(S5)] 명세서가 L1 소진 배너를 달면
+            // 그 표(커서 면제·스테이징 대상)를 기준값으로 믿지 않고 침묵한다. 설계:
+            // docs/superpowers/specs/2026-09-11-앵커-DML-최상위-술어-대조-design.md §2-4 S5
+            new SpecMaterial(
+                "IsL1Exhausted",
+                nameof(SpecStatementFactsExtractor),
+                Array.Empty<string>(),
+                Enforced: false,
+                DdlCounterpart: null,
+                ReadsSpecMarkdown: true,
+                ConsumingChecks: new[] { "EvaluateAnchoredPredicateTerms" }),
             // [강제 아님·헤딩 없음] SpecConditionColumnExtractor는 특정 "### " 헤딩을
             // 요구하지 않는다 - 문서 전체를 훑으며 만나는 아무 헤딩이든 UDF 소속
             // 경계로만 쓴다(CollectFrom, 129행).

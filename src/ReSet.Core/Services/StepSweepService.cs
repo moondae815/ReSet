@@ -126,6 +126,15 @@ namespace ReSet.Core.Services
             var statementsWithSubordinatePredicates = 0;
             var subordinatePredicateColumnTotal = 0;
             var stagingSourceTotal = 0;
+            var predicateTermCompared = 0;
+            var predicateTermFired = 0;
+            var predicateTermNoDdl = 0;
+            var predicateTermNoKey = 0;
+            var predicateTermNoTerms = 0;
+            var predicateTermCursor = 0;
+            var predicateTermStaging = 0;
+            var predicateTermBanner = 0;
+            var predicateTermOrchestration = 0;
 
             foreach (var job in input.Jobs)
             {
@@ -269,6 +278,37 @@ namespace ReSet.Core.Services
 
                             joinPairsLost += MechanicalValidator
                                 .CompareJoinPairs(originalPairs, a.Statement.JoinPairs).Lost.Count;
+                        }
+
+                        // [앵커 DML 최상위 술어 - 침묵 분모] 검사와 같은 판정
+                        // (MechanicalValidator.EvaluateAnchoredPredicateTerms)을 부른다. 조건 (B)의
+                        // 사전으로 센다 - 위 AnchorsResolved 와 같은 이유다.
+                        var namedFactsForStep = step.LegacyProcedures
+                            .Select(p => MechanicalValidator.BareObjectName(p))
+                            .Where(factsSimulated.ContainsKey)
+                            .Select(bare => (Name: bare, Facts: factsSimulated[bare]))
+                            .ToList();
+                        foreach (var evaluation in MechanicalValidator.EvaluateAnchoredPredicateTerms(
+                                     namedFactsForStep, stepStatements, step, ddlByBareName))
+                        {
+                            switch (evaluation.Outcome)
+                            {
+                                case MechanicalValidator.PredicateTermOutcome.Fired:
+                                    predicateTermCompared++;
+                                    predicateTermFired++;
+                                    break;
+                                case MechanicalValidator.PredicateTermOutcome.Matched:
+                                    predicateTermCompared++;
+                                    break;
+                                case MechanicalValidator.PredicateTermOutcome.NoOriginalDdl: predicateTermNoDdl++; break;
+                                case MechanicalValidator.PredicateTermOutcome.NoOriginalKey: predicateTermNoKey++; break;
+                                case MechanicalValidator.PredicateTermOutcome.NoOriginalTerms: predicateTermNoTerms++; break;
+                                case MechanicalValidator.PredicateTermOutcome.CursorExempt: predicateTermCursor++; break;
+                                case MechanicalValidator.PredicateTermOutcome.StagingExempt: predicateTermStaging++; break;
+                                case MechanicalValidator.PredicateTermOutcome.SpecBannered: predicateTermBanner++; break;
+                            }
+
+                            predicateTermOrchestration += evaluation.OrchestrationTermsExempted;
                         }
 
                         anchorsResolved += anchoredForStep.Count;
@@ -441,6 +481,15 @@ namespace ReSet.Core.Services
                     StatementsWithSubordinatePredicates = statementsWithSubordinatePredicates,
                     SubordinatePredicateColumnTotal = subordinatePredicateColumnTotal,
                     StagingSourceTotal = stagingSourceTotal,
+                    PredicateTermStatementsCompared = predicateTermCompared,
+                    PredicateTermStatementsFired = predicateTermFired,
+                    PredicateTermSilencedWithoutDdl = predicateTermNoDdl,
+                    PredicateTermSilencedWithoutOriginalKey = predicateTermNoKey,
+                    PredicateTermSilencedWithoutOriginalTerms = predicateTermNoTerms,
+                    PredicateTermSilencedByCursorGroup = predicateTermCursor,
+                    PredicateTermSilencedByStaging = predicateTermStaging,
+                    PredicateTermSilencedByBanner = predicateTermBanner,
+                    PredicateTermsExemptedAsOrchestration = predicateTermOrchestration,
                     MaterialCensus = materialCensus,
                 },
                 new HarnessGaps(

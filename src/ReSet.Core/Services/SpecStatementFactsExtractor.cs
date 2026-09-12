@@ -59,6 +59,13 @@ namespace ReSet.Core.Services
         /// </summary>
         public IReadOnlyDictionary<string, (string Kind, int Ordinal)> ErrorCodeToOrdinal { get; init; }
             = new Dictionary<string, (string, int)>();
+
+        /// <summary>
+        /// 이 명세서가 L1 소진 배너(<see cref="VerificationBanner.L1ExhaustedMarker"/>)를 달았는가.
+        /// 그 판은 L1 을 통과하지 못했으므로 표에서 읽은 사실을 기준값으로 믿지 않는 검사가 있다
+        /// (앵커 DML 최상위 술어 대조 S5).
+        /// </summary>
+        public bool IsL1Exhausted { get; init; }
     }
 
     /// <summary>
@@ -181,6 +188,7 @@ namespace ReSet.Core.Services
                         ReadLocalVariables(lines))
                     {
                         ErrorCodeToOrdinal = ReadErrorCodeToOrdinal(lines),
+                        IsL1Exhausted = content.Contains(VerificationBanner.L1ExhaustedMarker, StringComparison.Ordinal),
                     };
                 }
                 catch (Exception ex)

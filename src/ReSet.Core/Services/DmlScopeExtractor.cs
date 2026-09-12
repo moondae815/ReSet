@@ -224,6 +224,17 @@ namespace ReSet.Core.Services
         /// </summary>
         public string ResolvedTargetTable { get; init; } = string.Empty;
 
+        /// <summary>
+        /// 이 문장의 WHERE 최상위 AND 항을 정규화한 것(INSERT…SELECT 는 UNION 갈래의 합집합).
+        /// 앵커 DML 최상위 술어 대조의 원본 쪽 기준값이다 - 이행 쪽은
+        /// <see cref="StepSqlStatement.PredicateTerms"/> 이고, 둘 다
+        /// <see cref="DmlScopeExtractor.PredicateTermsOf"/> 하나를 부른다.
+        ///
+        /// [표에 싣지 않는다] <see cref="ResolvedTargetTable"/> 과 같은 이유 - 검사 전용이라
+        /// 프롬프트 바이트가 안 바뀌고 캐시 포맷 버전도 그대로다.
+        /// </summary>
+        public IReadOnlyList<PredicateTerm> PredicateTerms { get; init; } = Array.Empty<PredicateTerm>();
+
         /// <summary>기본값을 null이 아니라 빈 목록으로 정규화한다 - 기존 생성 자리가
         /// 이 파라미터를 생략해도 소비자는 항상 비-null 목록을 본다.</summary>
         public IReadOnlyList<string> GroupByColumns { get; init; } = GroupByColumns ?? Array.Empty<string>();
@@ -525,7 +536,7 @@ namespace ReSet.Core.Services
     /// CTE 기반 UPDATE가 나타나도 처리는 된다 - 다만 실측 코퍼스에는 이 형태가 없어
     /// 실물로 검증하지는 못했다.
     /// </summary>
-    public static class DmlScopeExtractor
+    public static partial class DmlScopeExtractor
     {
         /// <summary>
         /// 「DML 범위」 표의 문장 번호를 매긴다 - 목록 순서대로 연산(UPDATE·INSERT·DELETE·
@@ -1822,6 +1833,8 @@ namespace ReSet.Core.Services
                     DateParameterAppearsInNestedQuery(node))
                 {
                     OuterJoins = outerJoins,
+                    PredicateTerms = PredicateTermsOf(
+                        SourceQuerySpecifications(node.InsertSource).Select(s => s.WhereClause)),
                 });
 
                 RecordErrorCode("INSERT", node);
@@ -2051,6 +2064,7 @@ namespace ReSet.Core.Services
                     JoinPairs = BuildJoinPairs(from, joinReferences),
                     ResolvedTargetTable = ResolveTargetTableName(from, TextOf(target)),
                     OuterJoins = outerJoins,
+                    PredicateTerms = PredicateTermsOf(new[] { where }),
                 });
 
                 RecordErrorCode(operation, statement);
@@ -2797,7 +2811,7 @@ namespace ReSet.Core.Services
             /// 여기서 벗기지 않고 <see cref="TryDecompose"/>가 분해할 때만 벗긴다 -
             /// 그래야 원문 칸이 괄호까지 원본 그대로 진다.
             /// </summary>
-            private static IEnumerable<BooleanExpression> TopLevelAndTerms(BooleanExpression? node)
+            internal static IEnumerable<BooleanExpression> TopLevelAndTerms(BooleanExpression? node)
             {
                 if (node == null) yield break;
 
@@ -2999,7 +3013,7 @@ namespace ReSet.Core.Services
             /// 식 어딘가에 컬럼 참조가 있는가. 하위 질의 안으로는 내려가지 않는다 -
             /// 그 스코프의 컬럼은 이 술어의 좌변이 아니다.
             /// </summary>
-            private static bool ContainsColumn(ScalarExpression expression)
+            internal static bool ContainsColumn(ScalarExpression expression)
             {
                 var probe = new ColumnPresenceProbe();
                 expression.Accept(probe);
@@ -3096,7 +3110,7 @@ namespace ReSet.Core.Services
             /// 값·연산자를 보지 않는 것과 같은 원칙으로, 이름 그 자체 말고는
             /// 아무것도 추측하지 않는다.
             /// </summary>
-            private static bool HaveDifferentQualifiers(
+            internal static bool HaveDifferentQualifiers(
                 ColumnReferenceExpression left, ColumnReferenceExpression right)
             {
                 var leftQualifier = QualifierOf(left);

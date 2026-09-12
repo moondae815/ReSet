@@ -19,7 +19,7 @@ namespace ReSet.Core.Services
         private static readonly SweepCheck[] Checks =
         {
             SweepCheck.A, SweepCheck.B, SweepCheck.C,
-            SweepCheck.D, SweepCheck.E, SweepCheck.Unclassified,
+            SweepCheck.D, SweepCheck.E, SweepCheck.P, SweepCheck.Unclassified,
         };
 
         public static string Render(
@@ -34,6 +34,7 @@ namespace ReSet.Core.Services
             AppendPerJob(b, report.Findings);
             AppendUpperBoundNote(b);
             AppendAnchoredFindings(b, report.Findings);
+            AppendPredicateTermFindings(b, report.Findings);
             AppendIndicators(b, report.Indicators);
             AppendSilenceDenominators(b, report.Indicators);
             AppendMaterialCensus(b, report.Indicators.MaterialCensus);
@@ -223,6 +224,30 @@ namespace ReSet.Core.Services
             b.AppendLine();
         }
 
+        /// <summary>
+        /// 앵커 DML 최상위 술어의 발화 좌표. 메시지 원문은 싣지 않는다(파이프가 표를 깬다) -
+        /// 사람이 좌표로 원본 DDL 과 단계 파일을 열어 판정 칸을 채운다. 검사 B·C 목록과 따로 두는
+        /// 이유는 「항목」 칸이 없기 때문이다(원문 항은 쉼표를 품는다).
+        /// </summary>
+        private static void AppendPredicateTermFindings(StringBuilder b, IReadOnlyList<SweepFinding> findings)
+        {
+            b.AppendLine("## 검사 P 발화 목록");
+            b.AppendLine();
+            b.AppendLine("| # | 조건 | Job | 단계 | 문장 | 판정 |");
+            b.AppendLine("| ---: | :--- | :--- | :--- | :--- | :--- |");
+
+            var rows = findings.Where(f => f.Check == SweepCheck.P).ToList();
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var f = rows[i];
+                var statement = f.Kind == null ? "—" : $"{f.Kind} {f.Ordinal}";
+                var condition = f.Condition == SweepCondition.AsIs ? "A" : "B";
+                b.AppendLine($"| {i + 1} | {condition} | {f.JobName} | {f.StepCode} | {statement} |  |");
+            }
+
+            b.AppendLine();
+        }
+
         private static void AppendIndicators(StringBuilder b, SweepIndicators indicators)
         {
             b.AppendLine("## 캐시 17 선결 지표");
@@ -304,6 +329,25 @@ namespace ReSet.Core.Services
             b.AppendLine(
                 $"| 하위 범위 술어 컬럼의 총수 | {indicators.SubordinatePredicateColumnTotal} |");
             b.AppendLine($"| 스테이징 원천의 총수 | {indicators.StagingSourceTotal} |");
+            b.AppendLine(
+                "| 최상위 술어 - 원본과 대조까지 간 앵커 DML 문장 수 | " +
+                $"{indicators.PredicateTermStatementsCompared} |");
+            b.AppendLine($"| 최상위 술어 - 발화한 문장 수 | {indicators.PredicateTermStatementsFired} |");
+            b.AppendLine(
+                $"| 최상위 술어 - 원본 DDL 이 없어 침묵(S1) | {indicators.PredicateTermSilencedWithoutDdl} |");
+            b.AppendLine(
+                "| 최상위 술어 - 원본에 키가 없거나 모호해 침묵(S2) | " +
+                $"{indicators.PredicateTermSilencedWithoutOriginalKey} |");
+            b.AppendLine(
+                "| 최상위 술어 - 원본 문장에 최상위 항이 없어 침묵(S3) | " +
+                $"{indicators.PredicateTermSilencedWithoutOriginalTerms} |");
+            b.AppendLine($"| 최상위 술어 - 커서 그룹 면제(E2) | {indicators.PredicateTermSilencedByCursorGroup} |");
+            b.AppendLine($"| 최상위 술어 - 스테이징만 읽어 면제(E3) | {indicators.PredicateTermSilencedByStaging} |");
+            b.AppendLine(
+                $"| 최상위 술어 - 명세서 L1 소진 배너로 침묵(S5) | {indicators.PredicateTermSilencedByBanner} |");
+            b.AppendLine(
+                "| 최상위 술어 - 오케스트레이션 항으로 면제한 항 수(E1) | " +
+                $"{indicators.PredicateTermsExemptedAsOrchestration} |");
             b.AppendLine();
             b.AppendLine(
                 "**「자기 대상을 읽어 스테이징 면제가 취소된 문장 수」가 0 이면 그 방어가 도달하지 " +
@@ -380,7 +424,7 @@ namespace ReSet.Core.Services
             }
 
             // [Fix Round 2, 최종 리뷰 Important 2-1] 「침묵 분모」 절이 이미 쓰는
-            // 관용구를 그대로 옮긴다 - 분모를 숫자로 인쇄하지 않으면 여덟 행이 전부
+            // 관용구를 그대로 옮긴다 - 분모를 숫자로 인쇄하지 않으면 아홉 행이 전부
             // "0 / 0 / 없음"으로 찍혀도 그것이 "쟀는데 소실이 없다"인지 "애초에 아무
             // 프로시저도 못 접었다"인지 구별할 수 없다. 모든 행에 같은 값이 실려
             // 있으므로(SpecMaterialCensusRow.FoldedProcedureCount 문서 참고) 첫 행만
@@ -393,14 +437,14 @@ namespace ReSet.Core.Services
 
             // [Fix Round 2, 최종 리뷰 Important 2-2] materialCensus.Count == 0 검사만으로는
             // 못 잡는 실패 양식이다 - jobs가 비었거나 프로시저 해석이 전부 실패해도
-            // SpecMaterialCensus.Count는 여덟 행을 그대로 낸다(모두 0 또는 null). 그
-            // 여덟 행을 표로 그대로 그리면 "0 / 0 / 없음"이 "쟀는데 소실이 없다"는
+            // SpecMaterialCensus.Count는 아홉 행을 그대로 낸다(모두 0 또는 null). 그
+            // 아홉 행을 표로 그대로 그리면 "0 / 0 / 없음"이 "쟀는데 소실이 없다"는
             // 정상 결과로 읽힌다 - 분모가 0이면 표 대신 조사 실패를 인쇄한다.
             if (foldedProcedureCount == 0)
             {
                 b.AppendLine(
                     "**조사가 실패했다** - 접은 프로시저 수가 0이다. jobs가 비었거나 프로시저 " +
-                    "해석이 전부 실패했다는 뜻이다. 아래 여덟 행이 모두 \"0 / 0 / 없음\"으로 " +
+                    "해석이 전부 실패했다는 뜻이다. 아래 아홉 행이 모두 \"0 / 0 / 없음\"으로 " +
                     "보이더라도 그것은 「쟀는데 소실이 없다」가 아니라 「잴 대상 자체가 없었다」다.");
                 b.AppendLine();
                 return;

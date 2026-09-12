@@ -21,21 +21,22 @@
 # 없는 별개 타입이라 손으로 `result.Errors.Add(` 로 되돌렸다(38 번째는
 # `ValidateBatchStep` 메서드 안의 `result.Errors.AddRange(result.PlanDefects)`
 # 호출로, 정규식이 애초에 `Add\(` 뒤 즉시 괄호를 요구해 안 건드렸다 -
-# 37+1=38 이 이 타입 소속 전체다).
+# 그날은 37+1=38 이 이 타입 소속 전체였다. (2026-09-11 이후 직접 `Add` 가
+# 하나 늘어 38+1=39 다 - 아래 톱니값도 그만큼 올랐다.)
 #
 # 그런데 타입이 다른 것은 증상이지 원인이 아니다. 이 타입을 쓰는
 # `VerificationPipelineOrchestrator.cs` 의 `GenerateStepSectionWithFloorRetryAsync`
 # (그 안에서 `_validator.ValidateBatchStep(...)` 를 부른다)는
 # `L1AttemptLog.Append(...)` 를 한 번도 부르지 않는다 - 그건 오직 같은 파일의
 # `RunCodeObjectPipelineCoreAsync`(`_validator.Validate(...)` 를 부르고, 그
-# 실패 가드 안에서 Append 한다) 갈래에서만 난다. 즉 이 38 곳은 `Firings`에도
+# 실패 가드 안에서 Append 한다) 갈래에서만 난다. 즉 이 39 곳(현재)은 `Firings`에도
 # 안 실리고 `raw/l1-attempts.json` 에도 안 남으므로, `SelfReinforcingCheckTests`
 # 가 재는 코퍼스에 이 갈래의 발화가 원천적으로 들어오지 않는다 -
 # CheckErrorCodeUniquenessClaim 이 낸 재시도 6 회짜리 반복 발화 사고가
 # 여기서 나면 자동 탐지가 없다.
 #
 # 0 으로 가는 길은 하나가 아니라 **두 가지를 한 커밋에서** 해야 닫힌다:
-#   1. `StepValidationResult` 에도 `Report()`/`Firings` 를 놓아 이 37(+1) 곳을
+#   1. `StepValidationResult` 에도 `Report()`/`Firings` 를 놓아 이 38(+1) 곳을
 #      마저 옮기고,
 #   2. `ValidateBatchStep` 실패를 `L1AttemptLog.Append(...)` 에 연결해 그
 #      결과가 자기강화 게이트가 보는 코퍼스에 들어가게 한다.
@@ -44,4 +45,8 @@
 # 이 갈래를 못 본다 - 「닫혔다」는 거짓 신호만 남긴다. 그래서 이 수는 스캐너
 # 관할 밖이 아니라(스캐너는 타입을 모르고 여전히 정확히 잡는다) 파이프라인
 # 배선 밖이고, 배선을 고치기 전까지는 단방향 상한만 걸어 둔다.
-ReSet.Core/Services/MechanicalValidator.cs=37
+#
+# [2026-09-11] 37→38. CheckAnchoredStatementPredicateTerms(앵커 DML 최상위 술어
+# 대조)가 이 파일에 StepValidationResult.Errors.Add를 직접 쓰는 자리 하나를
+# 더했다 - 같은 타입, 같은 이유(Report/Firings 통로 없음)로 다른 방법이 없다.
+ReSet.Core/Services/MechanicalValidator.cs=38

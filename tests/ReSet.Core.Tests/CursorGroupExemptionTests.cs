@@ -149,6 +149,30 @@ END";
             Assert.Contains(result.Errors, e => e.Contains("최상위 WHERE 술어 컬럼"));
         }
 
+        // [앵커 DML 최상위 술어 - E2] 커서 그룹 면제는 이 검사에도 걸린다. 원본 SELECT 가 걸던
+        // 필터가 집합 치환으로 쓰기 문장에 올라온 것은 「원본에 없는 항」이 아니다.
+        [Fact]
+        public void ExemptsTheRewrittenCursorGroupFromThePredicateTermCheck()
+        {
+            var result = Validate(
+                Facts(new[] { "OutYMD", "ClientID", "PGName" },
+                      new[] { "EDIReqYmd", "AcqType", "OutState" }),
+                CursorDdl);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("원본에 없는 최상위 술어"));
+        }
+
+        [Fact]
+        public void PredicateTermCheckStaysStrictWhenTheCursorWalksRows()
+        {
+            // SUMMARY_ETC 모양 - 커서가 행을 순회하면 술어가 사라지거나 바뀌는 것은 진짜 결함이다.
+            var result = Validate(
+                Facts(Array.Empty<string>(), new[] { "YMD", "OutState" }),
+                CursorDdl);
+
+            Assert.Contains(result.Errors, e => e.Contains("원본에 없는 최상위 술어"));
+        }
+
         [Fact]
         public void StaysStrictWithoutTheOriginalDdl()
         {

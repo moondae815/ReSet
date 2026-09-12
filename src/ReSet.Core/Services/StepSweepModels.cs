@@ -3,8 +3,8 @@ using System.Collections.Generic;
 
 namespace ReSet.Core.Services
 {
-    /// <summary>단계 검사 다섯 개. 미분류는 조용히 접지 않고 따로 센다.</summary>
-    public enum SweepCheck { A, B, C, D, E, Unclassified }
+    /// <summary>단계 검사 여섯 개. 미분류는 조용히 접지 않고 따로 센다.</summary>
+    public enum SweepCheck { A, B, C, D, E, P, Unclassified }
 
     /// <summary>
     /// AsIs = 오늘 그대로(캐시 16, 「오류 코드」 표 없음).
@@ -12,7 +12,7 @@ namespace ReSet.Core.Services
     /// </summary>
     public enum SweepCondition { AsIs, SimulatedCache17 }
 
-    /// <summary>발화 하나. Kind·Ordinal·Items는 검사 B·C에서만 채워진다.</summary>
+    /// <summary>발화 하나. Kind·Ordinal은 검사 B·C·P에서, Items는 검사 B·C에서만 채워진다.</summary>
     public sealed record SweepFinding(
         string JobName,
         string StepCode,
@@ -267,6 +267,39 @@ namespace ReSet.Core.Services
         public int StagingSourceTotal { get; init; }
 
         /// <summary>
+        /// [앵커 DML 최상위 술어] 원본과 대조까지 간 문장 수(발화 + 일치) - 이 검사의 도달이다.
+        /// 아래 침묵 사유 여섯과 합치면 앵커 DML 문장 전체가 된다. 판정은
+        /// <c>MechanicalValidator.EvaluateAnchoredPredicateTerms</c> 한 곳이 한다.
+        /// </summary>
+        public int PredicateTermStatementsCompared { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermStatementsFired { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedWithoutDdl { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedWithoutOriginalKey { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedWithoutOriginalTerms { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedByCursorGroup { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedByStaging { get; init; }
+
+        /// <inheritdoc cref="PredicateTermStatementsCompared"/>
+        public int PredicateTermSilencedByBanner { get; init; }
+
+        /// <summary>
+        /// 대조까지 간 문장에서 오케스트레이션 항(E1)이라 면제한 <b>항</b> 수. 문장 수가 아니다.
+        /// </summary>
+        public int PredicateTermsExemptedAsOrchestration { get; init; }
+
+        /// <summary>
         /// 명세서 재료가 원본 DDL 대비 소실됐는지, 프로시저 단위로 센다
         /// (<see cref="SpecMaterialCensus"/> 참고).
         ///
@@ -294,13 +327,14 @@ namespace ReSet.Core.Services
         /// 완료된 다른 지표까지 함께 죽이지 않게 하는데, catch에 걸리면 이 목록이
         /// 빈 채로 떨어진다.
         ///
-        /// (2) **행은 여덟인데 분모가 0** - jobs가 비었거나 프로시저 해석이 전부
+        /// (2) **행은 아홉인데 분모가 0** - jobs가 비었거나 프로시저 해석이 전부
         /// 실패하면 <see cref="SpecMaterialCensus.Count"/>는 조기 반환하지 않고
         /// <see cref="SpecMaterialCensusRow.FoldedProcedureCount"/>가 0인 행을
-        /// 여덟 개 그대로 낸다 - 목록 길이만 보면 (1)과 달리 정상으로 보인다.
-        /// StepSweepReportWriter는 이 경우에도 표 대신 "조사 실패"를 인쇄해야
-        /// 한다 - 그러지 않으면 여덟 행이 전부 "0 / 0 / 없음"으로 찍혀
-        /// 「쟀는데 소실이 없다」로 오독된다.
+        /// 아홉 개 그대로 낸다(재료 카탈로그 <see cref="SpecMaterials.All"/>이
+        /// 아홉이라 census 행도 아홉이다) - 목록 길이만 보면 (1)과 달리
+        /// 정상으로 보인다. StepSweepReportWriter는 이 경우에도 표 대신
+        /// "조사 실패"를 인쇄해야 한다 - 그러지 않으면 아홉 행이 전부
+        /// "0 / 0 / 없음"으로 찍혀 「쟀는데 소실이 없다」로 오독된다.
         ///
         /// 두 양식 모두 빈 표를 「쟀는데 아무 재료도 없다」로 읽으면 이 회차가
         /// 통째로 없애려는 바로 그 침묵을 다시 만드는 것이다 - 보고서 라이터는

@@ -35,11 +35,18 @@ public static class VerificationBanner
             index == 0 ? $">   - {line}" : $">     {line}"));
     }
 
+    /// <summary>
+    /// L1 소진 배너의 머리 문구. 명세서가 이 배너를 달았는지 읽는 쪽
+    /// (<see cref="SpecStatementFactsExtractor"/>)이 같은 상수를 본다 - 문구를 두 곳에 적으면
+    /// 한쪽만 고쳐지는 날 읽는 쪽이 조용히 0 이 된다.
+    /// </summary>
+    public const string L1ExhaustedMarker = "**[검증 미완료] L1 기계 검증을 통과하지 못했습니다.**";
+
     public static string L1Exhausted(IReadOnlyList<string> errors)
     {
         var errorLines = RenderBulletList(errors, "(상세 오류가 기록되지 않았습니다.)");
 
-        return "\n> [!CAUTION]\n> **[검증 미완료] L1 기계 검증을 통과하지 못했습니다.**"
+        return "\n> [!CAUTION]\n> " + L1ExhaustedMarker
             + " 재시도를 모두 소진하여 마지막 작성 버전을 그대로 사용합니다.\n"
             + "> - **잔존 오류**:\n"
             + errorLines

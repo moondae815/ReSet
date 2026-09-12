@@ -521,4 +521,23 @@ public sealed class SpecStatementFactsExtractorTests
         Assert.Equal("-13", single.Key);
         Assert.Equal(("UPDATE", 9), single.Value);
     }
+
+    // [S5] 재시도를 소진한 명세서는 L1 을 통과하지 못한 판이다. 앵커 DML 최상위 술어
+    // 대조는 그 명세서의 표(커서 면제·스테이징 대상)를 믿지 않고 침묵한다.
+    // 설계: docs/superpowers/specs/2026-09-11-앵커-DML-최상위-술어-대조-design.md §2-4 S5
+    [Fact]
+    public void Extract_FlagsASpecThatCarriesTheL1ExhaustedBanner()
+    {
+        // 배너는 생산자(VerificationBanner)에서 만든다 - 문구를 시험에 베끼면 순환이다.
+        var bannered = VerificationBanner.L1Exhausted(new[] { "오류" }) + "# 명세서\n";
+
+        var facts = SpecStatementFactsExtractor.Extract(new[]
+        {
+            ("dbo.UP_A", bannered),
+            ("dbo.UP_B", "# 명세서\n"),
+        });
+
+        Assert.True(facts["UP_A"].IsL1Exhausted);
+        Assert.False(facts["UP_B"].IsL1Exhausted);
+    }
 }

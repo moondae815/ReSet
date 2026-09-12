@@ -170,6 +170,17 @@ namespace ReSet.Core.Services
         /// 것이 여전히 맞다.
         /// </summary>
         public bool ReadsOwnTarget { get; init; }
+
+        /// <summary>
+        /// 이 문장 <b>최상위</b> WHERE 의 AND 항을 정규화한 것(INSERT…SELECT 는 UNION 갈래의 합집합).
+        /// 원본 쪽 짝은 <see cref="DmlScopeFact.PredicateTerms"/> 이고 둘 다
+        /// <see cref="DmlScopeExtractor.PredicateTermsOf"/> 를 부른다 - 규칙이 두 벌이면 조용히 갈린다.
+        ///
+        /// [앵커 창과 무관하다] 데이터 필드일 뿐 문장 종류를 늘리지 않는다 - 문장 목록과
+        /// 앵커 판정은 이 필드가 생기기 전과 같다.
+        /// </summary>
+        public IReadOnlyList<PredicateTerm> PredicateTerms { get; init; }
+            = Array.Empty<PredicateTerm>();
     }
 
     /// <summary>
@@ -815,6 +826,7 @@ namespace ReSet.Core.Services
                         ReadsOwnTarget = readsOwnTarget,
                         JoinPairs = CollectJoinPairs(froms, ctes),
                         HasCommaJoin = froms.Any(f => f.TableReferences.Count >= 2),
+                        PredicateTerms = DmlScopeExtractor.PredicateTermsOf(wheres),
                     },
                     statement.StartOffset,
                     statement.StartOffset + statement.FragmentLength));
