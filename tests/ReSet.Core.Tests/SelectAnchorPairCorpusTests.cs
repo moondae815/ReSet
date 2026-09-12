@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using ReSet.Core.Services;
 using Xunit;
 using Xunit.Abstractions;
@@ -17,12 +18,21 @@ namespace ReSet.Core.Tests
     /// <b>절대</b> 드러나지 않는 조용한 공백이다.
     ///
     /// [한계 - 아는 채로 쓴다] 라벨이 명세서에 있는지만 본다. 그 라벨이 옳은 문장에
-    /// 붙었는지는 못 본다. 설계서 §7 참고.
+    /// 붙었는지는 못 본다. <b>그보다 큰 구멍</b>: 선언이 있는데 앵커가 아예 없는 단계는
+    /// 이 단언으로 절대 드러나지 않는다(불일치 표는 「있는 앵커」만 검사하고, 「없는
+    /// 앵커」는 대조할 대상 자체가 없다). 그 방향은 <see cref="LogsStepsWhereTheSpecDeclaresSelectRowsButNoAnchorWasWritten"/>
+    /// 가 잰다. 설계서 §7·§9-4 참고.
     ///
     /// 설계: docs/superpowers/specs/2026-09-12-SELECT앵커-대조-설계.md
     /// </summary>
     public class SelectAnchorPairCorpusTests
     {
+        private static readonly Regex DashFormLine = new(
+            @"^[ \t]*--[ \t]*SELECT[ \t]*\d{1,2}[ \t]*:", RegexOptions.Multiline);
+
+        private static readonly Regex BlockFormLine = new(
+            @"^[ \t]*/\*[ \t]*SELECT[ \t]*\d{1,2}[ \t]*:", RegexOptions.Multiline);
+
         private readonly ITestOutputHelper _output;
 
         public SelectAnchorPairCorpusTests(ITestOutputHelper output) => _output = output;
@@ -30,18 +40,12 @@ namespace ReSet.Core.Tests
         [SkippableFact]
         public void EverySelectAnchorPointsAtARowTheSpecActuallyDeclares()
         {
-            var root = CorpusPaths.RepoRootIfCorpusPresent();
-            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
-
-            var outputRoot = Path.Combine(root, "output");
-            var jobsDir = Path.Combine(outputRoot, "Jobs");
-            Skip.IfNot(Directory.Exists(jobsDir), CorpusSkip.Reason);
-
-            var facts = SpecStatementFactsExtractor.Extract(ReadSpecs(outputRoot));
-            Skip.If(facts.Count == 0, CorpusSkip.Reason);
+            var (facts, jobsDir) = LoadCorpus();
 
             var mismatches = new List<string>();
             var scanned = 0;
+            var dashFormAnchors = 0;
+            var blockFormAnchors = 0;
             var perJob = new List<(string Job, int Scanned, int Mismatches)>();
 
             foreach (var jobDir in Directory.EnumerateDirectories(jobsDir)
@@ -62,21 +66,21 @@ namespace ReSet.Core.Tests
                     var file = Path.Combine(stepsDir, step.Code + ".md");
                     if (!File.Exists(file)) continue;
 
-                    var declared = new HashSet<int>();
-                    foreach (var procedure in step.LegacyProcedures)
+                    var text = File.ReadAllText(file);
+                    var declared = DeclaredSelectOrdinals(facts, step);
+                    var anchors = StepSqlStatementReader.ReadSelectAnchors(text);
+
+                    if (anchors.Count > 0)
                     {
-                        if (!facts.TryGetValue(BareName(procedure), out var procedureFacts)) continue;
-                        foreach (var row in procedureFacts.DmlRows)
-                        {
-                            if (row.Kind.Equals("SELECT", StringComparison.OrdinalIgnoreCase))
-                            {
-                                declared.Add(row.Ordinal);
-                            }
-                        }
+                        // 표기 갈래는 리더가 실제로 앵커를 읽어낸 파일에서만 센다 - 리더의
+                        // 정규식이 한쪽 표기를 못 읽게 좁혀지면(뮤테이션 검증 대상) 그 갈래의
+                        // 파일은 anchors.Count == 0 이 되어 여기 도달하지 않고, 아래 바닥
+                        // 단언이 그 갈래에서 빨개진다.
+                        if (DashFormLine.IsMatch(text)) dashFormAnchors += anchors.Count;
+                        if (BlockFormLine.IsMatch(text)) blockFormAnchors += anchors.Count;
                     }
 
-                    foreach (var ordinal in StepSqlStatementReader.ReadSelectAnchors(
-                                 File.ReadAllText(file)))
+                    foreach (var ordinal in anchors)
                     {
                         scanned++;
                         jobScanned++;
@@ -95,6 +99,7 @@ namespace ReSet.Core.Tests
             }
 
             _output.WriteLine($"SELECT 앵커 {scanned} · 불일치 {mismatches.Count}");
+            _output.WriteLine($"  표기별: `/* … */` {blockFormAnchors} · `-- …` {dashFormAnchors}");
             foreach (var job in perJob)
             {
                 _output.WriteLine($"  [Job] {job.Job} · SELECT 앵커 {job.Scanned} · 불일치 {job.Mismatches}");
@@ -105,6 +110,105 @@ namespace ReSet.Core.Tests
             Skip.If(scanned == 0, CorpusSkip.Reason);
 
             Assert.Empty(mismatches);
+
+            // 모양 불변식(바닥) - 코퍼스는 두 표기를 모두 쓴다. `SelectAnchorPattern`이
+            // 한쪽 표기(예: `/\*`만)로 좁혀지면 그 갈래의 파일은 리더에서 anchors.Count == 0
+            // 이 되어 위 표기별 합계 중 하나가 0으로 떨어진다 - 여기서 빨갛게 잡는다.
+            // (되돌림으로 확인함: 설계서 §9-4, 이 태스크의 MUTATION RESULT 참고.)
+            Assert.True(blockFormAnchors > 0, "`/* SELECT n: */` 표기 앵커가 0 - 리더 정규식이 이 갈래를 놓치고 있다.");
+            Assert.True(dashFormAnchors > 0, "`-- SELECT n:` 표기 앵커가 0 - 리더 정규식이 이 갈래를 놓치고 있다.");
+        }
+
+        /// <summary>
+        /// 이 검사가 놓치는 방향(§7)을 매 실행마다 찍는다 - 단언하지 않는다. 명세서에
+        /// SELECT 행이 선언돼 있는데 그 단계 본문에 SELECT 앵커가 하나도 없는 단계를
+        /// 「도달 못 한 단계」로 센다. 오늘 값은 설계서 §7·§9-4 에 적은 값과 같아야 한다.
+        /// </summary>
+        [SkippableFact]
+        public void LogsStepsWhereTheSpecDeclaresSelectRowsButNoAnchorWasWritten()
+        {
+            var (facts, jobsDir) = LoadCorpus();
+
+            var reached = 0;
+            var unreachedSteps = new List<(string Job, string Step, IReadOnlyCollection<int> Declared)>();
+
+            foreach (var jobDir in Directory.EnumerateDirectories(jobsDir)
+                         .OrderBy(d => d, StringComparer.Ordinal))
+            {
+                var plan = Path.Combine(jobDir, "raw", "PlanStructure.md");
+                var stepsDir = Path.Combine(jobDir, "agent", "steps");
+                if (!File.Exists(plan) || !Directory.Exists(stepsDir)) continue;
+
+                var steps = BatchStepPlanParser.TryParse(File.ReadAllText(plan));
+                if (steps == null) continue;
+
+                foreach (var step in steps)
+                {
+                    var file = Path.Combine(stepsDir, step.Code + ".md");
+                    if (!File.Exists(file)) continue;
+
+                    var declared = DeclaredSelectOrdinals(facts, step);
+                    if (declared.Count == 0) continue;
+
+                    var anchors = StepSqlStatementReader.ReadSelectAnchors(File.ReadAllText(file));
+                    if (anchors.Count > 0)
+                    {
+                        reached++;
+                    }
+                    else
+                    {
+                        unreachedSteps.Add((Path.GetFileName(jobDir), step.Code, declared));
+                    }
+                }
+            }
+
+            var total = reached + unreachedSteps.Count;
+            var missedDeclarationRows = unreachedSteps.Sum(s => s.Declared.Count);
+
+            Skip.If(total == 0, CorpusSkip.Reason);
+
+            _output.WriteLine(
+                $"[역방향 - §7] 선언 있음·앵커 0 인 단계 {unreachedSteps.Count} · " +
+                $"그 단계들이 놓친 선언 행 {missedDeclarationRows} · 도달률 {reached}/{total}");
+            foreach (var s in unreachedSteps.OrderBy(s => s.Job, StringComparer.Ordinal).ThenBy(s => s.Step, StringComparer.Ordinal))
+            {
+                _output.WriteLine(
+                    $"  [역방향] {s.Job}/{s.Step} · 명세서 선언 SELECT 서수 {string.Join(", ", s.Declared.OrderBy(x => x))} · 앵커 0");
+            }
+        }
+
+        private static (IReadOnlyDictionary<string, SpecStatementFacts> Facts, string JobsDir) LoadCorpus()
+        {
+            var root = CorpusPaths.RepoRootIfCorpusPresent();
+            Skip.If(string.IsNullOrEmpty(root), CorpusSkip.Reason);
+
+            var outputRoot = Path.Combine(root, "output");
+            var jobsDir = Path.Combine(outputRoot, "Jobs");
+            Skip.IfNot(Directory.Exists(jobsDir), CorpusSkip.Reason);
+
+            var facts = SpecStatementFactsExtractor.Extract(ReadSpecs(outputRoot));
+            Skip.If(facts.Count == 0, CorpusSkip.Reason);
+
+            return (facts, jobsDir);
+        }
+
+        private static HashSet<int> DeclaredSelectOrdinals(
+            IReadOnlyDictionary<string, SpecStatementFacts> facts, BatchStepPlan step)
+        {
+            var declared = new HashSet<int>();
+            foreach (var procedure in step.LegacyProcedures)
+            {
+                if (!facts.TryGetValue(BareName(procedure), out var procedureFacts)) continue;
+                foreach (var row in procedureFacts.DmlRows)
+                {
+                    if (row.Kind.Equals("SELECT", StringComparison.OrdinalIgnoreCase))
+                    {
+                        declared.Add(row.Ordinal);
+                    }
+                }
+            }
+
+            return declared;
         }
 
         private static IReadOnlyList<(string FileName, string Content)> ReadSpecs(string outputRoot)
