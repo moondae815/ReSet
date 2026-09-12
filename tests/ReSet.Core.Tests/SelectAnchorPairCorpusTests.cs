@@ -10,8 +10,9 @@ using Xunit.Abstractions;
 namespace ReSet.Core.Tests
 {
     /// <summary>
-    /// 단계 본문의 <c>/* SELECT n: … */</c> 앵커가 <b>그 단계 레거시 SP 명세서의 DML 범위
-    /// 표에 실재하는가</b>를 코퍼스 전수로 잰다.
+    /// 단계 본문의 <c>SELECT n:</c> 앵커 - 블록형 <c>/* SELECT n: … */</c> 와 대시형
+    /// <c>-- SELECT n: … </c> 둘 다 - 가 <b>그 단계 레거시 SP 명세서의 DML 범위 표에
+    /// 실재하는가</b>를 코퍼스 전수로 잰다.
     ///
     /// [왜 <see cref="AnchorKindOrdinalPairTests"/> 가 못 잡나] 그 자는 문장에 붙은 앵커만
     /// 본다. SELECT 는 리더가 문장으로 담지도, 앵커로 읽지도 않는다(설계서 §2 세 겹) - 불일치로는
@@ -117,6 +118,17 @@ namespace ReSet.Core.Tests
             // (되돌림으로 확인함: 설계서 §9-4, 이 태스크의 MUTATION RESULT 참고.)
             Assert.True(blockFormAnchors > 0, "`/* SELECT n: */` 표기 앵커가 0 - 리더 정규식이 이 갈래를 놓치고 있다.");
             Assert.True(dashFormAnchors > 0, "`-- SELECT n:` 표기 앵커가 0 - 리더 정규식이 이 갈래를 놓치고 있다.");
+
+            // 귀속 불변식 - 표기별 계수기는 "그 파일 텍스트 전체에 그 표기 줄이 있으면
+            // anchors.Count 를 통째로 더한다"는 방식이라, 오늘은 어느 파일도 두 표기를
+            // 섞어 쓰지 않기 때문에만 blockFormAnchors + dashFormAnchors == scanned 가
+            // 성립한다. 표기를 섞은 파일이 하나라도 생기면 그 파일의 anchors.Count 가
+            // 두 계수기 모두에 이중으로 더해져 합이 scanned 를 넘고, 위 두 `> 0` 단언은
+            // 계속 초록이면서도 §9-4 좁히기 뮤테이션에서 한쪽 표기가 실제로는 0 인데도
+            // 다른 파일의 이중 계산이 가려 바닥이 약해진다. 이 단언은 그 전제(파일당
+            // 단일 표기)가 깨지는 순간 여기서 먼저 빨개져, 위 두 단언을 못 믿게 됐다는
+            // 것을 알린다.
+            Assert.Equal(scanned, blockFormAnchors + dashFormAnchors);
         }
 
         /// <summary>

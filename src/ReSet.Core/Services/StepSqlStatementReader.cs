@@ -242,8 +242,20 @@ namespace ReSet.Core.Services
         ///
         /// [왜 엄격한가 - 착수 전 실측] 느슨하게 잡으면 `/* U1: … (SELECT 1) */` 처럼
         /// 설명에 종류를 적은 주석이 앵커로 읽힌다. 실물이 그 모양이다
-        /// (`POQSettleBatch6/S13`). 계약이 정한 형식은 `/* SELECT 1: … */` 하나뿐이므로
-        /// 그것만 받으면 오탐 기제가 구조적으로 사라진다.
+        /// (`POQSettleBatch6/S13`). 엄격함의 관할은 <b>표기 갈래가 아니라 줄 첫머리
+        /// 요구</b>다 - `SELECT n:` 이 줄 맨 앞(공백 제외)에서 시작해야만 받고, 산문
+        /// 속 언급은 배제한다. 그것만으로 오탐 기제가 구조적으로 사라진다.
+        ///
+        /// [표기는 왜 둘 다 받는가] 계약(프롬프트)이 <b>규정</b>하는 형식은
+        /// `/* SELECT n: … */` 블록형 하나뿐이지만, 이 정규식은 <b>규정이 아니라
+        /// 실물을 서술</b>한다 - 코퍼스 실측(2026-09-12)으로 블록형 8건 · 대시형
+        /// (`-- SELECT n: …`) 8건, 합 16건이 공존한다. 검사가 계약만큼 좁아 대시형을
+        /// 놓치면, 모델이 계약을 어긴 바로 그 순간(대시형으로 적은 절반)을 검사가
+        /// 관측하지 못한 채 조용히 지나간다 - 앵커가 아예 없는 것과 같은 모양의
+        /// 커버리지 손실이다. <b>이 정규식을 블록형 한 갈래로 좁히지 마라</b> -
+        /// 대시형 바닥은 <see cref="SelectAnchorPairCorpusTests"/> 의 표기별 계수기와
+        /// <c>SelectAnchorReaderTests.ReadsSelectAnchorsWrittenWithTheDashCommentForm</c>
+        /// 이 잡는다.
         /// 설계: docs/superpowers/specs/2026-09-12-SELECT앵커-대조-설계.md §3
         /// </summary>
         private static readonly Regex SelectAnchorPattern = new(
