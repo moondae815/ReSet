@@ -2047,17 +2047,18 @@ namespace ReSet.Core.Services
                     // 읽으므로, 먼저 재지 않으면 "이번 회차가 애초에 목차가 없어서
                     // 들어왔다"는 원래 게이트가 사라진다.
                     bool needsPlanStructure = string.IsNullOrEmpty(currentPlanStructure);
-                    string? rawDir = null;
-                    string? priorStructurePath = null;
+                    // rawDir·priorStructurePath는 순수 경로 계산(Path.Combine)이라 항상
+                    // 채운다 - 부수효과(디렉터리 생성)만 needsPlanStructure 분기 안에 남긴다.
+                    // 값 자체를 분기 밖으로 빼면 아래 두 자리(:2129·:2138 부근)의 `!`가
+                    // 근거 없는 비-null 단언이 아니라 애초에 필요 없어진다.
+                    string rawDir = System.IO.Path.Combine(outputRoot, "Jobs", jobName, "raw");
+                    string priorStructurePath = System.IO.Path.Combine(rawDir, "PlanStructure.md");
                     PlanAttemptResumeCandidate? resumeCandidate = null;
                     string? resumedFrom = null;
 
                     if (needsPlanStructure)
                     {
-                        rawDir = System.IO.Path.Combine(outputRoot, "Jobs", jobName, "raw");
                         if (!System.IO.Directory.Exists(rawDir)) System.IO.Directory.CreateDirectory(rawDir);
-
-                        priorStructurePath = System.IO.Path.Combine(rawDir, "PlanStructure.md");
 
                         if (System.IO.File.Exists(priorStructurePath))
                         {
@@ -2126,7 +2127,7 @@ namespace ReSet.Core.Services
                             {
                                 progressScope.AddTask("phase1", "1/3. 브레인스토밍 중...");
                                 var brainstormResult = await WrapWithProgress(_consolidatorService.BrainstormBatchPlanAsync(specsCopy, targetLanguage, jobName, _consolidatorEffort, cancellationToken), progressScope, "phase1");
-                                await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir!, "Brainstorming.md"), brainstormResult.Content);
+                                await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(rawDir, "Brainstorming.md"), brainstormResult.Content);
                                 currentBrainstorming = brainstormResult.Content;
 
                                 progressScope.AddTask("phase2", "2/3. 목차 설계 중...");
@@ -2135,7 +2136,7 @@ namespace ReSet.Core.Services
                                     planResult.Content, specReturnCodes, specTargetTables);
                                 currentPlanStructure = planEnrichment.Markdown;
                                 NotifyDroppedTableDeclarations(jobName, planEnrichment);
-                                await System.IO.File.WriteAllTextAsync(priorStructurePath!, currentPlanStructure);
+                                await System.IO.File.WriteAllTextAsync(priorStructurePath, currentPlanStructure);
                             }
 
                             attemptJournal.OpenRun(currentPlanStructure, "run-start", resumedFrom);

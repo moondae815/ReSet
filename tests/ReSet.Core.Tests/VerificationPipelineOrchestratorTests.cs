@@ -2958,6 +2958,11 @@ namespace ReSet.Core.Tests
         private sealed class ProgressScopeActivityTracker
         {
             public int ActiveCount;
+            // [리뷰 잔여 (2)] ActiveCount만으로는 "프롬프트 시점에 0이었다"가 "스코프가
+            // 아예 한 번도 안 열렸다"와 구별되지 않는다 - CreateProgressScope 호출
+            // 자체가 사라지는 변경도 ActiveCount==0인 채 초록으로 통과한다. Peak은
+            // 감소하지 않는 최댓값이라 "스코프가 한 번이라도 열렸다"를 남긴다.
+            public int Peak;
         }
 
         private sealed class TrackingProgressScope : IMultiProgressScope
@@ -2968,6 +2973,7 @@ namespace ReSet.Core.Tests
             {
                 _tracker = tracker;
                 _tracker.ActiveCount++;
+                _tracker.Peak = Math.Max(_tracker.Peak, _tracker.ActiveCount);
             }
 
             public void AddTask(string taskName, string description) { }
@@ -2990,6 +2996,16 @@ namespace ReSet.Core.Tests
         /// 전 코드로 되돌리면(프롬프트를 다시 progressScope using 블록 안으로) 이 시험은
         /// ActiveCount=1을 관측해 빨개진다 - 고친 채로는 프롬프트가 progressScope가
         /// 열리기 전에 불려 ActiveCount=0을 관측하고 초록이다.
+        ///
+        /// [2026-09-12 리뷰 잔여 (2)] ActiveCount==0만으로는 "스코프가 아예 한 번도
+        /// 안 열렸다"와 구별되지 않는다 - <c>Peak</c>을 추가해 최소 한 번은 열렸음을
+        /// 잠갔다. **되돌림으로 확인한 한계**: 이 아래쪽 "배치 계획 수립" 스코프
+        /// (:2121 부근)만 단독으로 무력화하면 이후 L2 리뷰 스코프("배치 계획 L2 리뷰",
+        /// :2634 부근)가 여전히 열려 <c>Peak</c>이 그대로 남아 이 시험은 초록을 유지한다
+        /// - 즉 이 가드는 "이 흐름에서 어떤 진행률 스코프든 최소 하나는 열렸다"만
+        /// 보장하지, "이 특정 스코프가 열렸다"는 보장하지 않는다. 두 스코프를 함께
+        /// 무력화하면(전체 흐름에서 진행률 스코프 생성이 완전히 사라지면) 이 시험은
+        /// 실제로 빨개진다(직접 확인함). 이 잔여 한계는 알려진 채로 남긴다.
         /// </summary>
         [Fact]
         public async Task RunConsolidatedPipeline_WhenResumeCandidateFound_PromptIsNotCalledWhileProgressScopeIsActive()
@@ -3061,6 +3077,10 @@ namespace ReSet.Core.Tests
 
             Assert.NotNull(activeCountWhenPrompted);
             Assert.Equal(0, activeCountWhenPrompted);
+            // 가드가 겨냥한 조합("진행률 스코프가 활성인 동안 프롬프트가 불린다")은
+            // 스코프가 아예 열리지 않아도 위 두 단언을 공허하게 통과시킨다 - 스코프가
+            // 최소 한 번은 열렸다는 것 자체를 여기서 잠근다.
+            Assert.True(tracker.Peak >= 1);
         }
 
         /// <summary>
