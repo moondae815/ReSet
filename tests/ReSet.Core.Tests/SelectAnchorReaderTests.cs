@@ -81,7 +81,7 @@ SELECT MIN(A.PLTID), MAX(A.PLTID) FROM SETTLE_POQ_DB.dbo.TSettleMst A WHERE A.YM
 
         /// <summary>
         /// POQSettleBatch1/S14 그대로(줄 그대로 오려냄) - 코퍼스 16 건 중 절반이 쓰는
-        /// <c>-- SELECT n:</c> 표기. 위 <see cref="CursorSourceStep"/>·<see cref="DmlOnlyStep"/>
+        /// <c>-- SELECT n:</c> 표기. 위 <see cref="BlockSelectAnchorStep"/>·<see cref="DmlOnlyStep"/>
         /// 은 전부 <c>/* … */</c> 형이라, 실물 절반을 지고 있는 이 갈래에 단위 커버리지가
         /// 없었다(그 부재가 착수 전 분모를 8로 잘못 재게 한 원인).
         /// </summary>
