@@ -62,7 +62,7 @@ P2: *"재료를 도입해도 커버리지가 전건이 아니면 다시 난다"*
 
 **단계 검사가 받는 재료** — `knownTableNames` · `conditionColumnsByProcedure` · `stepInterfaces` ·
 `runRowOwnedTables` · `statementFactsByProcedure`. **`SpecExpectations`는 전달되지 않는다**
-(`VerificationPipelineOrchestrator.cs:3238`의 호출 인자에 없다).
+(`VerificationPipelineOrchestrator.cs:4521`의 호출 인자에 없다).
 
 **쓸 수 있는 기준값** — 확인한 것만 적는다.
 
