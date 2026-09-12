@@ -318,10 +318,11 @@ namespace ReSet.Core.Services
         /// <summary>
         /// SQL 펜스 안에서 <c>/* SELECT n: … */</c> 로 적힌 앵커의 서수를 나온 순서대로 낸다.
         ///
-        /// [왜 문장이 아니라 주석인가 - 착수 전 실측] 코퍼스의 SELECT 앵커 여덟 중 일곱이
-        /// <c>DECLARE … CURSOR FOR SELECT</c> 안에 있다. 커서 안의 SELECT 는
-        /// <c>SelectStatement</c> 가 아니라 <c>QueryExpression</c> 이라 <c>DmlCollector</c> 가
-        /// 원리적으로 못 본다. <b>주석의 자리는 같으므로</b> 주석을 세면 여덟에 전부 도달한다.
+        /// [왜 문장이 아니라 주석인가 - 착수 전 실측] 코퍼스의 SELECT 앵커는 커서 선언
+        /// (<c>DECLARE … CURSOR FOR SELECT</c>)과 대입문(<c>SELECT @v = …</c>)에 흩어져 있다.
+        /// 커서 안의 SELECT 는 <c>SelectStatement</c> 가 아니라 <c>QueryExpression</c> 이라
+        /// <c>DmlCollector</c> 가 원리적으로 못 본다 - 프로브 실측에서 <b>도달한 앵커가 0</b>
+        /// 이었다. <b>주석의 자리는 같으므로</b> 주석을 세면 전부 도달한다.
         ///
         /// [한계 - 알고 쓴다] 이 값은 「라벨이 명세서에 있는가」만 답한다. 「그 라벨이 옳은
         /// 문장에 붙었는가」는 답하지 못한다 - 문장에 결합하지 않기 때문이다.
