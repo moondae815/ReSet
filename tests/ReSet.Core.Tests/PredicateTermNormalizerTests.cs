@@ -167,5 +167,28 @@ namespace ReSet.Core.Tests
             Assert.Null(Assert.Single(Terms("(A.X = 1 OR B.Y = 2)")).LiteralAsParameter);
             Assert.Null(Assert.Single(Terms("A.YMD = A.AYMD")).LiteralAsParameter);
         }
+
+        // [최종 리뷰 Minor, 2026-09-12] `X = NULL` 은 ANSI_NULLS 아래서 **아무 행도 고르지 않는다.**
+        // 이행이 그것을 `X = @p` 로 바꾸고 비-NULL 을 바인딩하면 고르는 행이 달라지는데, R7 이
+        // NULL 을 평범한 리터럴로 받으면 그 변화가 조용히 일치로 접힌다. 코퍼스의 WHERE 에는
+        // 아직 이 모양이 없다 - 나오기 전에 닫는다.
+        [Fact]
+        public void R7_DoesNotTreatNullAsABindableLiteral()
+        {
+            Assert.Null(Assert.Single(Terms("OutState = NULL")).LiteralAsParameter);
+        }
+
+        // 설계 §8-1 이 「부호 붙은 수·괄호」를 명시했는데 그 형태를 잠그는 시험이 없었다
+        // (최종 리뷰 Minor). 좌변이 리터럴인 경우(한정자 있는 컬럼이 우변)도 함께 잠근다.
+        [Fact]
+        public void R7_AcceptsSignedAndParenthesisedLiterals()
+        {
+            var outState = Assert.Single(Terms("OutState = @p_intOutState")).Normalized;
+            var amount = Assert.Single(Terms("Amount = @p_intAmount")).Normalized;
+
+            Assert.Equal(outState, Assert.Single(Terms("OutState = (2)")).LiteralAsParameter);
+            Assert.Equal(outState, Assert.Single(Terms("2 = A.OutState")).LiteralAsParameter);
+            Assert.Equal(amount, Assert.Single(Terms("Amount = -1")).LiteralAsParameter);
+        }
     }
 }

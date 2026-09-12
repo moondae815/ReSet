@@ -263,10 +263,20 @@ namespace ReSet.Core.Services
             return $"{RenderNormalizedTokens(columnSide)} = @V";
         }
 
-        /// <summary>리터럴 하나 — 부호 붙은 수(`-1`)와 괄호로 감싼 리터럴도 받는다.</summary>
+        /// <summary>
+        /// 리터럴 하나 — 부호 붙은 수(`-1`)와 괄호로 감싼 리터럴도 받는다.
+        ///
+        /// [`NULL` 은 받지 않는다 - 2026-09-12 최종 리뷰 Minor] <c>NullLiteral</c> 도 C# 타입으로는
+        /// <see cref="Literal"/> 이지만, `X = NULL` 은 ANSI_NULLS 아래서 <b>아무 행도 고르지 않는다.</b>
+        /// 이행이 그것을 `X = @p` 로 바꾸고 비-NULL 을 바인딩하면 고르는 행이 달라지는데, R7 이
+        /// NULL 을 평범한 리터럴로 받으면 그 변화가 조용히 일치로 접힌다. 코퍼스의 WHERE 에는 아직
+        /// 이 모양이 없다(실측 2026-09-12) - 실물이 나오기 전에 닫는다. 패턴 순서가 판정이다:
+        /// <c>NullLiteral</c> 갈래가 <see cref="Literal"/> 앞에 있어야 한다.
+        /// </summary>
         private static bool IsLiteralOperand(ScalarExpression? expression) =>
             expression switch
             {
+                NullLiteral => false,
                 Literal => true,
                 UnaryExpression { Expression: Literal } => true,
                 ParenthesisExpression { Expression: var inner } => IsLiteralOperand(inner),
