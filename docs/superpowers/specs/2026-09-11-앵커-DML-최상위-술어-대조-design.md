@@ -522,8 +522,8 @@ BASE 는 §7 과 같은 `58da1f1a`, AFTER 는 §7 의 `6e5365c0`, AFTER2 는 R7 
 | ---: | :--- | :--- | :--- | :--- | :--- |
 | 1 | Batch6/S12 INSERT 4 | SUMMARY_EXTRA · TSettleByOUT | `OUTYMD >= @v_strReqYMD` (S12.md:331) | **참양성** | 원본 INSERT 4 의 WHERE(223~228행)는 `ProcYMD` · `YMD >=` · `ISNULL(OUTYMD,'') <> ''` · `PGNAME IN` · `CompanySalesType IN` · `ExtraSettleFlag = 1` 여섯뿐이고 `OUTYMD >=` 가 **없다**. 그 항은 DELETE 4 의 196행에만 있다. 이행은 DELETE 의 WHERE 를 INSERT 로 베꼈다 |
 | 2 | Batch7/S12 INSERT 4 | SUMMARY_EXTRA · TSettleByOUT | `OUTYMD >= @p_reqYmd` (S12.md:209) | **참양성** | 1 과 같은 자리·같은 원본. 변수 이름만 다르다(R2 가 `@V` 로 지운다) |
-| 3 | Batch4/S15 INSERT 1 | SUMMARY_ETC · TSettleByOUT | `A.OUTSTATE = 9` · `A.USESTATE = 0` · `A.OUTYMD IS NOT NULL` (S15.md:161) | **참양성** | 원본 INSERT 1(81행)의 WHERE(97~109행)는 커서 변수 등식 열둘뿐이고 OUTSTATE 를 거르지 않는다. 앞선 DELETE 1(S15.md:124~131)은 원본 DELETE(59~72행)와 같아 그 키의 **모든** OUTSTATE 행을 지운다. 그래서 이행은 OUTSTATE ≠ 9 집계 행을 지우고 다시 넣지 않는다. `A.USESTATE = 0`·`A.OUTYMD IS NOT NULL` 은 커서가 넘긴 값과 겹쳐 무해하고, 결함을 만드는 항은 `A.OUTSTATE = 9` 하나다 |
-| 4 | Batch6/S13 DELETE 1 | SUMMARY_ETC · TSettleByOUT | `EXISTS (SELECT 1 FROM (SELECT DISTINCT …) K WHERE K.YMD = …TSettleByOUT.YMD AND …)` (S13.md:130~155) | **모양 발화**(§8-2 — 오탐으로 세지 않는다) | 원본은 커서 행 단위 DELETE(59~72행, 변수 등식 열둘)다. 이행은 EXISTS 한 항으로 바꿨고, 검사는 **그 EXISTS 통째가 원본 최상위에 없어서** 발화했다. 그 안에 진짜 결함 둘이 있다 — (가) `K.OUTSTATE = …OUTSTATE`(S13.md:151)는 원본에 없다(OUTSTATE = 9 행만 지운다), (나) `K.CompanySalesType = …`(152)·`K.ExtraSettleFlag = …`(154)는 원본의 `ISNULL(CompanySalesType,4) = ISNULL(@v,4)`·`ISNULL(ExtraSettleFlag,9) = ISNULL(@v,9)`(71~72행)를 버려 NULL 행을 못 지운다. **그러나 검사가 짚은 것은 이 둘이 아니다** — 충실한 치환이었어도 같은 자리에서 같은 모양으로 발화했을 것이다 |
+| 3 | Batch4/S15 INSERT 1 | SUMMARY_ETC · TSettleByOUT | `A.OUTSTATE = 9` · `A.USESTATE = 0` · `A.OUTYMD IS NOT NULL` (S15.md:161) | **참양성** | 원본 INSERT 1(81행)의 WHERE(97~109행)는 커서 변수 등식 **열셋**(평범한 `컬럼 = @v_…` 열하나 + `ISNULL(컬럼,x) = ISNULL(@v,x)` 짝 둘)뿐이고 OUTSTATE 를 거르지 않는다. 앞선 DELETE 1(S15.md:124~131)은 원본 DELETE(59~72행)와 같아 그 키의 **모든** OUTSTATE 행을 지운다. 그래서 이행은 OUTSTATE ≠ 9 집계 행을 지우고 다시 넣지 않는다. `A.USESTATE = 0`·`A.OUTYMD IS NOT NULL` 은 커서가 넘긴 값과 겹쳐 무해하고, 결함을 만드는 항은 `A.OUTSTATE = 9` 하나다 |
+| 4 | Batch6/S13 DELETE 1 | SUMMARY_ETC · TSettleByOUT | `EXISTS (SELECT 1 FROM (SELECT DISTINCT …) K WHERE K.YMD = …TSettleByOUT.YMD AND …)` (S13.md:130~155) | **모양 발화**(§8-2 — 오탐으로 세지 않는다) | 원본은 커서 행 단위 DELETE(59~72행, 변수 등식 **열셋** — 평범한 등식 열하나 + `ISNULL` 짝 둘)다. 이행은 EXISTS 한 항으로 바꿨고, 검사는 **그 EXISTS 통째가 원본 최상위에 없어서** 발화했다. 그 안에 진짜 결함 둘이 있다 — (가) `K.OUTSTATE = …OUTSTATE`(S13.md:151)는 원본에 없다(OUTSTATE = 9 행만 지운다), (나) `K.CompanySalesType = …`(152)·`K.ExtraSettleFlag = …`(154)는 원본의 `ISNULL(CompanySalesType,4) = ISNULL(@v,4)`·`ISNULL(ExtraSettleFlag,9) = ISNULL(@v,9)`(71~72행)를 버려 NULL 행을 못 지운다. **그러나 검사가 짚은 것은 이 둘이 아니다** — 충실한 치환이었어도 같은 자리에서 같은 모양으로 발화했을 것이다 |
 
 **사라진 좌표(§7-3 #5)도 열어 확인했다.** Batch4/S11 UPDATE 1 은 원본 `OutState = 2`(PROC_ETC 97행)를 이행이 `OutState = @p_intOutState`(S11.md:221)로 올린 자리다. 그 UPDATE 의 실행 자리는 `execute(SQL_UPDATE_MISS, …)` 하나(S11.md:71~76)이고 거기서 `p_intOutState: 2`(S11.md:75)를 바인딩한다. 고르는 행이 같으므로 **결함이 아니다**. R7 이 이 자리를 일치로 돌렸고, 문장별 덤프에서 결말이 `Matched` 임을 확인했다. R7 이 막는 것은 여기까지다 — 다른 값을 바인딩했다면 조용했을 것이다(§5 의 R7 대가).
 
@@ -548,6 +548,17 @@ BASE 는 §7 과 같은 `58da1f1a`, AFTER 는 §7 의 `6e5365c0`, AFTER2 는 R7 
 
 - **기대대로 Matched 가 +1, Fired 가 −1 이고 나머지 일곱은 전부 0 이다.** 곧 R7 은 한 문장을 발화에서 일치로 옮겼을 뿐, 도달 자체(383)를 줄이지 않았다. 침묵으로 숨긴 것이 아니다 — 침묵 분모 S1~S5·E1~E3 이 한 칸도 늘지 않았다.
 - **합이 앵커 창을 덮는다.** 383 + 12 + 31 + 8 + 0 + 0 + 0 = **434** = 「앵커가 서수로 해결된 문장 수」. 빠진 문장이 없다.
+
+**「R7 이 무엇을 조용히 시켰는가」는 층이 둘이고, 위 표는 그중 하나만 닫는다.**
+
+- **(i) 문장 층 — 출구가 셋이고 셋 다 커밋된 보고서 둘만으로 닫힌다.**
+  - `Fired` → `Matched`: 「발화한 문장 수」가 5 → 4 로 내려간다(그리고 일치가 378 → 379 로 오른다). 실측이 정확히 이것이다.
+  - `Matched` → `Fired`: P 발화 목록에 **새 행**으로 뜬다. 새 좌표는 0 이었다.
+  - `Fired` → 침묵: S1·S2·S3·S5·E2·E3 중 하나가 오르고 「대조까지 간 문장 수」가 383 아래로 내려간다. 여섯이 모두 불변이고 383 도 그대로다.
+  - 곧 **문장 하나가 발화에서 일치로 옮겨간 것 말고는 아무 일도 없었다**는 결론은 커밋된 두 보고서(AFTER·AFTER2)만으로 재현된다.
+- **(ii) 항 층 — 위 논증이 닫지 못하는 잔여가 하나 있다.** `Fired` 로 **남은** 문장이 자기 `Added` 항 가운데 하나를 R7 에 흡수당해도, 좌표 차분은 항 칸이 없어서 못 보고 침묵 분모도 항을 세는 자가 없어서 못 본다(E1 은 오케스트레이션 면제 **항** 수이지 R7 의 자가 아니다). 발화 좌표 넷은 그대로인 채 발화 **사유**만 얇아지는 경우다.
+  - **이 층은 문장별 덤프 둘을 통째로 맞대어 닫았다.** AFTER(`probe.tsv`)와 AFTER2(`dump-t9.tsv`)는 각각 **434 행**이고, `diff` 결과 **다른 줄이 정확히 하나**다 — Batch4/S11 `UPDATE 1` 행(`Fired` · `ADDED=OutState = @p_intOutState => OUTSTATE = @V` → `Matched` · `ADDED=` 빈칸). **나머지 433 행은 `ADDED` 집합까지 한 글자도 다르지 않다.** 남은 발화 넷의 `ADDED` 항 수도 **3 / 1 / 1 / 1** 로 §9-3 의 「더한 항」과 그대로 맞는다.
+  - **다만 이 마지막 걸음의 근거는 커밋되지 않은 덤프 둘이다.** 보고서만으로는 재현되지 않는다 — 재현하려면 §7-5 의 재현법으로 두 판에서 덤프를 각각 다시 만들어 맞대야 한다. 그러니 **항 층의 근거는 문장 층만큼 단단하지 않다**. 이 한계를 결론으로 쓰지 않는다.
 
 **문장별 덤프 — 커밋하지 않았다. 재현법은 §7-5 의 것을 그대로 썼다.** 같은 코드를 같은 자리(`StepSweepService.cs` 의 `predicateTermOrchestration += evaluation.OrchestrationTermsExempted;` 바로 뒤)에 넣고 `RESET_PROBE_PATH=<덤프> dotnet run --project src/ReSet.Cli -- --sweep` 로 돌렸다. 다른 점 하나: **AFTER2 워크트리를 더럽히지 않으려고 `69cd1a99` 에서 분리한 버리는 워크트리에 probe 를 넣고 돌린 뒤 그 워크트리를 통째로 지웠다**(§7-5 는 제자리에서 고치고 `git checkout --` 로 되돌렸다). 그래서 이 창에서는 AFTER2 워크트리의 `src`·`tests` 가 측정 내내 `69cd1a99` 와 한 바이트도 다르지 않았다.
 
