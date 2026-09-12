@@ -994,6 +994,45 @@ namespace ReSet.Core.Tests
             Assert.Contains("@po_intRetVal INT", error);
         }
 
+        [Fact]
+        public void ValidateBatchStep_FiresWhenOnlyAnotherParametersTypeIsOnTheLine()
+        {
+            // 설계 §1 의 S03 실물 - `@po_intRetVal (INT OUTPUT)`은 적으면서 정작
+            // 바인딩되는 입력 `@pi_strYMD`의 `CHAR(8)`은 안 적는다. 이름만 보는 자는
+            // `@pi_strYMD`가 등장하는 줄(타입 없이)을 「적었다」로 오판해 조용해진다 -
+            // 이름과 타입이 같은 줄에 함께 있어야만 「적었다」로 본다.
+            var markdown = Section("""
+                execute(SQL_UPDATE_1, { p_ret: retVal }) -- @po_intRetVal (INT OUTPUT)
+                execute(SQL_UPDATE_2, { p_ymd: batchYmd }) -- @pi_strYMD
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD CHAR(8)"));
+
+            var error = Assert.Single(result.Errors, e => e.Contains("선언 타입"));
+            Assert.Contains("@pi_strYMD CHAR(8)", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_FiresWhenTheTypeAppearsOnlyInProseNotWithTheName()
+        {
+            // 짝의 반대쪽 - 타입 어휘 `CHAR(8)`이 문서 어딘가(산문)에 있지만
+            // 그 파라미터 이름과 같은 줄이 아니다. 타입만 보는 자는 문서 안에
+            // `CHAR(8)`이 있다는 사실만으로 「적었다」로 오판해 조용해진다.
+            var markdown = Section("""
+                -- CHAR(8) 형식은 배치 YYYYMMDD 규칙을 따른다.
+                execute(SQL_UPDATE_1, { p_ymd: batchYmd }) -- @pi_strYMD
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD CHAR(8)"));
+
+            var error = Assert.Single(result.Errors, e => e.Contains("선언 타입"));
+            Assert.Contains("@pi_strYMD CHAR(8)", error);
+        }
+
         // 지역 변수는 파라미터가 아니다. DECLARE된 이름을 결함으로 들면
         // 모든 단계가 상시 실패한다.
         [Fact]
