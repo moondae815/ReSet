@@ -236,6 +236,20 @@ namespace ReSet.Core.Services
             @"(?:\bU(?!\d{1,2}-)|\b갱신\s*|\bUPDATE\s*|\bINSERT\s*|\bDELETE\s*)(?<ordinal>\d{1,2})\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        /// <summary>
+        /// `SELECT n` 앵커. <see cref="AnchorPattern"/> 보다 <b>엄격하다</b> - 주석이
+        /// `SELECT n:` 으로 시작할 때만 받는다.
+        ///
+        /// [왜 엄격한가 - 착수 전 실측] 느슨하게 잡으면 `/* U1: … (SELECT 1) */` 처럼
+        /// 설명에 종류를 적은 주석이 앵커로 읽힌다. 실물이 그 모양이다
+        /// (`POQSettleBatch6/S13`). 계약이 정한 형식은 `/* SELECT 1: … */` 하나뿐이므로
+        /// 그것만 받으면 오탐 기제가 구조적으로 사라진다.
+        /// 설계: docs/superpowers/specs/2026-09-12-SELECT앵커-대조-설계.md §3
+        /// </summary>
+        private static readonly Regex SelectAnchorPattern = new(
+            @"^\s*(?:/\*|--)\s*SELECT\s*(?<ordinal>\d{1,2})\s*:",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public static IReadOnlyList<StepSqlStatement> Read(string? stepMarkdown) =>
             Read(stepMarkdown, out _);
 
@@ -299,6 +313,53 @@ namespace ReSet.Core.Services
             }
 
             return AttachLineage(statements);
+        }
+
+        /// <summary>
+        /// SQL 펜스 안에서 <c>/* SELECT n: … */</c> 로 적힌 앵커의 서수를 나온 순서대로 낸다.
+        ///
+        /// [왜 문장이 아니라 주석인가 - 착수 전 실측] 코퍼스의 SELECT 앵커 여덟 중 일곱이
+        /// <c>DECLARE … CURSOR FOR SELECT</c> 안에 있다. 커서 안의 SELECT 는
+        /// <c>SelectStatement</c> 가 아니라 <c>QueryExpression</c> 이라 <c>DmlCollector</c> 가
+        /// 원리적으로 못 본다. <b>주석의 자리는 같으므로</b> 주석을 세면 여덟에 전부 도달한다.
+        ///
+        /// [한계 - 알고 쓴다] 이 값은 「라벨이 명세서에 있는가」만 답한다. 「그 라벨이 옳은
+        /// 문장에 붙었는가」는 답하지 못한다 - 문장에 결합하지 않기 때문이다.
+        /// </summary>
+        public static IReadOnlyList<int> ReadSelectAnchors(string? stepMarkdown)
+        {
+            var ordinals = new List<int>();
+            if (string.IsNullOrWhiteSpace(stepMarkdown)) return ordinals;
+
+            foreach (Match fence in FencePattern.Matches(stepMarkdown))
+            {
+                var lexer = new TSql160Parser(initialQuotedIdentifiers: true);
+                var tokens = lexer.GetTokenStream(
+                    new StringReader(fence.Groups["sql"].Value), out var tokenErrors);
+
+                // 토큰화가 실패하면 주석 경계를 알 수 없다 - 이 펜스는 건너뛴다.
+                // Read(…)의 같은 분기와 같은 판단이다.
+                if (tokens == null || tokenErrors is { Count: > 0 }) continue;
+
+                for (int i = 0; i < tokens.Count; i++)
+                {
+                    var token = tokens[i];
+                    if (token.TokenType is not (TSqlTokenType.SingleLineComment
+                                                or TSqlTokenType.MultilineComment))
+                    {
+                        continue;
+                    }
+
+                    if (!PrecededByNewline(tokens, i)) continue; // 꼬리 주석은 앵커가 아니다.
+
+                    var match = SelectAnchorPattern.Match(token.Text);
+                    if (!match.Success) continue;
+
+                    ordinals.Add(int.Parse(match.Groups["ordinal"].Value));
+                }
+            }
+
+            return ordinals;
         }
 
         private static (IReadOnlyList<StepSqlStatement> Statements, int LostStatementCount) ReadFence(string sql)
