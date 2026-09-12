@@ -442,9 +442,9 @@ END";
         /// <summary>
         /// [미결 Minor 4] JobsSkippedForFailure는 <see cref="SpecMaterialCensusRow.FoldedProcedureCount"/>와
         /// 같은 이유로(census 전체의 분모라서) 모든 행에 "같은 값"을 실어야 하지만,
-        /// 그 값을 여덟 행이 전부 "같은 리스트 인스턴스"를 참조하는 방식으로 실으면
+        /// 그 값을 아홉 행이 전부 "같은 리스트 인스턴스"를 참조하는 방식으로 실으면
         /// 안 된다 - 호출자가 한 행의 결과를 IReadOnlyList&lt;string&gt;에서
-        /// List&lt;string&gt;으로 캐스팅해 고치면 나머지 일곱 행도 함께 바뀐다.
+        /// List&lt;string&gt;으로 캐스팅해 고치면 나머지 여덟 행도 함께 바뀐다.
         /// ObjectsWithLoss(소실 목록)는 재료 루프 안에서 매번 새 리스트를 만들어 이
         /// 문제가 없다 - JobsSkippedForFailure만 루프 밖에서 만든 리스트 하나를 모든
         /// 행에 그대로 물려 공유가 생긴다.

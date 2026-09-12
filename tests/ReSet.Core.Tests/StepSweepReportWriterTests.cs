@@ -701,7 +701,7 @@ namespace ReSet.Core.Tests
         }
 
         // [Fix Round 2, 최종 리뷰 Important 2-1] 「재료 분모」 절이 자기 분모를 안
-        // 찍었다 - jobs가 비었거나 프로시저 해석이 전부 실패하면 여덟 행이 전부
+        // 찍었다 - jobs가 비었거나 프로시저 해석이 전부 실패하면 아홉 행이 전부
         // "0 / 0 / 없음"으로 찍혀 "쟀는데 소실이 없다"로 읽힌다. 「침묵 분모」 절이
         // 이미 쓰는 관용구(분모를 숫자로 명시)를 그대로 옮긴다.
         [Fact]
@@ -730,12 +730,12 @@ namespace ReSet.Core.Tests
             Assert.Contains("DDL 파싱 실패 2개", section);
         }
 
-        // [Fix Round 2, 최종 리뷰 Important 2-2] MaterialCensus가 8행을 다 냈어도
+        // [Fix Round 2, 최종 리뷰 Important 2-2] MaterialCensus가 9행을 다 냈어도
         // FoldedProcedureCount가 0이면(jobs가 비었거나 프로시저 해석이 전부 실패한
         // 경우) 표를 그리지 말고 "조사 실패"를 인쇄해야 한다 - 그러지 않으면 "0 / 0 /
-        // 없음" 여덟 줄이 "쟀는데 소실이 없다"는 정상 결과로 읽힌다. 기존
+        // 없음" 아홉 줄이 "쟀는데 소실이 없다"는 정상 결과로 읽힌다. 기존
         // MaterialCensusSectionStatesInvestigationFailedWhenEmpty는 목록 자체가 빈
-        // (Count == 0) 경우만 잡는다 - 이 테스트는 목록은 8행이 다 있지만 분모가 0인
+        // (Count == 0) 경우만 잡는다 - 이 테스트는 목록은 9행이 다 있지만 분모가 0인
         // 다른 실패 양식을 잡는다.
         [Fact]
         public void MaterialCensusSectionStatesInvestigationFailedWhenFoldedProcedureCountIsZero()
@@ -757,6 +757,10 @@ namespace ReSet.Core.Tests
 
             Assert.Contains("조사가 실패했다", section);
             Assert.DoesNotContain("| 재료 |", section);
+            // [Task 11] SpecMaterials.All이 아홉이 된 뒤에도 이 문장이 "여덟 행"이라고
+            // 인쇄하면 카탈로그 크기와 어긋난 거짓 문장을 사용자가 읽는다.
+            Assert.Contains("아홉 행", section);
+            Assert.DoesNotContain("여덟 행", section);
         }
 
         // [Fix Round 2, 최종 리뷰 Important 2-4] 보고서 문장이 실제 코드와 달랐다 -
@@ -779,7 +783,7 @@ namespace ReSet.Core.Tests
         /// 각각 반쪽만 잡는다 - MaterialCensusSectionStatesInvestigationFailedWhenEmpty는
         /// materialCensus.Count == 0(빈 목록)을 손으로 만든 값으로 잡고,
         /// MaterialCensusSectionStatesInvestigationFailedWhenFoldedProcedureCountIsZero는
-        /// FoldedProcedureCount == 0을 손으로 만든 여덟 행으로 잡는다 - 둘 다
+        /// FoldedProcedureCount == 0을 손으로 만든 아홉 행으로 잡는다 - 둘 다
         /// SpecMaterialCensus.Count를 직접 부르지 않는다. "계산은 맞는데 아무도 안
         /// 부른다"와 "부르긴 하는데 결과가 안 이어진다"를 잡는 것은 이 자리뿐이다 -
         /// SpecMaterialCensus.Count(빈 jobs)의 결과를 그대로 Render에 넣어 표

@@ -424,7 +424,7 @@ namespace ReSet.Core.Services
             }
 
             // [Fix Round 2, 최종 리뷰 Important 2-1] 「침묵 분모」 절이 이미 쓰는
-            // 관용구를 그대로 옮긴다 - 분모를 숫자로 인쇄하지 않으면 여덟 행이 전부
+            // 관용구를 그대로 옮긴다 - 분모를 숫자로 인쇄하지 않으면 아홉 행이 전부
             // "0 / 0 / 없음"으로 찍혀도 그것이 "쟀는데 소실이 없다"인지 "애초에 아무
             // 프로시저도 못 접었다"인지 구별할 수 없다. 모든 행에 같은 값이 실려
             // 있으므로(SpecMaterialCensusRow.FoldedProcedureCount 문서 참고) 첫 행만
@@ -437,14 +437,14 @@ namespace ReSet.Core.Services
 
             // [Fix Round 2, 최종 리뷰 Important 2-2] materialCensus.Count == 0 검사만으로는
             // 못 잡는 실패 양식이다 - jobs가 비었거나 프로시저 해석이 전부 실패해도
-            // SpecMaterialCensus.Count는 여덟 행을 그대로 낸다(모두 0 또는 null). 그
-            // 여덟 행을 표로 그대로 그리면 "0 / 0 / 없음"이 "쟀는데 소실이 없다"는
+            // SpecMaterialCensus.Count는 아홉 행을 그대로 낸다(모두 0 또는 null). 그
+            // 아홉 행을 표로 그대로 그리면 "0 / 0 / 없음"이 "쟀는데 소실이 없다"는
             // 정상 결과로 읽힌다 - 분모가 0이면 표 대신 조사 실패를 인쇄한다.
             if (foldedProcedureCount == 0)
             {
                 b.AppendLine(
                     "**조사가 실패했다** - 접은 프로시저 수가 0이다. jobs가 비었거나 프로시저 " +
-                    "해석이 전부 실패했다는 뜻이다. 아래 여덟 행이 모두 \"0 / 0 / 없음\"으로 " +
+                    "해석이 전부 실패했다는 뜻이다. 아래 아홉 행이 모두 \"0 / 0 / 없음\"으로 " +
                     "보이더라도 그것은 「쟀는데 소실이 없다」가 아니라 「잴 대상 자체가 없었다」다.");
                 b.AppendLine();
                 return;
