@@ -43,6 +43,32 @@ SELECT MIN(A.PLTID), MAX(A.PLTID) FROM SETTLE_POQ_DB.dbo.TSettleMst A WHERE A.YM
 ```
 ";
 
+        /// <summary>
+        /// POQSettleBatch1/S14 그대로(줄 그대로 오려냄) - 코퍼스 16 건 중 절반이 쓰는
+        /// <c>-- SELECT n:</c> 표기. 위 <see cref="CursorSourceStep"/>·<see cref="DmlOnlyStep"/>
+        /// 은 전부 <c>/* … */</c> 형이라, 실물 절반을 지고 있는 이 갈래에 단위 커버리지가
+        /// 없었다(그 부재가 착수 전 분모를 8로 잘못 재게 한 원인).
+        /// </summary>
+        private const string DashSelectAnchorStep = @"### S14 단계
+
+```sql
+-- SQL_S14_FIND_TARGET_GROUPS
+-- SELECT 1: 원본 커서 GetDataCrsr의 소스 SELECT - 회수 후 취소된 거래의 그룹 키를 식별
+SELECT DISTINCT
+    A.YMD, A.AYMD, A.INYMD, A.OUTYMD, A.CLIENTID, A.PGNAME, A.MALLID,
+    A.SERVICENAME, A.PRODUCTNAME, A.USESTATE, A.OUTSTATE,
+    A.CompanySalesType, A.ProcYMD, A.ExtraSettleFlag
+  FROM SETTLE_POQ_DB.dbo.TSettleMst A
+  INNER JOIN SETTLE_POQ_DB.dbo.TSettleMst B ON A.PLTID = B.PLTID
+ WHERE B.YMD = @p_batchYmd
+   AND B.OUTSTATE = 9
+   AND B.USESTATE = 1
+   AND A.OUTSTATE = 9
+   AND A.USESTATE = 0
+   AND A.OUTYMD IS NOT NULL;
+```
+";
+
         [Fact]
         public void ReadsSelectAnchorsFromCommentsEvenInsideCursorDeclarations()
         {
@@ -53,6 +79,12 @@ SELECT MIN(A.PLTID), MAX(A.PLTID) FROM SETTLE_POQ_DB.dbo.TSettleMst A WHERE A.YM
         public void DoesNotInventSelectAnchorsWhereOnlyDmlAnchorsExist()
         {
             Assert.Empty(StepSqlStatementReader.ReadSelectAnchors(DmlOnlyStep));
+        }
+
+        [Fact]
+        public void ReadsSelectAnchorsWrittenWithTheDashCommentForm()
+        {
+            Assert.Equal(new[] { 1 }, StepSqlStatementReader.ReadSelectAnchors(DashSelectAnchorStep));
         }
 
         [Fact]
