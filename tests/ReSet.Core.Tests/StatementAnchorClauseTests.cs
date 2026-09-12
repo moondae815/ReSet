@@ -152,8 +152,9 @@ namespace ReSet.Core.Tests
         public async Task AnchorClause_DefinesSelectNotation()
         {
             // 명세서 DML 범위 표는 SELECT 행을 80 개(SP 다섯) 갖는데 계약이 그 표기를
-            // 정하지 않았다. 모델은 이미 `/* SELECT 1: … */` 로 적고 있지만(코퍼스 8,
-            // 전부 명세서와 일치) 계약이 없으면 다음 회차에 다른 표기가 나온다.
+            // 정하지 않았다. 모델은 이미 SELECT 앵커를 적고 있지만(코퍼스 16 —
+            // `/* SELECT n: … */` 8 · `-- SELECT n: … ` 8, 전부 명세서와 일치) 계약이
+            // 없으면 다음 회차에 다른 표기가 나온다.
             // 재는 자: SelectAnchorPairCorpusTests
             await AssertBothCarryAsync(
                 "/* SELECT 1:",
