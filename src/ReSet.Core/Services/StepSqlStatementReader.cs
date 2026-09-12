@@ -318,11 +318,14 @@ namespace ReSet.Core.Services
         /// <summary>
         /// SQL 펜스 안에서 <c>/* SELECT n: … */</c> 로 적힌 앵커의 서수를 나온 순서대로 낸다.
         ///
-        /// [왜 문장이 아니라 주석인가 - 착수 전 실측] 코퍼스의 SELECT 앵커는 커서 선언
-        /// (<c>DECLARE … CURSOR FOR SELECT</c>)과 대입문(<c>SELECT @v = …</c>)에 흩어져 있다.
-        /// 커서 안의 SELECT 는 <c>SelectStatement</c> 가 아니라 <c>QueryExpression</c> 이라
-        /// <c>DmlCollector</c> 가 원리적으로 못 본다 - 프로브 실측에서 <b>도달한 앵커가 0</b>
-        /// 이었다. <b>주석의 자리는 같으므로</b> 주석을 세면 전부 도달한다.
+        /// [왜 문장이 아니라 주석인가 - 실측] 세 겹이 막는다.
+        /// ① <c>DmlCollector</c> 는 Update·Delete·Insert 만 방문한다 - SELECT 는 문장이 되지 않는다.
+        /// ② 방문자를 더해도 <c>AnchorPattern</c>(이 파일 :236)에 <b>SELECT 대안이 없어</b>
+        ///    <c>SELECT n</c> 주석이 앵커로 안 읽힌다 - 그 문장들은 전부 <c>Anchor = null</c> 이 된다.
+        /// ③ <c>AnchorPattern</c> 을 넓히면 산문의 DML 앵커가 SELECT 문장에 붙는다 - 실물
+        ///    <c>POQSettleBatch1/S06:114</c>(`… 원본 INSERT 1 소스 필터 …` 바로 뒤가 SELECT)가 그 모양이고
+        ///    프로브가 실제로 그 하나를 오탐으로 냈다.
+        /// <b>주석의 자리는 이 셋과 무관하므로</b> 주석을 세면 전부 도달한다.
         ///
         /// [한계 - 알고 쓴다] 이 값은 「라벨이 명세서에 있는가」만 답한다. 「그 라벨이 옳은
         /// 문장에 붙었는가」는 답하지 못한다 - 문장에 결합하지 않기 때문이다.
