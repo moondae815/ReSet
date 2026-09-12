@@ -922,6 +922,117 @@ namespace ReSet.Core.Tests
             Assert.DoesNotContain(result.Errors, e => e.Contains("파라미터"));
         }
 
+        // ── 규칙 5-2 [Parameter Type Contract] ──────────────────────────
+        // 설계: docs/superpowers/specs/2026-09-08-파라미터-타입-표기-계약-design.md §6
+        // 검사는 규칙보다 약하다 - 규칙은 바인딩 이름과의 매핑까지 요구하지만 검사는
+        // 「이름과 타입이 같은 줄」까지만 본다(매핑 표기는 Job 마다 흔들린다).
+
+        [Fact]
+        public void ValidateBatchStep_ReportsAParameterWhoseDeclaredTypeIsNotStated()
+        {
+            // 실물 모양: Batch6/S04 - 바인딩 이름만 있고 CHAR(8) 이 어디에도 없다.
+            var markdown = Section("execute(SQL_UPDATE_1, { p_ymd: batchYmd })");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD CHAR(8)"));
+
+            var error = Assert.Single(result.Errors, e => e.Contains("선언 타입"));
+            Assert.Contains("@pi_strYMD CHAR(8)", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_AcceptsAParameterStatedWithItsType()
+        {
+            var markdown = Section("-- @pi_strYMD CHAR(8) -> p_ymd\nexecute(SQL_UPDATE_1, { p_ymd: batchYmd })");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD CHAR(8)"));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("선언 타입"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_FoldsWhitespaceAndCaseWhenMatchingTheDeclaredType()
+        {
+            // 원본 표기는 Job 마다 `varchar(8)`·`VARCHAR (8)` 로 흔들린다. 그 흔들림은
+            // 결함이 아니다 - 공백을 접고 대소문자를 무시해 대조한다.
+            var markdown = Section("-- @pi_strYMD varchar (8) -> p_ymd\nexecute(SQL_X, { p_ymd: batchYmd })");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD VARCHAR(8)"));
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("선언 타입"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_StaysSilentWithoutTheInterfaceMaterial()
+        {
+            // 재료가 없으면 조용히 지나간다 - CheckStepInterface 와 같은 관례.
+            var markdown = Section("execute(SQL_UPDATE_1, { p_ymd: batchYmd })");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions);
+
+            Assert.DoesNotContain(result.Errors, e => e.Contains("선언 타입"));
+        }
+
+        [Fact]
+        public void ValidateBatchStep_ReportsEveryMissingParameterInOneError()
+        {
+            // 설계 §6 - 단계당 한 건으로 접는다. 출력 파라미터도 관할 안이다(§3-1).
+            var markdown = Section("execute(SQL_UPDATE_1, { p_ymd: batchYmd })");
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD CHAR(8)", "@po_intRetVal INT"));
+
+            var error = Assert.Single(result.Errors, e => e.Contains("선언 타입"));
+            Assert.Contains("@pi_strYMD CHAR(8)", error);
+            Assert.Contains("@po_intRetVal INT", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_FiresWhenOnlyAnotherParametersTypeIsOnTheLine()
+        {
+            // 설계 §1 의 S03 실물 - `@po_intRetVal (INT OUTPUT)`은 적으면서 정작
+            // 바인딩되는 입력 `@pi_strYMD`의 `CHAR(8)`은 안 적는다. 이름만 보는 자는
+            // `@pi_strYMD`가 등장하는 줄(타입 없이)을 「적었다」로 오판해 조용해진다 -
+            // 이름과 타입이 같은 줄에 함께 있어야만 「적었다」로 본다.
+            var markdown = Section("""
+                execute(SQL_UPDATE_1, { p_ret: retVal }) -- @po_intRetVal (INT OUTPUT)
+                execute(SQL_UPDATE_2, { p_ymd: batchYmd }) -- @pi_strYMD
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD CHAR(8)"));
+
+            var error = Assert.Single(result.Errors, e => e.Contains("선언 타입"));
+            Assert.Contains("@pi_strYMD CHAR(8)", error);
+        }
+
+        [Fact]
+        public void ValidateBatchStep_FiresWhenTheTypeAppearsOnlyInProseNotWithTheName()
+        {
+            // 짝의 반대쪽 - 타입 어휘 `CHAR(8)`이 문서 어딘가(산문)에 있지만
+            // 그 파라미터 이름과 같은 줄이 아니다. 타입만 보는 자는 문서 안에
+            // `CHAR(8)`이 있다는 사실만으로 「적었다」로 오판해 조용해진다.
+            var markdown = Section("""
+                -- CHAR(8) 형식은 배치 YYYYMMDD 규칙을 따른다.
+                execute(SQL_UPDATE_1, { p_ymd: batchYmd }) -- @pi_strYMD
+                """);
+
+            var result = new MechanicalValidator().ValidateBatchStep(
+                markdown, Step("dbo.TSettleMst"), Catalog, NoConditions,
+                Interfaces("S17", "@pi_strYMD CHAR(8)"));
+
+            var error = Assert.Single(result.Errors, e => e.Contains("선언 타입"));
+            Assert.Contains("@pi_strYMD CHAR(8)", error);
+        }
+
         // 지역 변수는 파라미터가 아니다. DECLARE된 이름을 결함으로 들면
         // 모든 단계가 상시 실패한다.
         [Fact]

@@ -177,13 +177,16 @@ namespace ReSet.Core.Services
                             SweepCondition condition,
                             IReadOnlyDictionary<string, SpecStatementFacts> facts)
                         {
-                            // 오케스트레이터(VerificationPipelineOrchestrator.cs:3238)의
+                            // 오케스트레이터(VerificationPipelineOrchestrator.cs, 그
+                            // ValidateBatchStep 호출 — 2026-09-12 확인 시점 :4521)의
                             // 호출을 그대로 본뜬다. 갈라지면 파이프라인이 실제로 하지
                             // 않는 판정을 재게 된다. stepInterfaces·runRowOwnedTables는
                             // DB 메타데이터가 필요해 로컬에서 만들 수 없다. A~E 어느
-                            // 검사도 그 둘을 읽지 않는다 -
-                            // CheckStepInterface(:600)·CheckFirstStepRowCreation(:1518)만
-                            // 쓴다.
+                            // 검사도 그 둘을 읽지 않는다 - CheckStepInterface(:1091)·
+                            // CheckStepParameterTypeStated(:1183)는 stepInterfaces가
+                            // null이면, CheckFirstStepRowCreation(:2095)은
+                            // runRowOwnedTables가 null이면 각각 조용히 지나간다(소프트
+                            // 스킵) - 셋 다 이 호출에서는 항상 스킵되고, 발화는 항상 0이다.
                             var result = validator.ValidateBatchStep(
                                 markdown, step,
                                 Array.Empty<string>(),

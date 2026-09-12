@@ -556,6 +556,7 @@ namespace ReSet.Core.Services
             SafeCheck(() => CheckUnknownTableReferences(stepMarkdown, step, knownTableNames, result, allSteps));
             SafeCheck(() => CheckMissingConditionColumns(stepMarkdown, step, conditionColumnsByProcedure, result));
             SafeCheck(() => CheckStepInterface(stepMarkdown, step, stepInterfaces, result));
+            SafeCheck(() => CheckStepParameterTypeStated(stepMarkdown, step, stepInterfaces, result));
             SafeCheck(() => CheckBatchControlVocabulary(stepMarkdown, step, result));
             SafeCheck(() => CheckBatchControlRowOrigin(stepMarkdown, step, result));
             SafeCheck(() => CheckFirstStepRowCreation(stepMarkdown, step, runRowOwnedTables, result));
@@ -1156,6 +1157,79 @@ namespace ReSet.Core.Services
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// 단계가 원본 파라미터의 <b>선언 타입</b>을 자기 절에 적었는지 본다 (규칙 5-2).
+        ///
+        /// [무엇을 잡는가 - 실물] `Batch6` 14 단계 중 8 단계가 바인딩 이름만 적고 타입을 안 적는다
+        /// (`execute(SQL_UPDATE_1, { p_ymd: batchYmd })` — `CHAR(8)` 인지 어디에도 없다).
+        /// 바인딩된 값에는 선언 타입이 없어 드라이버가 고른다 — `CHAR` 컬럼과 `NVARCHAR` 파라미터가
+        /// 만나면 데이터 타입 우선순위상 <b>컬럼 쪽이 변환돼</b> 인덱스를 못 쓴다. 금액도 행 집합도
+        /// 안 바뀌지만 정산 테이블 전건 스캔이라 배치에서는 비싸다(설계 §8 — 🟡).
+        ///
+        /// [형제 규칙 5-1 이 왜 이걸 안 덮나] 그 규칙의 처방은 「바인딩으로 강등하지 마라」인데
+        /// <b>파라미터는 바인딩이 필수</b>라 관할 밖으로 명시돼 있다. 같은 물리에 처방이 없는
+        /// 자리를 이 검사가 맡는다.
+        ///
+        /// [입출력을 안 가른다] 재료에 판별자가 없다 — <c>SqlStaticParser</c> 가 `OUTPUT` 수식어를
+        /// 버린다. 「입력만」과 「전부」의 코퍼스 발화가 같아서(설계 §3-1 실측) 재료에 없는 판별자를
+        /// 발명하지 않는 쪽을 고른다.
+        ///
+        /// [검사는 규칙보다 약하다] 규칙 5-2 는 바인딩 이름과의 매핑까지 한 줄에 적으라고 하지만,
+        /// 이 검사는 「이름과 타입이 같은 줄」까지만 본다. 매핑 표기는 Job 마다 흔들리고 타입 표기는
+        /// 안 흔들린다 — 되돌릴 수 없는 사실 하나로 좁힌다.
+        /// </summary>
+        private static void CheckStepParameterTypeStated(
+            string stepMarkdown,
+            BatchStepPlan step,
+            IReadOnlyList<StepInterface>? stepInterfaces,
+            StepValidationResult result)
+        {
+            var iface = stepInterfaces?.FirstOrDefault(
+                i => string.Equals(i.StepCode, step.Code, StringComparison.OrdinalIgnoreCase));
+
+            // 재료가 없다는 사실과 깨끗하다는 사실을 로그에서 구별한다 - 형제와 같은 관례.
+            if (iface == null)
+            {
+                Log.Information(
+                    "{Code}는 원본 인터페이스 재료가 없어 파라미터 타입 표기 대조 대상이 아닙니다.", step.Code);
+                return;
+            }
+
+            // 공백을 접고 대소문자를 무시한 줄. `CHAR(8)`·`char (8)` 이 같은 것으로 대조된다.
+            var folded = stepMarkdown
+                .Split('\n')
+                .Select(line => Regex.Replace(line, @"\s+", string.Empty))
+                .ToList();
+
+            var missing = new List<string>();
+            foreach (var declaration in iface.Parameters)
+            {
+                var trimmed = declaration.Trim();
+                var space = trimmed.IndexOf(' ');
+                if (space <= 0) continue;   // 타입이 없는 선언은 대조할 것이 없다
+
+                var name = Regex.Replace(trimmed[..space], @"\s+", string.Empty);
+                var type = Regex.Replace(trimmed[(space + 1)..], @"\s+", string.Empty);
+
+                var stated = folded.Any(line =>
+                    line.Contains(name, StringComparison.OrdinalIgnoreCase)
+                    && line.Contains(type, StringComparison.OrdinalIgnoreCase));
+
+                if (!stated) missing.Add(trimmed);
+            }
+
+            if (missing.Count == 0) return;
+
+            // 단계당 한 건으로 접는다 - 파라미터가 여럿이면 한 오류에 나열한다(설계 §6).
+            result.Errors.Add(
+                $"{step.Code} 섹션이 원본 파라미터의 선언 타입을 적지 않습니다: " +
+                $"{string.Join(", ", missing.Select(m => $"`{m}`"))}. " +
+                "바인딩된 값에는 선언 타입이 없어 드라이버가 고릅니다 - CHAR 컬럼과 NVARCHAR " +
+                "파라미터가 만나면 컬럼 쪽이 변환돼 인덱스를 못 쓰고 정산 테이블을 전건 스캔합니다. " +
+                "이름과 선언 타입을 이 절 안에 한 줄로 적으십시오(기계 확정 인터페이스 표의 철자를 " +
+                "그대로 옮깁니다).");
         }
 
         /// <summary>

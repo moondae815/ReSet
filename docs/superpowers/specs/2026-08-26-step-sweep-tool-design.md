@@ -91,7 +91,7 @@ CLI에 남는 것은 파일 읽기와 마크다운 쓰기뿐이고, 그 둘은 �
 
 ## 3. 입력 계약
 
-`VerificationPipelineOrchestrator.cs:3238`의 호출을 그대로 본뜬다. 갈라지면 스윕이
+`VerificationPipelineOrchestrator.cs:4521`의 호출을 그대로 본뜬다. 갈라지면 스윕이
 파이프라인이 실제로 하지 않는 판정을 재게 된다.
 
 | `ValidateBatchStep` 인자 | 출처 | 로컬 가용성 |
