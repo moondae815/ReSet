@@ -139,6 +139,17 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task Critic_ShouldCheckThatEachParameterCarriesItsDeclaredType()
+        {
+            // 규칙 5-2 의 짝. 규칙이 타입 표기를 요구하는데 채점이 그 축을 안 보면
+            // 자가 수정이 닿지 않아 회차를 아무리 돌려도 절반만 적는 상태가 유지된다.
+            var prompt = await CaptureCriticPromptAsync();
+
+            Assert.Contains("declared type", prompt);
+            Assert.Contains("non-sargable", prompt);
+        }
+
+        [Fact]
         public async Task Critic_ShouldCheckTheStatementAnchors()
         {
             var prompt = await CaptureCriticPromptAsync();
