@@ -151,8 +151,11 @@ namespace ReSet.Core.Tests
         [Fact]
         public async Task AnchorClause_DefinesSelectNotation()
         {
-            // 명세서 DML 범위 표는 SELECT 행을 80 개(SP 다섯) 갖는데 계약이 그 표기를
-            // 정하지 않았다. 모델은 이미 SELECT 앵커를 적고 있지만(코퍼스 16 —
+            // 명세서 DML 범위 표(ReadDmlRows 가 읽는 기계 확정 표)는 SELECT 행을 10 개
+            // (SP 다섯: PROC_ETC 6 · INS_EXTRA 1 · Summary_AcqManual 1 · SUMMARY_ETC 1 ·
+            // SUMMARY_EXTRA 1) 갖는데 계약이 그 표기를 정하지 않았다(파일 전체를 grep
+            // 하면 80 - 집합 술어 표 등 표 밖의 다른 셀도 걸린다. ReadDmlRows 가 보는
+            // 것은 표 하나뿐이다). 모델은 이미 SELECT 앵커를 적고 있지만(코퍼스 16 —
             // `/* SELECT n: … */` 8 · `-- SELECT n: … ` 8, 전부 명세서와 일치) 계약이
             // 없으면 다음 회차에 다른 표기가 나온다.
             // 재는 자: SelectAnchorPairCorpusTests

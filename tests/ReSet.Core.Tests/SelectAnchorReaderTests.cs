@@ -20,7 +20,9 @@ namespace ReSet.Core.Tests
     /// </summary>
     public class SelectAnchorReaderTests
     {
-        /// <summary>POQSettleBatch7/S15 그대로 - 커서 선언 안이라 문장이 되지 않는다.</summary>
+        /// <summary>POQSettleBatch7/S15 모양 - 방문자가 SELECT 를 안 보고 봐도
+        /// <c>AnchorPattern</c> 에 SELECT 대안이 없어 문장에 결합되지 않는다(설계서 §2
+        /// ①②) - "커서 선언 안이라서"가 아니다(§2 정정 두 번째가 그 설명을 반증했다).</summary>
         private const string CursorSourceStep = @"### S15 단계
 
 ```sql
