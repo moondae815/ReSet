@@ -178,11 +178,11 @@ namespace ReSet.Core.Tests
         /// <summary>
         /// [왜 이 테스트인가 - Fix Round 2, 2026-08-29 리뷰 Important 4] 카탈로그 잠금
         /// (`EverySpecReader_IsListedInTheCatalog`)은 `Spec*Extractor` 타입 이름 집합만
-        /// 대조한다. 그런데 재료 여덟 중 넷은 리더 하나(`SpecStatementFactsExtractor`)가
-        /// 낸다 - `SpecStatementFacts`의 public 멤버 넷(`DmlRows`·`SetTargets`·
-        /// `LocalVariables`·`ErrorCodeToOrdinal`)이 각각 한 재료다. 누가 그 레코드에
-        /// 다섯째 멤버를 더하면 리더 이름은 그대로라 `EverySpecReader_IsListedInTheCatalog`는
-        /// 계속 초록이고, 카탈로그는 여덟에 머물고, census는 그 재료를 안 세고, 보고서에
+        /// 대조한다. 그런데 재료 아홉 중 다섯은 리더 하나(`SpecStatementFactsExtractor`)가
+        /// 낸다 - `SpecStatementFacts`의 public 멤버 다섯(`DmlRows`·`SetTargets`·
+        /// `LocalVariables`·`ErrorCodeToOrdinal`·`IsL1Exhausted`)이 각각 한 재료다. 누가 그
+        /// 레코드에 여섯째 멤버를 더하면 리더 이름은 그대로라 `EverySpecReader_IsListedInTheCatalog`는
+        /// 계속 초록이고, 카탈로그는 아홉에 머물고, census는 그 재료를 안 세고, 보고서에
         /// 행조차 안 생긴다 - `SpecMaterialCensusTests.Count_EveryMaterialInCatalog_AppearsAsARow`가
         /// "가장 조용한 실패 양식"이라 부르는 그것인데, 그 테스트는 카탈로그 대비 census만
         /// 보지 코드(SpecStatementFacts 레코드) 대비 카탈로그는 안 본다. 이 테스트가 그

@@ -63,7 +63,7 @@ namespace ReSet.Core.Services
         /// 이 Job의 명세서·DDL을 접다가 예외가 나서 census에서 통째로 건너뛴 Job
         /// 이름. StepSweepService가 이미 지키는 per-job try/catch 관용구
         /// (jobsThatThrew)를 census 자신의 루프 안으로도 내린 결과다 - 이 가드가
-        /// 없으면 Job 하나의 결함이 여덟 재료 × 전체 Job의 census를 통째로 날리고
+        /// 없으면 Job 하나의 결함이 아홉 재료 × 전체 Job의 census를 통째로 날리고
         /// 어느 Job이 던졌는지도 안 남는다. 모든 행에 같은 값이 실린다 - 이유는
         /// <see cref="FoldedProcedureCount"/>와 같다.
         /// </summary>
@@ -73,9 +73,10 @@ namespace ReSet.Core.Services
     /// <summary>
     /// 명세서 재료가 원본 DDL 대비 소실됐는지, 프로시저 단위로 센다.
     ///
-    /// [카탈로그는 여덟인데 이 회차가 실제로 세는 것은 훨씬 적다] SpecMaterials.All은
-    /// Task 1이 확정한 여덟 재료를 전부 싣지만, 이 계기가 양쪽(DDL 사실 · 명세서
-    /// 행) 모두를 실제로 낼 수 있는 재료는 LocalVariables 하나뿐이다
+    /// [카탈로그는 아홉인데 이 회차가 실제로 세는 것은 훨씬 적다] SpecMaterials.All은
+    /// Task 1이 확정한 여덟에 IsL1Exhausted가 더해진 아홉 재료를 전부 싣지만, 이
+    /// 계기가 양쪽(DDL 사실 · 명세서 행) 모두를 실제로 낼 수 있는 재료는
+    /// LocalVariables 하나뿐이다
     /// (<see cref="SpecCountedMaterials"/>·<see cref="DdlCountedMaterials"/> 참고).
     /// 나머지는 대응물이 없어서(DdlCounterpart == null) 잴 수 없거나, 대응물은
     /// 있지만 이 회차가 그 리더를 아직 안 만들어서 안 쟀다 - 두 경우 모두 그 값은
@@ -300,7 +301,7 @@ namespace ReSet.Core.Services
             // [미결 Minor 4 - 리스트 인스턴스를 공유하지 않는다] JobsSkippedForFailure는
             // "같은 값"을 모든 행에 실어야 하지만 "같은 리스트 인스턴스"를 실으면
             // 안 된다 - 호출자가 한 행의 결과를 IReadOnlyList<string>에서
-            // List<string>으로 캐스팅해 고치면 여덟 행이 함께 바뀐다. 재료 루프 안에서
+            // List<string>으로 캐스팅해 고치면 아홉 행이 함께 바뀐다. 재료 루프 안에서
             // 매번 새로 만드는 loss(ObjectsWithLoss)는 이 문제가 원래 없다 - 여기서도
             // 같은 모양으로 행마다 독립된 배열을 만든다.
             return rows

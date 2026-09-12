@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace ReSet.Core.Services
 {
-    /// <summary>단계 검사 다섯 개. 미분류는 조용히 접지 않고 따로 센다.</summary>
+    /// <summary>단계 검사 여섯 개. 미분류는 조용히 접지 않고 따로 센다.</summary>
     public enum SweepCheck { A, B, C, D, E, P, Unclassified }
 
     /// <summary>
@@ -12,7 +12,7 @@ namespace ReSet.Core.Services
     /// </summary>
     public enum SweepCondition { AsIs, SimulatedCache17 }
 
-    /// <summary>발화 하나. Kind·Ordinal·Items는 검사 B·C에서만 채워진다.</summary>
+    /// <summary>발화 하나. Kind·Ordinal은 검사 B·C·P에서, Items는 검사 B·C에서만 채워진다.</summary>
     public sealed record SweepFinding(
         string JobName,
         string StepCode,

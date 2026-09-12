@@ -9300,12 +9300,23 @@ namespace ReSet.Core.Services
                     r.Ordinal == group.Key.Ordinal &&
                     r.Kind.Equals(group.Key.Kind, StringComparison.OrdinalIgnoreCase) &&
                     r.TargetTable.Equals(target, StringComparison.OrdinalIgnoreCase)).ToList();
+                // [E2 - 여기서는 문장을 통째로 끊는다] 검사 B·C 는 같은 면제로 기준선만
+                // 넓히고(B 는 CursorKeys 를 relocated 에, C 는 SourcePredicates 를 known 에)
+                // 나머지 항을 계속 견주는데, 이 검사는 항 대조를 아예 하지 않는다.
+                // §2-4 S4 가 허용하는 모양이지만 둘 중 넓은 쪽이라 대가로 적었다 -
+                // 설계 §5(리뷰 Minor 2, 2026-09-12). 오늘 코퍼스에서 8 문장이 여기로 온다.
                 if (candidates.Count == 1 && cursorExemptions.ContainsKey(candidates[0]))
                 {
                     evaluations.Add(Silent(PredicateTermOutcome.CursorExempt));
                     continue;
                 }
 
+                // [E3 - 그룹 단위다, 조각 단위가 아니다] Any 라서 조각 하나가 스테이징만
+                // 읽으면 (종류, 서수) 그룹이 통째로 침묵한다. 같은 헬퍼를 쓰는 검사 C 는
+                // 조각마다 판정하므로(SelectMany 안의 조각별 삼항) 청크로 갈린 그룹에서
+                // 둘이 갈릴 수 있다 - 이 검사는 조용하고 C 는 말한다. 오늘 코퍼스는 E3 가
+                // 0(계보 원천이 없어 도달 불가)이라 All 로 바꿔도 검증할 표본이 없다 -
+                // 조율자 판정(2026-09-12)은 바꾸지 않고 이 선택을 적는 것이다. 설계 §5 (c).
                 if (group.Any(a => ReadsOnlyStaging(a.Statement, specTargets)))
                 {
                     evaluations.Add(Silent(PredicateTermOutcome.StagingExempt));

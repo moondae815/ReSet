@@ -93,9 +93,9 @@ Job 별 도달(앵커 DML / 도달):
 
 | 침묵 | 조건 |
 | :--- | :--- |
-| S1 | 원본 DDL 이 없다 |
+| S1 | 원본 DDL **사전이 통째로** 없다(`ddlByProcedure` 가 null 이거나 비었다). **이 SP 의 DDL 만 없는 자리는 여기 오지 않고 키가 없어 S2 로 떨어진다** — §5 (a) |
 | S2 | 키가 없거나 모호하다. 모호한 키는 N5 처럼 **제거한다**. Batch6 의 U-앵커와 종류별 서수가 어긋나는 자리(`AnchorKindOrdinalPairTests` 불일치 8)가 대상 테이블 불일치로 여기에 떨어진다 — §6 참고 |
-| S3 | 원본의 최상위 항이 0 이다 |
+| S3 | 원본의 최상위 항 중 **조인 등식을 뺀 것**이 0 이다. 곧 원본 최상위가 조인 등식뿐이면 문장이 통째로 조용해진다 — §5 (b) |
 | S4 | E2 또는 E3 에 해당한다 |
 | S5 | 원본 명세서에 `VerificationBanner.L1Exhausted` 배너가 있다(오늘 31 편 중 0). L2 거절 배너는 막지 않는다 |
 
@@ -167,6 +167,10 @@ Job 별 도달(앵커 DML / 도달):
 - 조인 등식은 N5 에 맡긴다.
 - 키가 어긋난 U-앵커 자리(Batch6)는 도달하지 못한다(S2).
 - E2 가 Batch6/S13 을 덮지 못한다.
+- **E2 는 이 검사에서 문장을 통째로 침묵시킨다 — 검사 B·C 는 같은 면제로 기준선만 넓히고 대조를 계속한다**(리뷰 Minor 2, 2026-09-12). B 는 `CursorGroupExemption.CursorKeys` 를 `relocated` 에, C 는 `SourcePredicates` 를 `known` 에 더한 뒤 나머지 항을 계속 견주는데, 이 검사는 `CursorExempt` 로 끊어 항 대조를 아예 하지 않는다. §2-4 S4 가 허용하는 모양이지만 둘 중 넓은 쪽이다. 오늘 코퍼스의 **8 문장**이 B·C 는 대조를 받고 이 검사는 받지 않는 자리다.
+- **(a) S1 은 사전 단위다**(리뷰 Important 2, 2026-09-12). `hasDdl = ddlByProcedure != null && ddlByProcedure.Count > 0` 이므로 **자기 SP 의 DDL 만 없는 단계는 S1 에 오지 않는다** — 키를 못 찾아 S2 로 떨어진다. 곧 S2 분모는 「키 불일치」와 「이 SP 의 DDL 부재」를 섞어 담는다. §7-5·§9-4 의 S2 12 를 읽을 때 이 섞임을 먼저 본다.
+- **(b) S3 은 「항이 0」이 아니라 「조인 등식이 아닌 항이 0」이다.** `originalTerms = originalAll.Where(t => !t.IsJoinEquality)` 가 비면 침묵한다. 원본 최상위가 조인 등식뿐인 자리라면 이행이 **행을 좁히는 진짜 술어를 더해도 조용하다.** 오늘 S3 31 문장 중 그 모양이 몇인지는 재지 않았다.
+- **(c) E3 는 그룹 단위다.** `group.Any(a => ReadsOnlyStaging(...))` 라 조각 하나가 스테이징만 읽으면 `(종류, 서수)` 그룹이 통째로 침묵한다 — 같은 헬퍼를 쓰는 검사 C 는 조각마다 판정한다(`SelectMany` 안의 조각별 삼항). 청크로 갈린 그룹에서 한 조각이 스테이징만 읽고 다른 조각이 실제 원천을 읽으면 **이 검사는 조용하고 C 는 말한다.** 오늘 코퍼스는 E3 가 0(계보 원천이 없어 도달 불가)이라 `Any` → `All` 로 바꿔도 검증할 표본이 없다 — **조율자 판정(2026-09-12): 바꾸지 않고 기록한다.** 아래의 「명세서가 DML 범위 표를 잃으면 E3 가 넓어진다」와 이 그룹 단위 적용은 겹쳐 쌓인다.
 - **명세서가 DML 범위 표를 잃으면 E3 가 넓어진다**(Task 5 리뷰, 2026-09-11). 스테이징 대상 집합(`BuildSpecTargets`)이 비면, 계보를 가진 모든 앵커 문장이 「스테이징만 읽는다」로 면제된다. 오라클이 원본 DDL 이어도 면제 판정이 명세서 표에 기대는 자리가 있다는 뜻이다. 검사 C 도 같은 자리를 공유한다. 스윕의 E3 분모가 급증하면 이 경로를 먼저 의심한다.
 - **R7 의 대가**(§8-1, 2026-09-12): 이행이 원본 리터럴을 매개변수로 바꾸고 **다른 값을 바인딩**하면 조용하다 — Batch4/S11 이 2 가 아니라 3 을 바인딩해도 못 본다. 대가 1(R2 — 변수 동일성을 안 본다)과 같은 부류다.
 - **커서 → EXISTS 집합 치환은 모양으로 발화한다**(§8-2, 2026-09-12). 행을 순회하는 커서(GROUP BY 없음 — E2 밖)를 EXISTS 로 **충실히** 옮겨도, 원본 최상위에 EXISTS 항이 없으므로 발화한다. 발화문은 문자 그대로 참이지만 행을 좁히는 실제 조건을 짚지 않는다. 오늘 코퍼스의 실물은 Batch6/S13 DELETE 1 하나이고, 그 자리는 진짜 결함 위에 났다.
@@ -284,6 +288,8 @@ if (!string.IsNullOrEmpty(probePath))
 | 5 | Batch4/S11 UPDATE 1 | PROC_ETC · TSettleMiss | `OutState = @p_intOutState` (S11.md:221) | **오탐** | 원본은 `OutState = 2`(97행)다. 이행은 리터럴 2 를 매개변수로 올렸다. 이 UPDATE 의 실행 자리는 `execute(SQL_UPDATE_MISS, …)` 하나(S11.md:71~76)이고, 거기서 `p_intOutState: 2` 를 바인딩한다(S11.md:75). 고르는 행이 같다. 원인은 아래 셋째 글머리 |
 
 - **3 의 결함.** 원본 INSERT 1(81행)의 WHERE(97~109행)는 커서 변수 등식뿐이고 OUTSTATE 를 거르지 않는다. 그래서 같은 키의 OUTSTATE ≠ 9 행까지 다시 집계한다. GROUP BY 에도 OUTSTATE 가 있다. 앞선 DELETE 1(S15.md:124, 원본 59행과 일치)은 OUTSTATE 와 무관하게 그 키의 행을 모두 지운다. 따라서 이행은 **OUTSTATE ≠ 9 집계 행을 지우고 다시 넣지 않는다.** `A.USESTATE = 0` 과 `A.OUTYMD IS NOT NULL` 은 커서가 넘긴 `@p_UseState`(=0)·`@p_OutYMD`(비 NULL)와 겹친다.
+- **3 은 BASE 에서도 검사 C 가 같은 좌표·같은 컬럼에 발화하고 있었다**(리뷰 Important 1, 2026-09-12). `sweeps/2026-09-11-step-sweep-base.md` 의 C 목록 11·12 행이 `POQSettleBatch4 | S15 | INSERT 1 | OUTSTATE`(조건 A·B 둘)다. AFTER·AFTER2 보고서에도 같은 두 행이 그대로 있다. 곧 이 좌표에서 **L1 은 BASE 에서 이미 이 문장의 이 컬럼을 말하고 있었고**, P 가 새로 더한 것은 좌표가 아니라 **사유의 단위**다 — C 는 「`OUTSTATE` 가 원본 술어 컬럼에 없다」를 말하고, P 는 더한 항 원문 `A.OUTSTATE = 9` 를 싣는다. 이 브랜치가 **다른 검사가 보지 못하던 자리**에서 연 것은 1·2(S12 INSERT 4 둘 — `OUTYMD` 가 원본 INSERT 4 에 다른 항으로 있어 C 는 원리적으로 조용하다)와 4(S13 모양 발화)다.
+- **「다른 검사가 못 잡았다」는 커밋된 산출물만으로는 판정되지 않는다.** 스윕 보고서가 좌표를 싣는 것은 B·C·P 뿐이고 미분류 48 발화는 열거되지 않는다. 그래서 네 좌표 **어느 것에 대해서도** 「P 말고는 아무도 못 봤다」를 이 보고서들로 확정할 수 없다 — 위 문단이 1·2·4 에 대해 말하는 것은 「B·C 목록에 그 좌표가 없다」까지다.
 - **4 는 모양 발화다 — 결함이 있지만 검사가 그것을 잡은 것은 아니다.**
   - 결함 (가) `K.OUTSTATE = …OUTSTATE`: 원본 DELETE 는 OUTSTATE 를 보지 않는다. 이행은 OUTSTATE = 9 행만 지운다.
   - 결함 (나) NULL 비안전 등식 `K.CompanySalesType = …`·`K.ExtraSettleFlag = …`: 원본은 `ISNULL(CompanySalesType,4) = ISNULL(@v,4)` 라 NULL 행도 지운다. 이행은 NULL 행을 못 지운다.
@@ -330,7 +336,7 @@ if (!string.IsNullOrEmpty(probePath))
 | E1 오케스트레이션 항으로 면제한 **항** 수 | 18 |
 
 - **합이 앵커 창을 덮는다.** 383 + 12 + 31 + 8 + 0 + 0 + 0 = **434** = 「앵커가 서수로 해결된 문장 수」. 빠진 문장이 없다.
-- **S2 12 는 전부 Batch6 이다.** 내역은 S01 CMRate_Ins 9(DELETE 3 ~ INSERT 10) · S09 PGCOLLECT_INS DELETE 22·INSERT 31 · S13 SUMMARY_ETC INSERT 2 다. §2-4 가 예고한 「Batch6 U-앵커 불일치가 대상 테이블 불일치로 S2 에 떨어진다」와 맞는다(`AnchorKindOrdinalPairTests` 의 불일치 8 과는 다른 자이므로 수를 맞대지 않는다).
+- **S2 12 의 내역 — 출처는 커밋하지 않은 덤프다.** 덤프에서 12 자리는 전부 Batch6 이었고 S01 CMRate_Ins 9(DELETE 3 ~ INSERT 10) · S09 PGCOLLECT_INS DELETE 22·INSERT 31 · S13 SUMMARY_ETC INSERT 2 였다. 이것이 §2-4 가 예고한 「Batch6 U-앵커 불일치가 대상 테이블 불일치로 S2 에 떨어진다」와 맞는다(`AnchorKindOrdinalPairTests` 의 불일치 8 과는 다른 자이므로 수를 맞대지 않는다). **다만 「12 전량이 그 불일치다」까지는 이 창이 보증하지 않는다** — ① 근거가 커밋되지 않은 덤프이고 보고서에는 S2 좌표가 실리지 않아(좌표를 싣는 것은 B·C·P 뿐이다) 커밋된 산출물만으로는 다시 셀 수 없으며, ② §5 (a) 대로 **S2 는 「이 SP 의 DDL 이 없는 자리」도 함께 담는 분모**다. 아는 것은 「덤프가 보인 12 자리는 Batch6 이었다」와 「그 분모는 두 사유를 섞는다」까지다.
 - **S3 31 의 SP 별 내역.** CMRate_Ins 3 · COMM_UPD 5(UPDATE 7, Job 마다) · INS 5 · INS_EXTRA 4 · INS_EXTRA4PLCARD 5 · PROC_ETC 5(INSERT 1 `VALUES`, Job 마다) · PGCOLLECT_INS 4.
 - **E2 8 의 내역.** AcqManual DELETE 1·INSERT 1 × 4 Job(Batch1/S12 · Batch5/S11 · Batch6/S11 · Batch7/S11).
 - **E3 0 은 「안전하다」가 아니라 「재지 않았다」로 읽는다.** 같은 보고서의 「계보 원천을 가진 문장 수」가 0 이다. `ReadsOnlyStaging` 은 계보 원천이 있어야 참이 되므로, 이 코퍼스에서 E3 는 **도달 불가**다. 그러니 §5 의 경고(명세서가 DML 표를 잃으면 E3 가 넓어진다)는 여기서 급증으로 나타날 수가 없다. 명세서마다 DML 표가 있는지는 따로 재지 않았다. 재료 분모에 DmlRows 명세서 행 102(14 프로시저)가 있지만 프로시저별 존재는 「잴 수 없음」이다.
@@ -526,6 +532,8 @@ BASE 는 §7 과 같은 `58da1f1a`, AFTER 는 §7 의 `6e5365c0`, AFTER2 는 R7 
 | 4 | Batch6/S13 DELETE 1 | SUMMARY_ETC · TSettleByOUT | `EXISTS (SELECT 1 FROM (SELECT DISTINCT …) K WHERE K.YMD = …TSettleByOUT.YMD AND …)` (S13.md:130~155) | **모양 발화**(§8-2 — 오탐으로 세지 않는다) | 원본은 커서 행 단위 DELETE(59~72행, 변수 등식 **열셋** — 평범한 등식 열하나 + `ISNULL` 짝 둘)다. 이행은 EXISTS 한 항으로 바꿨고, 검사는 **그 EXISTS 통째가 원본 최상위에 없어서** 발화했다. 그 안에 진짜 결함 둘이 있다 — (가) `K.OUTSTATE = …OUTSTATE`(S13.md:151)는 원본에 없다(OUTSTATE = 9 행만 지운다), (나) `K.CompanySalesType = …`(152)·`K.ExtraSettleFlag = …`(154)는 원본의 `ISNULL(CompanySalesType,4) = ISNULL(@v,4)`·`ISNULL(ExtraSettleFlag,9) = ISNULL(@v,9)`(71~72행)를 버려 NULL 행을 못 지운다. **그러나 검사가 짚은 것은 이 둘이 아니다** — 충실한 치환이었어도 같은 자리에서 같은 모양으로 발화했을 것이다 |
 
 **사라진 좌표(§7-3 #5)도 열어 확인했다.** Batch4/S11 UPDATE 1 은 원본 `OutState = 2`(PROC_ETC 97행)를 이행이 `OutState = @p_intOutState`(S11.md:221)로 올린 자리다. 그 UPDATE 의 실행 자리는 `execute(SQL_UPDATE_MISS, …)` 하나(S11.md:71~76)이고 거기서 `p_intOutState: 2`(S11.md:75)를 바인딩한다. 고르는 행이 같으므로 **결함이 아니다**. R7 이 이 자리를 일치로 돌렸고, 문장별 덤프에서 결말이 `Matched` 임을 확인했다. R7 이 막는 것은 여기까지다 — 다른 값을 바인딩했다면 조용했을 것이다(§5 의 R7 대가).
+
+**#3 은 BASE 에서도 검사 C 가 같은 좌표·같은 컬럼에 발화한다 (리뷰 Important 1, 2026-09-12).** `sweeps/2026-09-11-step-sweep-base.md` C 목록 11·12 행이 `POQSettleBatch4 | S15 | INSERT 1 | OUTSTATE` 이고, AFTER·AFTER2 에도 그대로 있다. #3 의 결함 자체는 위 표대로 참양성이지만, **그 좌표에서 L1 이 처음 입을 연 것은 이 브랜치가 아니다** — P 가 더한 것은 항 원문(`A.OUTSTATE = 9`)이라는 사유의 단위다. 다른 검사가 보지 못하던 자리에서 새로 연 것은 #1·#2 와 #4 다. 그리고 보고서가 좌표를 싣는 것은 B·C·P 뿐이라 미분류 48 발화는 열거할 수 없으므로, **네 좌표 어느 것에 대해서도 「P 말고는 아무도 못 봤다」는 커밋된 산출물로 판정되지 않는다**(§7-3 의 같은 단서).
 
 ### 9-4. §8-4 ④ — P 좌표 차분과 침묵 분모 아홉
 
