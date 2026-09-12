@@ -236,6 +236,42 @@ namespace ReSet.Core.Services
             @"(?:\bU(?!\d{1,2}-)|\b갱신\s*|\bUPDATE\s*|\bINSERT\s*|\bDELETE\s*)(?<ordinal>\d{1,2})\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        /// <summary>
+        /// `SELECT n` 앵커. <see cref="AnchorPattern"/> 보다 <b>엄격하다</b> - 주석이
+        /// `SELECT n:` 으로 시작할 때만 받는다.
+        ///
+        /// [왜 엄격한가 - 착수 전 실측] 느슨하게 잡으면 `/* U1: … (SELECT 1) */` 처럼
+        /// 설명에 종류를 적은 주석이 앵커로 읽힌다. 실물이 그 모양이다
+        /// (`POQSettleBatch6/S13`). 엄격함의 관할은 <b>표기 갈래가 아니라 줄 첫머리
+        /// 요구</b>다 - `SELECT n:` 이 줄 맨 앞(공백 제외)에서 시작해야만 받고, 산문
+        /// 속 언급은 배제한다. 그것만으로 오탐 기제가 구조적으로 사라진다.
+        ///
+        /// [이 요구를 실제로 강제하는 것은 이 정규식이 아니다] 정규식 자신의 `^`는
+        /// (<c>RegexOptions.Multiline</c> 을 안 쓰므로) <b>주석 토큰 텍스트 자체의
+        /// 맨 처음</b>에서만 `SELECT n:` 을 요구한다 - "소스 코드의 줄 맨 앞"이라는
+        /// 보장은 이 정규식 밖에서 온다. 그 보장은 호출부(<see cref="ReadSelectAnchors"/>)가
+        /// 이 정규식을 매치시키기 전에 거치는 이웃 게이트 <see cref="PrecededByNewline"/>
+        /// (호출 :382 부근 · 정의 :797 부근)가 준다 - 그 게이트가 "이 주석 토큰 자신이 새 줄에서
+        /// 시작하는가(꼬리 주석이 아닌가)"를 걸러낸 뒤에만 이 정규식이 돈다. 이
+        /// 정규식만 떼어 다른 문맥(예: 펜스 전체 텍스트)에 직접 돌리면 그 줄 경계
+        /// 보장이 없어진다.
+        ///
+        /// [표기는 왜 둘 다 받는가] 계약(프롬프트)이 <b>규정</b>하는 형식은
+        /// `/* SELECT n: … */` 블록형 하나뿐이지만, 이 정규식은 <b>규정이 아니라
+        /// 실물을 서술</b>한다 - 코퍼스 실측(2026-09-12)으로 블록형 8건 · 대시형
+        /// (`-- SELECT n: …`) 8건, 합 16건이 공존한다. 검사가 계약만큼 좁아 대시형을
+        /// 놓치면, 모델이 계약을 어긴 바로 그 순간(대시형으로 적은 절반)을 검사가
+        /// 관측하지 못한 채 조용히 지나간다 - 앵커가 아예 없는 것과 같은 모양의
+        /// 커버리지 손실이다. <b>이 정규식을 블록형 한 갈래로 좁히지 마라</b> -
+        /// 대시형 바닥은 <c>SelectAnchorPairCorpusTests</c> 의 표기별 계수기와
+        /// <c>SelectAnchorReaderTests.ReadsSelectAnchorsWrittenWithTheDashCommentForm</c>
+        /// 이 잡는다.
+        /// 설계: docs/superpowers/specs/2026-09-12-SELECT앵커-대조-설계.md §3
+        /// </summary>
+        private static readonly Regex SelectAnchorPattern = new(
+            @"^\s*(?:/\*|--)\s*SELECT\s*(?<ordinal>\d{1,2})\s*:",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public static IReadOnlyList<StepSqlStatement> Read(string? stepMarkdown) =>
             Read(stepMarkdown, out _);
 
@@ -299,6 +335,60 @@ namespace ReSet.Core.Services
             }
 
             return AttachLineage(statements);
+        }
+
+        /// <summary>
+        /// SQL 펜스 안에서 <c>SELECT n:</c> 로 시작하는 주석 - 블록형 <c>/* SELECT n: … */</c>
+        /// 와 대시형 <c>-- SELECT n: …</c> 둘 다(<see cref="SelectAnchorPattern"/> 참고) -
+        /// 에서 앵커의 서수를 나온 순서대로 낸다.
+        ///
+        /// [왜 문장이 아니라 주석인가 - 실측] 세 겹이 막는다.
+        /// ① <c>DmlCollector</c> 는 Update·Delete·Insert 만 방문한다 - SELECT 는 문장이 되지 않는다.
+        /// ② 방문자를 더해도 <c>AnchorPattern</c>(이 파일 :236)에 <b>SELECT 대안이 없어</b>
+        ///    <c>SELECT n</c> 주석이 앵커로 안 읽힌다 - 그 문장들은 전부 <c>Anchor = null</c> 이 된다.
+        /// ③ 그런데 <b>방문자만 넓혀도</b> 다른 종류의 앵커 주석이 앞에 있는 SELECT 는 그 앵커를
+        ///    물려받는다 - <c>AnchorPattern</c> 의 <b>기존</b> <c>INSERT</c> 대안이 산문의 `INSERT 1` 에
+        ///    맞기 때문이다. 실물 <c>POQSettleBatch1/S06:114</c> 바로 뒤가 SELECT 이고, 프로브의
+        ///    「앵커 보유 문장 354→355」 가 정확히 그 하나다(곧 오탐이다).
+        /// <b>주석의 자리는 이 셋과 무관하므로</b> 주석을 세면 전부 도달한다.
+        ///
+        /// [한계 - 알고 쓴다] 이 값은 「라벨이 명세서에 있는가」만 답한다. 「그 라벨이 옳은
+        /// 문장에 붙었는가」는 답하지 못한다 - 문장에 결합하지 않기 때문이다.
+        /// </summary>
+        public static IReadOnlyList<int> ReadSelectAnchors(string? stepMarkdown)
+        {
+            var ordinals = new List<int>();
+            if (string.IsNullOrWhiteSpace(stepMarkdown)) return ordinals;
+
+            foreach (Match fence in FencePattern.Matches(stepMarkdown))
+            {
+                var lexer = new TSql160Parser(initialQuotedIdentifiers: true);
+                var tokens = lexer.GetTokenStream(
+                    new StringReader(fence.Groups["sql"].Value), out var tokenErrors);
+
+                // 토큰화가 실패하면 주석 경계를 알 수 없다 - 이 펜스는 건너뛴다.
+                // Read(…)의 같은 분기와 같은 판단이다.
+                if (tokens == null || tokenErrors is { Count: > 0 }) continue;
+
+                for (int i = 0; i < tokens.Count; i++)
+                {
+                    var token = tokens[i];
+                    if (token.TokenType is not (TSqlTokenType.SingleLineComment
+                                                or TSqlTokenType.MultilineComment))
+                    {
+                        continue;
+                    }
+
+                    if (!PrecededByNewline(tokens, i)) continue; // 꼬리 주석은 앵커가 아니다.
+
+                    var match = SelectAnchorPattern.Match(token.Text);
+                    if (!match.Success) continue;
+
+                    ordinals.Add(int.Parse(match.Groups["ordinal"].Value));
+                }
+            }
+
+            return ordinals;
         }
 
         private static (IReadOnlyList<StepSqlStatement> Statements, int LostStatementCount) ReadFence(string sql)

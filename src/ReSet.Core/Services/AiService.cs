@@ -4852,6 +4852,7 @@ Consolidate the provided specifications into a single unified batch job named '{
             builder.AppendLine("- **각 DML 문장 바로 앞에 명세서 DML 범위 표의 그 문장 표기를 주석으로 답니다.** " +
                 "`UPDATE`는 `/* U13: 카드사 원가 반영 */` 형식이고(`갱신 13`·`UPDATE 13`도 인정됩니다), " +
                 "`INSERT`는 `/* INSERT 1: 정산 원장 적재 */`, `DELETE`는 `/* DELETE 1: 당일분 삭제 */` 형식입니다. " +
+                "명세서 DML 범위 표에 `SELECT` 행이 있으면 그 문장에도 `/* SELECT 1: 커서 원천 조회 */` 형식으로 답니다. " +
                 "**번호는 명세서 표의 서수를 그대로 씁니다** - 원본 라인 번호나 이 단계의 자체 순번을 쓰지 마십시오. " +
                 "**종류가 다르면 서수가 겹쳐도 됩니다**(`DELETE 1`과 `INSERT 1`은 서로 다른 문장입니다). " +
                 "**`U13-DELETE 1` 같은 복합 라벨은 쓰지 마십시오.** " +
