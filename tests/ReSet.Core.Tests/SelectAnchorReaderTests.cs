@@ -11,8 +11,12 @@ namespace ReSet.Core.Tests
     /// [왜 DML 앵커보다 엄격한가] <see cref="StepSqlStatementReader"/> 의 앵커 정규식은
     /// 주석 안 어디서든 가장 왼쪽 매치를 잡는다. 그 규칙을 그대로 쓰면
     /// <c>/* U1: … (SELECT 1) */</c> 처럼 설명에 종류를 적은 주석이 SELECT 앵커로 읽힌다.
-    /// 여기서는 <b>주석이 `SELECT n:` 으로 시작할 때만</b> 앵커로 본다 - 계약이 정한
-    /// 형식 그대로다.
+    /// 여기서는 <b>주석이 `SELECT n:` 으로 시작할 때만</b> 앵커로 본다 - 다만 <b>표기
+    /// 갈래는 좁히지 않는다.</b> 계약(프롬프트)이 규정하는 형식은 블록형
+    /// <c>/* SELECT n: … */</c> 하나뿐이지만, 리더는 규정이 아니라 실물을 서술한다 -
+    /// 대시형 <c>-- SELECT n: …</c> 도 코퍼스 절반을 차지해 똑같이 받는다
+    /// (<see cref="DashSelectAnchorStep"/> 참고). 엄격함이 거르는 것은 표기 갈래가
+    /// 아니라 "줄 맨 앞에서 시작하는가"뿐이다.
     /// </summary>
     public class SelectAnchorReaderTests
     {

@@ -246,6 +246,16 @@ namespace ReSet.Core.Services
         /// 요구</b>다 - `SELECT n:` 이 줄 맨 앞(공백 제외)에서 시작해야만 받고, 산문
         /// 속 언급은 배제한다. 그것만으로 오탐 기제가 구조적으로 사라진다.
         ///
+        /// [이 요구를 실제로 강제하는 것은 이 정규식이 아니다] 정규식 자신의 `^`는
+        /// (<c>RegexOptions.Multiline</c> 을 안 쓰므로) <b>주석 토큰 텍스트 자체의
+        /// 맨 처음</b>에서만 `SELECT n:` 을 요구한다 - "소스 코드의 줄 맨 앞"이라는
+        /// 보장은 이 정규식 밖에서 온다. 그 보장은 호출부(<see cref="ReadSelectAnchors"/>)가
+        /// 이 정규식을 매치시키기 전에 거치는 이웃 게이트 <see cref="PrecededByNewline"/>
+        /// (아래 :370 부근)가 준다 - 그 게이트가 "이 주석 토큰 자신이 새 줄에서
+        /// 시작하는가(꼬리 주석이 아닌가)"를 걸러낸 뒤에만 이 정규식이 돈다. 이
+        /// 정규식만 떼어 다른 문맥(예: 펜스 전체 텍스트)에 직접 돌리면 그 줄 경계
+        /// 보장이 없어진다.
+        ///
         /// [표기는 왜 둘 다 받는가] 계약(프롬프트)이 <b>규정</b>하는 형식은
         /// `/* SELECT n: … */` 블록형 하나뿐이지만, 이 정규식은 <b>규정이 아니라
         /// 실물을 서술</b>한다 - 코퍼스 실측(2026-09-12)으로 블록형 8건 · 대시형
@@ -253,7 +263,7 @@ namespace ReSet.Core.Services
         /// 놓치면, 모델이 계약을 어긴 바로 그 순간(대시형으로 적은 절반)을 검사가
         /// 관측하지 못한 채 조용히 지나간다 - 앵커가 아예 없는 것과 같은 모양의
         /// 커버리지 손실이다. <b>이 정규식을 블록형 한 갈래로 좁히지 마라</b> -
-        /// 대시형 바닥은 <see cref="SelectAnchorPairCorpusTests"/> 의 표기별 계수기와
+        /// 대시형 바닥은 <c>SelectAnchorPairCorpusTests</c> 의 표기별 계수기와
         /// <c>SelectAnchorReaderTests.ReadsSelectAnchorsWrittenWithTheDashCommentForm</c>
         /// 이 잡는다.
         /// 설계: docs/superpowers/specs/2026-09-12-SELECT앵커-대조-설계.md §3
@@ -328,7 +338,9 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// SQL 펜스 안에서 <c>/* SELECT n: … */</c> 로 적힌 앵커의 서수를 나온 순서대로 낸다.
+        /// SQL 펜스 안에서 <c>SELECT n:</c> 로 시작하는 주석 - 블록형 <c>/* SELECT n: … */</c>
+        /// 와 대시형 <c>-- SELECT n: …</c> 둘 다(<see cref="SelectAnchorPattern"/> 참고) -
+        /// 에서 앵커의 서수를 나온 순서대로 낸다.
         ///
         /// [왜 문장이 아니라 주석인가 - 실측] 세 겹이 막는다.
         /// ① <c>DmlCollector</c> 는 Update·Delete·Insert 만 방문한다 - SELECT 는 문장이 되지 않는다.

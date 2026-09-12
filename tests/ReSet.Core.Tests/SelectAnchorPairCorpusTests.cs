@@ -115,7 +115,7 @@ namespace ReSet.Core.Tests
             // 모양 불변식(바닥) - 코퍼스는 두 표기를 모두 쓴다. `SelectAnchorPattern`이
             // 한쪽 표기(예: `/\*`만)로 좁혀지면 그 갈래의 파일은 리더에서 anchors.Count == 0
             // 이 되어 위 표기별 합계 중 하나가 0으로 떨어진다 - 여기서 빨갛게 잡는다.
-            // (되돌림으로 확인함: 설계서 §9-4, 이 태스크의 MUTATION RESULT 참고.)
+            // (되돌림으로 확인함: 설계서 §9-2 다섯째 행 참고.)
             Assert.True(blockFormAnchors > 0, "`/* SELECT n: */` 표기 앵커가 0 - 리더 정규식이 이 갈래를 놓치고 있다.");
             Assert.True(dashFormAnchors > 0, "`-- SELECT n:` 표기 앵커가 0 - 리더 정규식이 이 갈래를 놓치고 있다.");
 
@@ -124,17 +124,30 @@ namespace ReSet.Core.Tests
             // 섞어 쓰지 않기 때문에만 blockFormAnchors + dashFormAnchors == scanned 가
             // 성립한다. 표기를 섞은 파일이 하나라도 생기면 그 파일의 anchors.Count 가
             // 두 계수기 모두에 이중으로 더해져 합이 scanned 를 넘고, 위 두 `> 0` 단언은
-            // 계속 초록이면서도 §9-4 좁히기 뮤테이션에서 한쪽 표기가 실제로는 0 인데도
+            // 계속 초록이면서도 §9-2 다섯째 행의 좁히기 뮤테이션에서 한쪽 표기가 실제로는 0 인데도
             // 다른 파일의 이중 계산이 가려 바닥이 약해진다. 이 단언은 그 전제(파일당
             // 단일 표기)가 깨지는 순간 여기서 먼저 빨개져, 위 두 단언을 못 믿게 됐다는
             // 것을 알린다.
-            Assert.Equal(scanned, blockFormAnchors + dashFormAnchors);
+            Assert.True(
+                scanned == blockFormAnchors + dashFormAnchors,
+                $"표기별 합({blockFormAnchors} + {dashFormAnchors})이 scanned({scanned})와 다르다 - " +
+                "어느 파일이 두 표기를 섞어 써서 이중으로 세었거나(위 문단 참고), 표기별 계수기가 " +
+                "놓친 파일이 있다는 뜻이다. 표기 귀속을 더는 못 믿는다.");
         }
 
         /// <summary>
         /// 이 검사가 놓치는 방향(§7)을 매 실행마다 찍는다 - 단언하지 않는다. 명세서에
         /// SELECT 행이 선언돼 있는데 그 단계 본문에 SELECT 앵커가 하나도 없는 단계를
         /// 「도달 못 한 단계」로 센다. 오늘 값은 설계서 §7·§9-4 에 적은 값과 같아야 한다.
+        ///
+        /// [행 단위 지표 - §9-4 항목 2] <c>missedDeclarationRows</c> 는 「그 단계가
+        /// 선언한 SELECT 서수 중 앵커가 안 붙은 것의 개수 합」이다 - <b>도달 못 한
+        /// 단계뿐 아니라 도달한 단계도</b> 포함한다. 도달한 단계라도 선언 서수 중
+        /// 일부에만 앵커를 달면 나머지는 여전히 놓친 것이다(§9-4 가 든 예: `SELECT
+        /// 1~6` 을 선언한 단계가 앵커 하나만 달면 「도달」로는 세어지지만 놓친 다섯
+        /// 행이 있다). 오늘은 도달한 여섯 단계가 전부 선언을 남김없이 덮어 그 기여가
+        /// 0 이므로 이 값은 <c>unreachedSteps</c> 만 더한 것과 우연히 같다(24) -
+        /// <b>부분 미도달이 하나라도 생기는 날 이 수는 커진다.</b>
         /// </summary>
         [SkippableFact]
         public void LogsStepsWhereTheSpecDeclaresSelectRowsButNoAnchorWasWritten()
@@ -143,6 +156,7 @@ namespace ReSet.Core.Tests
 
             var reached = 0;
             var unreachedSteps = new List<(string Job, string Step, IReadOnlyCollection<int> Declared)>();
+            var missedDeclarationRows = 0;
 
             foreach (var jobDir in Directory.EnumerateDirectories(jobsDir)
                          .OrderBy(d => d, StringComparer.Ordinal))
@@ -163,6 +177,15 @@ namespace ReSet.Core.Tests
                     if (declared.Count == 0) continue;
 
                     var anchors = StepSqlStatementReader.ReadSelectAnchors(File.ReadAllText(file));
+                    var anchorOrdinals = new HashSet<int>(anchors);
+
+                    // §9-4 항목 2 - 도달 여부와 무관하게, 그 단계가 선언한 서수 중
+                    // 앵커가 안 붙은 것을 전부 센다. 도달 못 한 단계는 anchorOrdinals
+                    // 가 비어 있으므로 declared 전체가 그대로 여기 잡힌다 - 예전
+                    // `unreachedSteps.Sum(s => s.Declared.Count)` 와 그 부분에서는
+                    // 같은 값을 낸다.
+                    missedDeclarationRows += declared.Count(ordinal => !anchorOrdinals.Contains(ordinal));
+
                     if (anchors.Count > 0)
                     {
                         reached++;
@@ -175,13 +198,12 @@ namespace ReSet.Core.Tests
             }
 
             var total = reached + unreachedSteps.Count;
-            var missedDeclarationRows = unreachedSteps.Sum(s => s.Declared.Count);
 
             Skip.If(total == 0, CorpusSkip.Reason);
 
             _output.WriteLine(
                 $"[역방향 - §7] 선언 있음·앵커 0 인 단계 {unreachedSteps.Count} · " +
-                $"그 단계들이 놓친 선언 행 {missedDeclarationRows} · 도달률 {reached}/{total}");
+                $"놓친 선언 행 합계(부분 미도달 포함) {missedDeclarationRows} · 도달률 {reached}/{total}");
             foreach (var s in unreachedSteps.OrderBy(s => s.Job, StringComparer.Ordinal).ThenBy(s => s.Step, StringComparer.Ordinal))
             {
                 _output.WriteLine(
