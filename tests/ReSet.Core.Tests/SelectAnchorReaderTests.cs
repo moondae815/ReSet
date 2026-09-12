@@ -20,21 +20,51 @@ namespace ReSet.Core.Tests
     /// </summary>
     public class SelectAnchorReaderTests
     {
-        /// <summary>POQSettleBatch7/S15 모양 - 방문자가 SELECT 를 안 보고 봐도
-        /// <c>AnchorPattern</c> 에 SELECT 대안이 없어 문장에 결합되지 않는다(설계서 §2
-        /// ①②) - "커서 선언 안이라서"가 아니다(§2 정정 두 번째가 그 설명을 반증했다).</summary>
-        private const string CursorSourceStep = @"### S15 단계
+        /// <summary>POQSettleBatch7/S15 그대로(줄 그대로 오려냄, 트리밍 없음) - 블록형
+        /// <c>/* SELECT n: … */</c> 앵커 둘. 실물에는 <c>DECLARE … CURSOR</c> 문이
+        /// 없다(§2 정정이 그 시나리오를 코퍼스 발화 0 이라 못박았다) - 앵커 1 앞의
+        /// 문장은 평범한 최상위 <c>SELECT … GROUP BY … ORDER BY</c>, 앵커 2 앞의
+        /// 문장은 <c>SELECT ID FROM …</c>(대입문이 아니다). 대신 각 앵커 앞에는
+        /// 그것대로의 잡음이 실제로 있다 - 라벨 주석(<c>-- SQL_CURSOR_SOURCE</c>,
+        /// <c>SELECT n:</c> 으로 시작하지 않아 앵커가 아니다)과 스칼라 <c>DECLARE
+        /// @v_intIssueType TINYINT = 15;</c> 문(커서가 아니라 변수 선언). 이 시험이
+        /// 지키는 값: 이 코퍼스에서 블록형 표기의 <b>유일한 실물 양성 커버리지</b>다
+        /// - <see cref="DashSelectAnchorStep"/> 은 대시형이고,
+        /// <see cref="KeepsDuplicatesBecauseADuplicateIsItselfADefectSignal"/> 의
+        /// 블록형은 합성 데이터다.</summary>
+        private const string BlockSelectAnchorStep = @"### S15 단계
 
 ```sql
 -- SQL_CURSOR_SOURCE
 /* SELECT 1: Cur_SettlePost 커서 소스 - 고객사/거래일/지급일 단위 집계 */
-DECLARE Cur_SettlePost CURSOR LOCAL FAST_FORWARD FOR
-SELECT CLIENTID, YMD FROM SETTLE_POQ_DB.dbo.TSettleMst WHERE YMD = @p_ymd;
+SELECT A.ClientID AS ClientID,
+       A.YMD      AS YMD,
+       A.OutYMD   AS OutYMD,
+       SUM(A.CLTotal)                AS CLTotal,
+       SUM(A.CLTotal - A.CLVT) * -1  AS CLComm,
+       SUM(A.CLVT) * -1              AS CLVT
+  FROM SETTLE_POQ_DB.dbo.TSettleMst          AS A
+  JOIN SETTLE_POQ_DB.dbo.TClientSettleRate   AS B
+    ON A.YMD = B.YMD AND A.ClientID = B.ClientID AND A.PGName = B.PGName AND A.MallID = B.MallID
+  JOIN SETTLE_POQ_DB.dbo.TClient             AS C
+    ON A.ClientID = C.ClientID
+ WHERE ISNULL(B.TaxFGBill, 2) = 1     -- 세금계산서 청구유형코드(1:청구,2:영수)
+   AND A.YMD = @p_batchYmd
+   AND A.OutState = 2
+ GROUP BY A.ClientID, A.YMD, A.OutYMD
+ ORDER BY A.OutYMD, A.ClientID;
 ```
 
 ```sql
+-- SQL_CHECK_EXISTING_MISS
+DECLARE @v_intIssueType TINYINT = 15;
 /* SELECT 2: TSettleMiss 기등록여부 확인 */
-SELECT @v_intCnt = COUNT(*) FROM SETTLE_POQ_DB.dbo.TSettleMiss WHERE ID = @v_intID;
+SELECT ID
+  FROM SETTLE_POQ_DB.dbo.TSettleMiss
+ WHERE ClientID = @p_clientId
+   AND OutYMD = @p_outYmd
+   AND OutState = 2
+   AND IssueType = @v_intIssueType;
 ```
 ";
 
@@ -76,9 +106,9 @@ SELECT DISTINCT
 ";
 
         [Fact]
-        public void ReadsSelectAnchorsFromCommentsEvenInsideCursorDeclarations()
+        public void ReadsSelectAnchorsWrittenWithTheBlockCommentFormFromRealCorpus()
         {
-            Assert.Equal(new[] { 1, 2 }, StepSqlStatementReader.ReadSelectAnchors(CursorSourceStep));
+            Assert.Equal(new[] { 1, 2 }, StepSqlStatementReader.ReadSelectAnchors(BlockSelectAnchorStep));
         }
 
         [Fact]
