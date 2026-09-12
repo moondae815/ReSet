@@ -177,7 +177,8 @@ namespace ReSet.Core.Services
                             SweepCondition condition,
                             IReadOnlyDictionary<string, SpecStatementFacts> facts)
                         {
-                            // 오케스트레이터(VerificationPipelineOrchestrator.cs:3238)의
+                            // 오케스트레이터(VerificationPipelineOrchestrator.cs, 그
+                            // ValidateBatchStep 호출 — 2026-09-12 확인 시점 :4521)의
                             // 호출을 그대로 본뜬다. 갈라지면 파이프라인이 실제로 하지
                             // 않는 판정을 재게 된다. stepInterfaces·runRowOwnedTables는
                             // DB 메타데이터가 필요해 로컬에서 만들 수 없다. A~E 어느
