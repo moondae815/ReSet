@@ -344,7 +344,7 @@ namespace ReSet.Core.Services
                 pair => (IReadOnlyList<string>)pair.Value,
                 StringComparer.OrdinalIgnoreCase);
 
-        private static string BareName(string name)
+        internal static string BareName(string name)
         {
             var trimmed = name.Trim();
             var idx = trimmed.LastIndexOf('.');

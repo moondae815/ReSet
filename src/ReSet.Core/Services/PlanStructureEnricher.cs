@@ -351,7 +351,8 @@ namespace ReSet.Core.Services
             foreach (var table in tables)
             {
                 var name = BatchControlContract.FindAlias(table)?.Name ?? table;
-                if (seen.Add(name)) result.Add(name);
+                // 맨이름으로 겹침을 본다 - `[batch].[BatchControlTotal]` 과 별칭을 함께 적어도 하나로 모인다(리뷰 M4).
+                if (seen.Add(BatchControlContract.BareName(name))) result.Add(name);
             }
 
             step["TargetTables"] = new JsonArray(result.Select(t => (JsonNode?)JsonValue.Create(t)).ToArray());

@@ -632,7 +632,7 @@ namespace ReSet.Core.Services
         /// 있어도 안정적으로 동작하면서 문자열·주석을 이미 올바른 토큰
         /// 종류로 분류해 준다 - 직접 스캔하면 이 처리를 다시 구현해야 한다.
         /// </summary>
-        private static IEnumerable<(int Start, int EndExclusive, bool ContainsDmlKeyword)> SplitAtTopLevelSemicolons(
+        internal static IEnumerable<(int Start, int EndExclusive, bool ContainsDmlKeyword)> SplitAtTopLevelSemicolons(
             string sql, IList<TSqlParserToken> tokens)
         {
             var depth = 0;

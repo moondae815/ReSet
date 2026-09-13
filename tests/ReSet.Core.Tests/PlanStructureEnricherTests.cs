@@ -290,12 +290,13 @@ namespace ReSet.Core.Tests
                 @"""batch.ControlTotal"",
         ""batch.ReconciliationResult""",
                 @"""[batch].[ControlTotal]"",
-        ""batch.BatchControlTotal""");
+        ""[batch].[BatchControlTotal]""");
             Assert.NotEqual(AliasStructure, both);
 
             var enriched = PlanStructureEnricher.Enrich(both, Codes(), EmptyTables).Markdown;
 
-            Assert.Equal(new[] { "batch.BatchControlTotal" }, Step(enriched, "S20").TargetTables);
+            // 맨이름으로 겹침을 본다 - 대괄호 정본과 별칭이 함께 있어도 하나로 모인다(리뷰 M4).
+            Assert.Single(Step(enriched, "S20").TargetTables);
         }
 
         [Fact]

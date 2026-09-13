@@ -937,7 +937,8 @@ namespace ReSet.Core.Services
         /// </summary>
         public IReadOnlyDictionary<string, StepDefect> ValidateControlTotalNameConsistency(
             IReadOnlyDictionary<string, string> sectionsByStepCode,
-            IReadOnlyList<BatchStepPlan> allSteps)
+            IReadOnlyList<BatchStepPlan> allSteps,
+            string? sharedConventions = null)
         {
             var defects = new Dictionary<string, StepDefect>(StringComparer.OrdinalIgnoreCase);
             if (sectionsByStepCode == null || sectionsByStepCode.Count == 0) return defects;
@@ -951,39 +952,27 @@ namespace ReSet.Core.Services
                 .ToList();
             if (tableNames.Count == 0) return defects;
 
-            var tableAlternation = string.Join("|", tableNames.Select(QualifiedTableNameFragment));
-            var writeRegex = new Regex($@"\b(?:INSERT\s+INTO|MERGE(?:\s+INTO)?)\s+(?:{tableAlternation})", RegexOptions.IgnoreCase);
-            var readRegex = new Regex($@"\b(?:FROM|JOIN)\s+(?:{tableAlternation})", RegexOptions.IgnoreCase);
-
             var planned = new HashSet<string>(allSteps.Select(s => s.Code), StringComparer.OrdinalIgnoreCase);
             var written = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             var unknownWriters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var reads = new List<(string Reader, HashSet<string> Owners, HashSet<string> Names)>();
+            var reads = new List<(string Reader, IReadOnlyCollection<string> Owners, HashSet<string> Names)>();
 
             foreach (var (code, markdown) in sectionsByStepCode)
             {
                 if (string.IsNullOrWhiteSpace(markdown) || !planned.Contains(code)) continue;
 
-                foreach (var statement in ControlTotalStatements(markdown))
+                var (writes, stepReads) = ControlTotalNameFacts.Collect(markdown, tableNames);
+                foreach (var write in writes)
                 {
-                    if (writeRegex.IsMatch(statement))
-                    {
-                        var names = ControlNameLiteralRegex.Matches(statement)
-                            .Select(m => m.Groups["v"].Value)
-                            .Where(v => !StepCodeLiteralRegex.IsMatch(v))
-                            .ToList();
-                        if (names.Count == 0 || ControlNameParameterRegex.IsMatch(statement)) unknownWriters.Add(code);
-                        if (!written.TryGetValue(code, out var set)) written[code] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        set.UnionWith(names);
-                    }
+                    if (write.Unknown) unknownWriters.Add(code);
+                    if (!written.TryGetValue(code, out var set)) written[code] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    set.UnionWith(write.Names);
+                }
 
-                    if (readRegex.IsMatch(statement))
-                    {
-                        var readNames = FilterLiterals(statement, "ControlName");
-                        var owners = FilterLiterals(statement, "StepCode");
-                        owners.RemoveWhere(o => !StepCodeLiteralRegex.IsMatch(o));
-                        if (readNames.Count > 0 && owners.Count > 0) reads.Add((code, owners, readNames));
-                    }
+                foreach (var read in stepReads)
+                {
+                    var owners = read.Owners.Where(o => StepCodeLiteralRegex.IsMatch(o)).ToList();
+                    if (owners.Count > 0) reads.Add((code, owners, new HashSet<string>(read.Names, StringComparer.OrdinalIgnoreCase)));
                 }
             }
 
@@ -995,17 +984,32 @@ namespace ReSet.Core.Services
                     if (!written.TryGetValue(owner, out var ownerNames) || ownerNames.Count == 0) continue;
                     if (names.Overlaps(ownerNames)) continue;
 
-                    var reason =
-                        $"{reader} ({reader}이(가) {owner} 몫의 통제 합계를 ControlName " +
-                        $"{string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"))}(으)로 읽는데 " +
-                        $"{owner}이(가) 쓰는 이름은 " +
-                        // 전부 싣는다 - 이 문구가 재생성 프롬프트로 가고, 잘라 내면 맞출 이름이 빠진다(실측: 12 개로
-                        // 자르니 짝이 되는 PGTotal·POQIncome·TxAmt 가 알파벳 순서에 밀려 사라졌다).
-                        $"{string.Join(", ", ownerNames.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"))}" +
-                        "입니다 - 겹치는 이름이 하나도 없어 이 대조는 어떤 실행에서도 " +
-                        $"{owner} 몫의 행을 찾지 못합니다. 읽는 이름을 {owner}이(가) 쓰는 이름으로 맞추십시오.)";
+                    var readList = string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
+                    // 전부 싣는다 - 이 문구가 재생성 프롬프트로 가고, 잘라 내면 맞출 이름이 빠진다(실측: 12 개로
+                    // 자르니 짝이 되는 PGTotal·POQIncome·TxAmt 가 알파벳 순서에 밀려 사라졌다).
+                    var writeList = string.Join(", ", ownerNames.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
 
-                    defects[reader] = defects.TryGetValue(reader, out var prior)
+                    // [누가 어겼는가 - 최종 리뷰 I4] 모든 단계가 받는 공통 규약이 읽는 쪽 이름을 담고 쓰는 쪽 이름을 하나도
+                    // 안 담으면, 어긴 것은 쓰는 단계다. 그때 읽는 단계에게 「쓰는 쪽에 맞추라」고 하면 규약에서 멀어지게 시킨다.
+                    string target, reason;
+                    if (MentionsAnyLiteral(sharedConventions, names) && !MentionsAnyLiteral(sharedConventions, ownerNames))
+                    {
+                        target = owner;
+                        reason =
+                            $"{owner} ({owner}이(가) 통제 합계를 {writeList}(으)로 쓰는데 공통 규약에는 그 이름이 없고, " +
+                            $"{reader}이(가) 공통 규약의 이름 {readList}(으)로 {owner} 몫을 읽습니다 - 겹치는 이름이 하나도 없어 " +
+                            $"{reader}의 대조가 어떤 실행에서도 {owner} 몫의 행을 찾지 못합니다. 쓰는 이름을 공통 규약대로 맞추십시오.)";
+                    }
+                    else
+                    {
+                        target = reader;
+                        reason =
+                            $"{reader} ({reader}이(가) {owner} 몫의 통제 합계를 ControlName {readList}(으)로 읽는데 " +
+                            $"{owner}이(가) 쓰는 이름은 {writeList}입니다 - 겹치는 이름이 하나도 없어 이 대조는 어떤 실행에서도 " +
+                            $"{owner} 몫의 행을 찾지 못합니다. 읽는 이름을 {owner}이(가) 쓰는 이름으로 맞추십시오.)";
+                    }
+
+                    defects[target] = defects.TryGetValue(target, out var prior)
                         ? prior with { Reason = prior.Reason + " " + reason }
                         : new StepDefect(StepDefectKind.QualityFloor, reason);
                 }
@@ -1014,41 +1018,12 @@ namespace ReSet.Core.Services
             return defects;
         }
 
-        private static readonly Regex ControlNameLiteralRegex = new(@"N?'(?<v>[A-Za-z][A-Za-z0-9_]*)'", RegexOptions.Compiled);
         private static readonly Regex StepCodeLiteralRegex = new(@"^S\d+$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private static readonly Regex ControlNameParameterRegex = new(@"@\w*name\w*", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-        /// <summary><c>{column} = N'x'</c> 와 <c>{column} IN (N'x', …)</c> 의 리터럴. 한정자(<c>E.StepCode</c>)를 허용한다.</summary>
-        private static HashSet<string> FilterLiterals(string statement, string column)
-        {
-            var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Match m in Regex.Matches(statement,
-                         $@"(?<![\w]){column}\s*(?:=\s*N?'(?<one>[^']+)'|IN\s*\((?<many>[^)]*)\))", RegexOptions.IgnoreCase))
-            {
-                if (m.Groups["one"].Success) values.Add(m.Groups["one"].Value);
-                else foreach (Match v in Regex.Matches(m.Groups["many"].Value, @"N?'(?<v>[^']+)'")) values.Add(v.Groups["v"].Value);
-            }
-
-            return values;
-        }
-
-        /// <summary>
-        /// SQL 펜스의 원문을 주석만 지우고 세미콜론으로 가른 문장들. 문자열 리터럴은 남긴다.
-        /// 세미콜론이 없는 펜스는 펜스 전체가 한 문장이다 - 문장을 덜 가르면 몫·이름이 한 문장에 더 섞이지만,
-        /// 판정은 「교집합이 빈다」라서 섞일수록 덜 보고하는 쪽으로 틀린다.
-        /// </summary>
-        private static IEnumerable<string> ControlTotalStatements(string markdown)
-        {
-            foreach (Match fence in Regex.Matches(markdown, @"```sql[^\n]*\n(?<body>.*?)```", RegexOptions.Singleline | RegexOptions.IgnoreCase))
-            {
-                var body = Regex.Replace(fence.Groups["body"].Value, @"/\*.*?\*/", " ", RegexOptions.Singleline);
-                body = Regex.Replace(body, @"--[^\n]*", " ");
-                foreach (var statement in body.Split(';'))
-                {
-                    if (!string.IsNullOrWhiteSpace(statement)) yield return statement;
-                }
-            }
-        }
+        /// <summary>공통 규약이 이 이름들 중 하나라도 문자열 리터럴(<c>'이름'</c>)로 담는가. 규약이 없으면 false.</summary>
+        private static bool MentionsAnyLiteral(string? conventions, IEnumerable<string> names) =>
+            !string.IsNullOrWhiteSpace(conventions) &&
+            names.Any(n => conventions.Contains("'" + n + "'", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
         /// 코드 펜스의 <b>원문</b> 본문. mermaid 는 뺀다.
@@ -2442,9 +2417,10 @@ namespace ReSet.Core.Services
         /// 보면 옳은 단계를 고발한다(<see cref="CheckNonCanonicalBatchSchema"/> 는 백틱 식별자 전부를 보지만 이 검사는
         /// 그러면 안 된다). <see cref="CleanedSqlFences"/> 가 주석·문자열을 지운 펜스를 준다.
         ///
-        /// [앞 경계] 별칭 맨이름이 정본 맨이름의 접미사다(<c>ControlTotal</c> ⊂ <c>BatchControlTotal</c>). 이름 조각
-        /// 앞에 단어 문자·<c>[</c>·<c>]</c>·<c>.</c> 가 없을 것을 요구해 정본 안에서 부분 일치하지 않게 한다.
-        /// 세 부분 이름(<c>DB.batch.ControlTotal</c>)은 놓친다 - 코퍼스 0 건이고 제어 표는 batch 스키마다.
+        /// [어디서 찾는가 - 최종 리뷰 I1] 테이블 자리(<c>FROM·JOIN·INTO·UPDATE·MERGE·TABLE</c>) 바로 뒤의 <b>batch 스키마로
+        /// 한정된</b> 별칭만 본다. 별칭 맨이름은 정본 맨이름의 접미사이기도 해서(<c>ControlTotal</c> ⊂ <c>BatchControlTotal</c>)
+        /// 한정자 뒤 이름 전체가 맞아야 한다. 한정자 없는 <c>FROM ControlTotal</c> 은 CTE·임시 이름일 수 있어 보지 않는다 -
+        /// 계약 표는 전부 batch 스키마다(코퍼스 실물은 전부 한정형). 세 부분 이름(<c>DB.batch.ControlTotal</c>)도 놓친다.
         /// </summary>
         private static void CheckBatchControlTableAlias(
             string stepMarkdown, BatchStepPlan step, StepValidationResult result)
@@ -2461,7 +2437,10 @@ namespace ReSet.Core.Services
                 foreach (var (bare, table) in aliases)
                 {
                     if (reported.Contains(table.Name + "|" + bare)) continue;
-                    var pattern = $@"(?<![\w\[\].]){QualifiedTableNameFragment(bare)}";
+                    // [최종 리뷰 I1] 테이블 자리에서, batch 스키마로 한정된 이름만 본다 - 그래야 열 별칭
+                    // (`AS ControlTotal`)·변수(`@ControlTotal`)·임시 표(`#ControlTotal`)·CTE 이름·다른 표의 열
+                    // (`ct.ControlTotal`)에 안 걸린다. 계약 표는 전부 batch 스키마다.
+                    var pattern = $@"\b(?:FROM|JOIN|INTO|UPDATE|MERGE|TABLE)\s+\[?batch\]?\.(?:\[{Regex.Escape(bare)}\]|{Regex.Escape(bare)}\b)";
                     if (!Regex.IsMatch(cleaned, pattern, RegexOptions.IgnoreCase)) continue;
 
                     reported.Add(table.Name + "|" + bare);

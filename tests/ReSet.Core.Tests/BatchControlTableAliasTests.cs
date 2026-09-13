@@ -81,6 +81,27 @@ public sealed class BatchControlTableAliasTests
         Assert.DoesNotContain(result.Errors, e => e.Contains(Marker));
     }
 
+    // [리뷰 I1] 표가 아닌 자리의 같은 낱말은 표 이름이 아니다 - 통제 합계 단계에서 모델이 쓰기 쉬운 모양들이다.
+    // 실물 S13 의 첫 SQL 블록 머리에 한 줄씩 끼워 넣어 잰다. 마지막 둘은 짝(표 자리의 batch 한정 별칭)이라 발화한다.
+    [Theory]
+    [InlineData("DECLARE @ControlTotal DECIMAL(38,4) = 0;", false)]
+    [InlineData("SELECT SUM(TXAMT) AS ControlTotal FROM SETTLE_POQ_DB.dbo.TSettleMst;", false)]
+    [InlineData("WITH ControlTotal AS (SELECT 1 AS X) SELECT X FROM ControlTotal;", false)]
+    [InlineData("SELECT ct.ControlTotal FROM dbo.TSummary AS ct;", false)]
+    [InlineData("SELECT 1 AS X INTO #ControlTotal;", false)]
+    [InlineData("SELECT ControlValue FROM batch.ControlTotal;", true)]
+    [InlineData("DELETE FROM [batch].[ControlTotal] WHERE RunId = @p_runId;", true)]
+    public void OnlyABatchQualifiedAliasInATablePositionIsReported(string line, bool expected)
+    {
+        var original = Fixture("Batch11-S13.md");
+        var mutated = ReplaceFirst(original, "-- SQL_CAPTURE_LEDGER_TOTALS\n", "-- SQL_CAPTURE_LEDGER_TOTALS\n" + line + "\n");
+        Assert.NotEqual(original, mutated);
+
+        var result = Validate(mutated, "S13");
+
+        Assert.Equal(expected, result.Errors.Any(e => e.Contains(Marker)));
+    }
+
     private static string ReplaceFirst(string text, string oldValue, string newValue)
     {
         var index = text.IndexOf(oldValue, StringComparison.Ordinal);

@@ -29,9 +29,13 @@ public sealed class ControlTotalNameConsistencyTests
         ErrorCodes: new[] { "-9200" }, Chunkable: false, SchemaTables: Array.Empty<string>());
 
     private static IReadOnlyDictionary<string, StepDefect> Validate(params (string Code, string Markdown)[] sections) =>
+        ValidateWith(null, sections);
+
+    private static IReadOnlyDictionary<string, StepDefect> ValidateWith(string? conventions, params (string Code, string Markdown)[] sections) =>
         new MechanicalValidator().ValidateControlTotalNameConsistency(
             sections.ToDictionary(s => s.Code, s => s.Markdown, StringComparer.OrdinalIgnoreCase),
-            sections.Select(s => ControlStep(s.Code)).ToList());
+            sections.Select(s => ControlStep(s.Code)).ToList(),
+            conventions);
 
     // S20 이 읽는 다섯 이름 → S13 이 쓰는 같은 뜻의 이름.
     private static readonly (string Reader, string Writer)[] NameFixes =
@@ -73,7 +77,8 @@ public sealed class ControlTotalNameConsistencyTests
         Assert.Empty(defects);
     }
 
-    // 자기가 쓴 이름을 자기가 읽는다 - 실물 Batch4/S16.
+    // 실물 Batch4/S16 은 자기 몫을 읽지만 StepCode 리터럴로 거르지 않는다 - 규칙 ③(몫을 모르면 침묵)으로 조용하다.
+    // 「교집합이 있으면 침묵」(규칙 ⑤)은 이 시험이 아니라 이름을 맞춘 짝 시험이 잠근다(2026-09-13 최종 리뷰 M2 정정).
     [Fact]
     public void RealStepReadingItsOwnWrites_IsSilent()
     {
@@ -90,9 +95,9 @@ public sealed class ControlTotalNameConsistencyTests
         Assert.Empty(defects);
     }
 
-    // 리터럴 이름이 보여도 같은 쓰기 문장에 이름 매개변수가 섞이면 실제로 무엇이 쓰이는지 모른다 - 침묵한다.
+    // 문장 안에 리터럴 이름이 보여도 ControlName 칸에 들어가는 값이 매개변수면 실제로 무엇이 쓰이는지 모른다 - 침묵한다.
     // 위 시험만으로는 이 가지가 안 잠긴다: Batch10/S17 은 리터럴이 0 이라 「쓰는 이름 0」 조건이 먼저 침묵시킨다
-    // (되돌림으로 확인 - 매개변수 판정을 걷어내도 위 시험은 초록이었다).
+    // (되돌림으로 확인 - 첫 구현에서 매개변수 판정을 걷어내도 위 시험은 초록이었다).
     [Fact]
     public void ReaderOfAWriterMixingLiteralNamesWithANameParameter_IsSilent()
     {
@@ -141,6 +146,66 @@ public sealed class ControlTotalNameConsistencyTests
         Assert.Equal(expectDefect, defects.ContainsKey("S20"));
     }
 
+    // [리뷰 I2] 이름 칸 값이 임시 표에서 오면(같은 문장의 인라인 VALUES 가 아니다) 무엇을 쓰는지 모른다 - 문장에 엉뚱한
+    // 리터럴(N'Ledger')이 섞여도 침묵해야 한다. 첫 구현은 그 리터럴을 쓰기 이름으로 세어 옳은 읽는 단계를 고발했다.
+    // 같은 S13 의 CTE(VALUES 를 담은 ControlValues)는 문장에 그대로 남겨, 「문장 어딘가의 VALUES」로 해석하면 안 됨을 함께 잰다.
+    [Fact]
+    public void WriterWhoseNameColumnComesFromATemporaryTable_IsUnknownEvenWithAStrayLiteral()
+    {
+        var original = Fixture("Batch11-S13.md");
+        var writer = original.Replace("FROM ControlValues AS C\nWHERE NOT EXISTS", "FROM #LedgerNames AS C\nWHERE C.Kind = N'Ledger' AND NOT EXISTS");
+        Assert.NotEqual(original, writer);
+
+        // 짝: 원본 S13 이면 같은 S20 에 발화한다(첫 시험).
+        Assert.Empty(Validate(("S13", writer), ("S20", Fixture("Batch11-S20.md"))));
+    }
+
+    // [리뷰 I3] 같은 문장의 다른 표(단계 저널) StepCode 조건은 몫이 아니다. 실물 Batch8/S22(리터럴 이름으로 쓴다)를 S22 로 두고,
+    // 이름을 맞춘 S20 이 저널을 조인하며 j.StepCode = N'S22' 로 거르게 한다 - 그 조건을 몫으로 세면 이름이 안 겹쳐 발화한다.
+    [Fact]
+    public void StepCodeConditionOnAnotherTableInTheSameQuery_IsNotAnOwner()
+    {
+        var reader = Fixture("Batch11-S20.md");
+        foreach (var (from, to) in NameFixes) reader = reader.Replace("N'" + from + "'", "N'" + to + "'");
+        var joined = reader.Replace(
+            "      FROM batch.ControlTotal\n     WHERE RunId = @p_runId\n",
+            "      FROM batch.ControlTotal\n      JOIN batch.BatchStepJournal AS j ON j.RunId = @p_runId\n     WHERE RunId = @p_runId\n       AND j.StepCode = N'S22'\n");
+        Assert.NotEqual(reader, joined);
+
+        Assert.Empty(Validate(("S13", Fixture("Batch11-S13.md")), ("S20", joined), ("S22", Fixture("Batch8-S22.md"))));
+    }
+
+    // [리뷰 I4] 공통 규약(실물 Batch11 골격)이 읽는 쪽 이름(LedgerRowCount)을 담고 쓰는 쪽 이름을 하나도 안 담으면 어긴 것은
+    // 쓰는 단계다 - 결함을 쓰는 단계에 귀속한다. 실물의 방향을 뒤집어 만든다: S13 의 다섯 이름을 LEDGER_* 로, S20 은 S13 원래 이름으로.
+    [Fact]
+    public void WhenOnlyTheReaderFollowsTheSharedConventions_TheWriterIsAttributed()
+    {
+        var writer = Fixture("Batch11-S13.md");
+        foreach (var (from, to) in NameFixes) writer = writer.Replace("N'" + to + "'", "N'" + from + "'");
+        var reader = Fixture("Batch11-S20.md");
+        foreach (var (from, to) in NameFixes) reader = reader.Replace("N'" + from + "'", "N'" + to + "'");
+        var conventions = Fixture("Batch11-skeleton.md");
+        Assert.Contains("'LedgerRowCount'", conventions);
+
+        var withConventions = ValidateWith(conventions, ("S13", writer), ("S20", reader));
+        var defect = Assert.Single(withConventions);
+        Assert.Equal("S13", defect.Key);
+        Assert.Contains("공통 규약", defect.Value.Reason);
+
+        // 규약을 모르면 종전대로 읽는 단계다.
+        Assert.Equal("S20", Assert.Single(ValidateWith(null, ("S13", writer), ("S20", reader))).Key);
+    }
+
+    // 실물 방향(읽는 쪽 LEDGER_* 가 규약에 없다)은 규약을 주어도 읽는 단계 그대로다.
+    [Fact]
+    public void RealCaseWithSharedConventions_StillAttributesTheReader()
+    {
+        var defects = ValidateWith(Fixture("Batch11-skeleton.md"),
+            ("S13", Fixture("Batch11-S13.md")), ("S20", Fixture("Batch11-S20.md")));
+
+        Assert.Equal("S20", Assert.Single(defects).Key);
+    }
+
     // [배선] 발화를 재는 시험은 이 검사가 파이프라인에서 아예 안 불려도 초록이다. 오케스트레이터가 결과를
     // floorViolations 에 합치는 자리를 소스에서 잠근다(T25 ValidateControlStatusTerminalWrites 와 같은 모양).
     [Fact]
@@ -150,7 +215,7 @@ public sealed class ControlTotalNameConsistencyTests
             RepoPaths.FindRepoRoot(), "src", "ReSet.Core", "Services", "VerificationPipelineOrchestrator.cs"));
 
         Assert.Matches(new Regex(
-            @"foreach\s*\(\s*var\s*\(\s*code\s*,\s*defect\s*\)\s*in\s*_validator\.ValidateControlTotalNameConsistency\(\s*sections\s*,\s*steps\s*\)\s*\)\s*\{\s*floorViolations\[code\]"),
+            @"foreach\s*\(\s*var\s*\(\s*code\s*,\s*defect\s*\)\s*in\s*_validator\.ValidateControlTotalNameConsistency\(\s*sections\s*,\s*steps\s*,\s*conventions\s*\)\s*\)\s*\{\s*floorViolations\[code\]"),
             source);
     }
 }

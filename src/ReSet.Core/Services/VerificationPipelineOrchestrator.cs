@@ -4214,7 +4214,7 @@ namespace ReSet.Core.Services
 
             // [K2] 읽는 단계가 다른 단계 몫으로 거르는 통제명이 그 단계가 쓰는 이름과 하나도 안 겹치는가.
             // 같은 이유로 문서 단위다 - 다른 단계의 본문을 봐야 한다(POQSettleBatch11 S13↔S20).
-            foreach (var (code, defect) in _validator.ValidateControlTotalNameConsistency(sections, steps))
+            foreach (var (code, defect) in _validator.ValidateControlTotalNameConsistency(sections, steps, conventions))
             {
                 floorViolations[code] = floorViolations.TryGetValue(code, out var prior)
                     ? MergeFloorViolation(prior, defect)

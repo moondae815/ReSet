@@ -10,3 +10,4 @@
 | `Batch4-S16.md` | `output/Jobs/POQSettleBatch4/agent/steps/S16.md` | 자기가 쓴 이름을 자기가 읽는다 — K2 음성 |
 | `Batch10-S17.md` | `output/Jobs/POQSettleBatch10/agent/steps/S17.md` | `@p_controlName` 매개변수로 쓴다 — K2 음성(이름을 모르면 침묵) |
 | `Batch8-S22.md` | `output/Jobs/POQSettleBatch8/agent/steps/S22.md` | 리터럴로 쓰고 읽는 단계가 없다 — K2 음성 |
+| `Batch11-skeleton.md` | `output/Jobs/POQSettleBatch11/raw/attempts/run-001/skeleton.md` | 공통 규약 원천. `N'LedgerRowCount'` 를 담는다 - K2 가 규약을 어긴 쪽이 쓰는 단계일 때 쓰는 단계를 지목하는 근거 |
