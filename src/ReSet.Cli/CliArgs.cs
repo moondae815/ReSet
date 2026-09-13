@@ -22,12 +22,22 @@ namespace ReSet.Cli
         public bool RunSweep { get; set; }
 
         /// <summary>
+        /// --probe-anchors 의 재료가 될 Job. 그 Job 의 목차·골격을 얼린 입력으로 써서
+        /// 앵커 계약만 <b>첫 생성 한 번씩</b> 잰다. 산출물은 output/probes 아래에
+        /// 쓰며 output/Jobs 는 건드리지 않는다.
+        /// </summary>
+        public string? ProbeAnchorsJob { get; set; }
+
+        /// <summary>
         /// PlanOnly가 여기 포함되는 이유: 이 경로는 DB에 붙지 않지만 AI는 무인으로 부른다.
         /// 배치 모드로 켜져야 CliProviderBatchGuard(구독 쿼터 소진·권한 프롬프트 정지 차단)를
         /// 그대로 받는다. --coverage-map/--sweep처럼 가드 앞으로 빼면 안 된다.
         /// </summary>
         public bool IsBatchMode => AnalyzeAll || TargetProcedures.Count > 0 || GeneratePolicy
             || PlanOnly
+            // PlanOnly 와 같은 이유로 여기 있다 - DB 에는 안 붙지만 AI 를 무인으로
+            // 부르므로 CliProviderBatchGuard 를 그대로 받아야 한다.
+            || !string.IsNullOrEmpty(ProbeAnchorsJob)
             || !string.IsNullOrEmpty(ExtractSnapshotPath)
             || !string.IsNullOrEmpty(CoverageMapTarget);
     }

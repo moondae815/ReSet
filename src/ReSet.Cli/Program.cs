@@ -209,9 +209,14 @@ namespace ReSet.Cli
                 {
                     cliArgs.PlanOnly = true;
                 }
+                else if (arg.Equals("--probe-anchors", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    cliArgs.ProbeAnchorsJob = args[++i];
+                }
             }
 
             ValidatePlanOnly(cliArgs);
+            ValidateProbeAnchors(cliArgs);
 
             return cliArgs;
         }
@@ -461,6 +466,39 @@ namespace ReSet.Cli
         /// 던지는 <see cref="ArgumentException"/>은 <see cref="TryParseCommandLineArgs"/>가
         /// 안내 문구와 종료 코드 1로 바꾼다 — `--policy-sps` 폐기 분기와 같은 관례다.
         /// </summary>
+        private static void ValidateProbeAnchors(CliArgs cliArgs)
+        {
+            if (string.IsNullOrWhiteSpace(cliArgs.ProbeAnchorsJob))
+            {
+                return;
+            }
+
+            // 재료 적재기가 --plan-only 와 같은 것이므로 요구도 같다. --all 은 순서를
+            // 못 주는데, 프로브는 목차의 단계를 그대로 쓰므로 순서 자체보다 「어느
+            // 명세서를 재료로 싣는가」가 문제다 - 그래도 두 경로의 요구를 갈라 두면
+            // 나중에 한쪽만 고쳐진다.
+            if (cliArgs.TargetProcedures.Count == 0)
+            {
+                throw new ArgumentException(
+                    "--probe-anchors 에는 --sp 가 필요합니다. 재료가 될 명세서를 나열하십시오(예: --sp dbo.UP_A,dbo.UP_B).");
+            }
+
+            if (cliArgs.PlanOnly)
+            {
+                throw new ArgumentException("--probe-anchors 와 --plan-only 는 함께 쓸 수 없습니다. 한 번에 한 모드만 실행하십시오.");
+            }
+
+            if (cliArgs.AnalyzeAll)
+            {
+                throw new ArgumentException("--probe-anchors 와 --all 은 함께 쓸 수 없습니다. --sp 로 재료를 지정하십시오.");
+            }
+
+            if (cliArgs.GeneratePolicy)
+            {
+                throw new ArgumentException("--probe-anchors 와 --policy 는 함께 쓸 수 없습니다. 한 번에 한 모드만 실행하십시오.");
+            }
+        }
+
         private static void ValidatePlanOnly(CliArgs cliArgs)
         {
             if (!cliArgs.PlanOnly)
@@ -755,7 +793,7 @@ namespace ReSet.Cli
             bool isOfflineMode = !string.IsNullOrWhiteSpace(offlinePath);
             IDbMetadataService dbService;
 
-            if (cliArgs.PlanOnly)
+            if (cliArgs.PlanOnly || !string.IsNullOrWhiteSpace(cliArgs.ProbeAnchorsJob))
             {
                 // 이 경로의 재료는 이미 output/에 파일로 있다. 통합 배치 파이프라인과
                 // 지시서 번들 생성은 DB를 부르지 않으므로(ConsolidatedPipelineDbIndependenceTests가
@@ -1100,6 +1138,19 @@ namespace ReSet.Cli
             if (File.Exists(instructionsFile))
             {
                 instructions = await File.ReadAllTextAsync(instructionsFile);
+            }
+
+            // 앵커 프로브 - 계약이 듣는지만 단계 단위로 잰다. --plan-only 와 같은
+            // 이유로 SP 목록 로드(DB 조회)보다 앞에 있어야 한다.
+            if (!string.IsNullOrWhiteSpace(cliArgs.ProbeAnchorsJob))
+            {
+                // 실제 파이프라인이 단계 본문을 만들 때 쓰는 것은 consolidatorService 다.
+                // aiService 를 주면 Consolidator 가 따로 구성된 판에서 다른 모델을
+                // 재게 되고, 그 수는 이 판의 생성을 서술하지 못한다.
+                Environment.ExitCode = await AnchorProbeCommand.RunAsync(
+                    outputDir, cliArgs.ProbeAnchorsJob!, cliArgs.TargetProcedures,
+                    consolidatorService, targetLanguage, consolidatorEffort, globalCts.Token);
+                return;
             }
 
             // 계획 전용 모드 - 저장된 명세서만으로 통합 배치 Job 한 판을 세운다.
