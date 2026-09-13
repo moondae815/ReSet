@@ -4212,6 +4212,15 @@ namespace ReSet.Core.Services
                     : defect;
             }
 
+            // [K2] 읽는 단계가 다른 단계 몫으로 거르는 통제명이 그 단계가 쓰는 이름과 하나도 안 겹치는가.
+            // 같은 이유로 문서 단위다 - 다른 단계의 본문을 봐야 한다(POQSettleBatch11 S13↔S20).
+            foreach (var (code, defect) in _validator.ValidateControlTotalNameConsistency(sections, steps))
+            {
+                floorViolations[code] = floorViolations.TryGetValue(code, out var prior)
+                    ? MergeFloorViolation(prior, defect)
+                    : defect;
+            }
+
             // 목록 순서대로 조립한다. 사전의 삽입 순서가 아니라 목차의 순서가 기준이다.
             var ordered = steps
                 .Select(step => sections.TryGetValue(step.Code, out var markdown) ? markdown : string.Empty)
