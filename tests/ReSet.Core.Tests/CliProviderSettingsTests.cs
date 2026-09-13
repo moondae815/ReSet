@@ -156,6 +156,51 @@ namespace ReSet.Core.Tests
             Assert.True(routing.AllowFallbacks);
         }
 
+        // [한 판만 좁히기 - scripts/run-plan-only-job.sh 의 PLANONLY_OPENROUTER_ONLY_BACKEND]
+        // 저장소 기본값은 위 시험이 잠근 대로 가용성을 위해 폴백을 연다. 그런데 측정 판은
+        // 백엔드가 섞이면 결론이 뒤집히고(Azure 는 같은 모델에 2.5~3 배 단가다), 그래서
+        // 스크립트가 환경변수로 그 판만 한 백엔드에 못박는다. 이 시험은 그 덮어쓰기가
+        // 실제 설정 파일 위에서 실제 환경변수 공급자로 성립하는지를 잠근다.
+        //
+        // 환경변수로는 배열 칸을 지울 수 없어 기본값의 뒤 칸(`azure`)을 공백으로 덮는다 -
+        // OpenRouterRoutingOptions.Parse 가 빈 칸을 걸러 낸다. 빈 문자열도 이 환경에서는
+        // 같은 결과였지만(2026-09-13 변이) 셸마다 빈 값 환경변수 취급이 달라 공백으로 통일한다.
+        [Fact]
+        public void AppSettings_PerRunEnvironmentOverride_PinsGptSolToOneBackendWithoutFallback()
+        {
+            const string prefix = "RESET_ROUTING_PIN_TEST_";
+            const string byModel = prefix + "AiSettings__Providers__OpenRouter__Routing__ByModel__openai/gpt-5.6-sol__";
+            var variables = new Dictionary<string, string>
+            {
+                [byModel + "Order__0"] = "openai",
+                [byModel + "Order__1"] = " ",
+                [byModel + "Order__2"] = " ",
+                [byModel + "Order__3"] = " ",
+                [byModel + "AllowFallbacks"] = "false",
+            };
+
+            try
+            {
+                foreach (var (name, value) in variables) Environment.SetEnvironmentVariable(name, value);
+
+                var configuration = new ConfigurationBuilder()
+                    .AddJsonFile(Path.Combine(RepoPaths.FindRepoRoot(), "src/ReSet.Cli/appsettings.json"), optional: false)
+                    .AddEnvironmentVariables(prefix)
+                    .Build();
+
+                var routing = ReSet.Cli.Program.ReadOpenRouterRouting(configuration, "OpenRouter", "openai/gpt-5.6-sol");
+
+                Assert.NotNull(routing);
+                Assert.Equal(new[] { "openai" }, routing!.Order);
+                Assert.False(routing.AllowFallbacks);
+                Assert.Equal(new[] { "unknown" }, routing.Quantizations);
+            }
+            finally
+            {
+                foreach (var name in variables.Keys) Environment.SetEnvironmentVariable(name, null);
+            }
+        }
+
         // 열린 가중치 모델에서는 하한이 그대로 의미가 있다. kimi-k3은 백엔드 19개 중
         // fp8이 baseten 하나뿐이라, Default를 물려받는 것만으로 후보가 그 하나로 정해진다.
         // 여기에 Quantizations를 적어 넣는 "일관성" 수정이 들어오면 하한이 풀린다.

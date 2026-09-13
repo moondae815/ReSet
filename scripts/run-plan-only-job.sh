@@ -9,20 +9,32 @@
 # 쓰임새: 프롬프트 계약을 넣은 뒤 「그 계약이 실제 생성물에 듣는가」를 재는 표본 한 판.
 #
 #   scripts/run-plan-only-job.sh POQSettleBatch8
+#
+# 선택 환경변수(비우면 종전과 같다):
+#   PLANONLY_MAX_L2_ATTEMPTS=0             계획 시도 1 회
+#   PLANONLY_CONSOLIDATOR_PROVIDER=OpenRouter
+#   PLANONLY_CONSOLIDATOR_MODEL=openai/gpt-5.6-sol
+#   PLANONLY_OPENROUTER_ONLY_BACKEND=openai  그 모델을 이 백엔드 하나에 못박고 폴백을 끈다
+#   PLANONLY_PROBE_ANCHORS=1               새 판 대신 기존 Job 을 재료로 앵커 프로브(첫 생성만)
 set -euo pipefail
 
 JOB=${1:-}
 if [[ -z "$JOB" ]]; then
-  echo "사용법: $0 <새 Job 이름>" >&2
+  echo "사용법: $0 <Job 이름>   (판: 새 이름 · 프로브: 기존 Job)" >&2
   exit 1
 fi
+PROBE=${PLANONLY_PROBE_ANCHORS:-}
 
 # 공유 체크아웃의 루트. --show-toplevel 을 쓰면 이 스크립트를 실행 워크트리 안에서
 # 부른 판이 REPO 를 워크트리로 잡아, 산출물이 실물 output/ 이 아니라 워크트리 안으로
 # 샌다(regen-job.sh 가 2026-09-04 에 밟은 자리와 같은 모양). --git-common-dir 은
 # 워크트리에서도 공유 .git 을 가리키므로 그 부모가 언제나 공유 체크아웃이다.
 REPO=$(cd "$(dirname "$(git rev-parse --git-common-dir)")" && pwd)
-LOGDIR=$REPO/output/logs-planonly-$JOB
+if [[ -n "$PROBE" ]]; then
+  LOGDIR=$REPO/output/logs-probe-$JOB-$(date +%Y%m%d-%H%M%S)
+else
+  LOGDIR=$REPO/output/logs-planonly-$JOB
+fi
 RUNROOT=${PLANONLY_RUNROOT:-$REPO/.worktrees/planonly-run}
 
 # 배치 스텝의 실행 순서. Batch7 의 raw/prompt-context.md 에서 명세서 구획이 이어 붙은
@@ -50,7 +62,13 @@ SPS=(
 # 같은 이름이면 재사용 저널(output/Jobs/<Job>/raw/attempts)이 붙어 이전 판의 답을
 # 그대로 돌려줄 수 있다. 그러면 「계약이 듣는가」를 재는 판이 이전 판의 복사본이 되고,
 # 초록이 나도 아무것도 증명하지 못한다.
-if [[ -d "$REPO/output/Jobs/$JOB" ]]; then
+if [[ -n "$PROBE" ]]; then
+  # 프로브는 얼어붙은 Job 의 목차·골격을 재료로 쓰므로 반대로 **있어야** 한다.
+  if [[ ! -f "$REPO/output/Jobs/$JOB/raw/PlanStructure.md" ]]; then
+    echo "중단: 프로브 재료가 없다 - output/Jobs/$JOB/raw/PlanStructure.md" >&2
+    exit 1
+  fi
+elif [[ -d "$REPO/output/Jobs/$JOB" ]]; then
   echo "중단: output/Jobs/$JOB 가 이미 있다. 새 이름을 줘라." >&2
   echo "  기존 Job 을 다시 돌리려는 것이라면 이 스크립트가 아니라 scripts/regen-job.sh 다." >&2
   exit 1
@@ -109,6 +127,31 @@ if [[ -n "$MAX_L2" && ! "$MAX_L2" =~ '^[0-9]+$' ]]; then
   exit 1
 fi
 
+# ── 선택: Consolidator 모델과 OpenRouter 백엔드 못박기
+#
+# --plan-only 에서 목차·골격·단계 본문을 만드는 것은 Actor 가 아니라 Consolidator 다
+# (VerificationPipelineOrchestrator 의 _consolidatorService). Actor 는 이 경로에서 불리지 않는다.
+CONS_PROVIDER=${PLANONLY_CONSOLIDATOR_PROVIDER:-claude-cli}
+CONS_MODEL=${PLANONLY_CONSOLIDATOR_MODEL:-claude-sonnet-5}
+ONLY_BACKEND=${PLANONLY_OPENROUTER_ONLY_BACKEND:-}
+if [[ -n "$PROBE" ]]; then
+  MODE_ARGS=(--probe-anchors "$JOB"); MODE_LABEL="앵커 프로브(첫 생성만)"
+else
+  MODE_ARGS=(--plan-only --job-name "$JOB"); MODE_LABEL="계획 판"
+fi
+ROUTE_ENV=()
+if [[ -n "$ONLY_BACKEND" ]]; then
+  if [[ "$CONS_PROVIDER" != "OpenRouter" ]]; then
+    echo "중단: PLANONLY_OPENROUTER_ONLY_BACKEND 는 Consolidator 가 OpenRouter 일 때만 뜻이 있다." >&2
+    exit 1
+  fi
+  # 저장소 기본값은 가용성을 위해 폴백을 연다(CliProviderSettingsTests). 측정 판은 백엔드가
+  # 섞이면 안 되므로 이 판만 덮는다. 배열 칸은 환경변수로 못 지워 뒤 칸을 공백으로 덮는다 -
+  # AppSettings_PerRunEnvironmentOverride_PinsGptSolToOneBackendWithoutFallback 이 잠근 모양이다.
+  RB="AiSettings__Providers__OpenRouter__Routing__ByModel__${CONS_MODEL}"
+  ROUTE_ENV=("${RB}__Order__0=$ONLY_BACKEND" "${RB}__Order__1= " "${RB}__Order__2= " "${RB}__Order__3= " "${RB}__AllowFallbacks=false")
+fi
+
 mkdir -p $LOGDIR
 git -C $RUNROOT rev-parse HEAD > $LOGDIR/COMMIT
 git -C $RUNROOT log -1 --oneline >> $LOGDIR/COMMIT
@@ -117,13 +160,17 @@ print -l $SPS > $LOGDIR/SPS
 print -l \
   "AiSettings__Provider=claude-cli" \
   "AiSettings__ModelName=claude-sonnet-5" \
-  "AiSettings__Consolidator__Provider=claude-cli" \
-  "AiSettings__Consolidator__ModelName=claude-sonnet-5" \
+  "AiSettings__Consolidator__Provider=$CONS_PROVIDER" \
+  "AiSettings__Consolidator__ModelName=$CONS_MODEL" \
   "AiSettings__PromptContextScope=Narrow" \
-  "AiSettings__MaxL2Attempts=${MAX_L2:-(설정 파일)}" > $LOGDIR/RUN-ENV
+  "AiSettings__MaxL2Attempts=${MAX_L2:-(설정 파일)}" \
+  "OpenRouter 백엔드 고정=${ONLY_BACKEND:-(설정 파일)}" \
+  "모드=$MODE_LABEL" \
+  $ROUTE_ENV > $LOGDIR/RUN-ENV
 
 echo "───────────────────────────────────────────────"
-echo " 새 Job:      $JOB"
+echo " Job:        $JOB  [$MODE_LABEL]"
+echo " Consolidator: $CONS_PROVIDER / $CONS_MODEL ${ONLY_BACKEND:+(백엔드 $ONLY_BACKEND 고정 · 폴백 끔)}"
 echo " 스텝 재료:   ${#SPS} 편 (순서 = 위 나열)"
 echo " 로그:        $LOGDIR"
 echo " 커밋:        $(head -1 $LOGDIR/COMMIT)"
@@ -145,11 +192,10 @@ OutputSettings__Directory=$REPO/output \
 LoggingSettings__LogDirectory=$LOGDIR \
 AiSettings__Provider=claude-cli \
 AiSettings__ModelName=claude-sonnet-5 \
-AiSettings__Consolidator__Provider=claude-cli \
-AiSettings__Consolidator__ModelName=claude-sonnet-5 \
+AiSettings__Consolidator__Provider=$CONS_PROVIDER \
+AiSettings__Consolidator__ModelName=$CONS_MODEL \
 AiSettings__PromptContextScope=Narrow \
-env ${MAX_L2:+AiSettings__MaxL2Attempts=$MAX_L2} \
+env ${MAX_L2:+AiSettings__MaxL2Attempts=$MAX_L2} $ROUTE_ENV \
 dotnet run --project src/ReSet.Cli -- \
-  --plan-only \
-  --job-name $JOB \
+  $MODE_ARGS \
   --sp ${(j:,:)SPS}
