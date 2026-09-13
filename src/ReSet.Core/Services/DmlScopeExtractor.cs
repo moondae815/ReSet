@@ -190,9 +190,21 @@ namespace ReSet.Core.Services
                 var keys = JoinKeys.Count == 0 ? "(없음)" : string.Join(", ", JoinKeys);
                 return OuterJoins.Count == 0
                     ? keys
-                    : $"{keys} · 외부 조인 {string.Join(", ", OuterJoins)}";
+                    : $"{keys}{OuterJoinTailSeparator}{string.Join(", ", OuterJoins)}";
             }
         }
+
+        /// <summary>
+        /// <see cref="JoinKeysCell"/>에서 키 목록과 외부 조인 꼬리를 가르는 구분자.
+        ///
+        /// [왜 상수인가 - 2026-09-13] 이 칸의 소비자는 둘이 아니라 <b>셋</b>이다. 렌더(AiService)와
+        /// L1 전사 대조(MechanicalValidator)는 위 속성을 함께 쓰지만, 명세서에서 칸을 다시 컬럼
+        /// 목록으로 읽는 <see cref="SpecStatementFactsExtractor"/>는 문자열만 본다. 꼬리를 붙인
+        /// 커밋(<c>b739de01</c>)이 그 셋째를 안 고쳐, 마지막 키가 꼬리와 붙은
+        /// <c>PGName · 외부 조인 Y(LEFT OUTER)</c>가 컬럼 이름 하나로 읽혔고 검사 B 가 그 없는 컬럼을
+        /// 매 시도 요구했다(코퍼스 14 좌표 중 12). 되읽기도 이 상수로 꼬리를 뗀다.
+        /// </summary>
+        public const string OuterJoinTailSeparator = " · 외부 조인 ";
 
         /// <summary>
         /// <see cref="JoinKeys"/>와 같은 등식을 <c>테이블.컬럼=테이블.컬럼</c>으로
