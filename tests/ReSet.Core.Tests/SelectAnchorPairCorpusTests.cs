@@ -158,6 +158,15 @@ namespace ReSet.Core.Tests
             var unreachedSteps = new List<(string Job, string Step, IReadOnlyCollection<int> Declared)>();
             var missedDeclarationRows = 0;
 
+            // [Job 별로 가르는 이유 - 2026-09-12]
+            // 전역 도달률은 「계약 이전에 만들어진 Job 넷」과 「계약 이후에 만들어진
+            // Job」을 한 분모에 섞는다. 계약이 완벽히 들어도 전역 값은 옛 Job 들에
+            // 눌려 조금밖에 안 올라가므로, 그 수로는 계약의 효력을 판정할 수 없다.
+            // 판정이 필요한 것은 언제나 「그 계약 뒤에 생성된 Job 하나」다.
+            var perJobReached = new Dictionary<string, int>(StringComparer.Ordinal);
+            var perJobTotal = new Dictionary<string, int>(StringComparer.Ordinal);
+            var perJobMissedRows = new Dictionary<string, int>(StringComparer.Ordinal);
+
             foreach (var jobDir in Directory.EnumerateDirectories(jobsDir)
                          .OrderBy(d => d, StringComparer.Ordinal))
             {
@@ -184,15 +193,21 @@ namespace ReSet.Core.Tests
                     // 가 비어 있으므로 declared 전체가 그대로 여기 잡힌다 - 예전
                     // `unreachedSteps.Sum(s => s.Declared.Count)` 와 그 부분에서는
                     // 같은 값을 낸다.
-                    missedDeclarationRows += declared.Count(ordinal => !anchorOrdinals.Contains(ordinal));
+                    var missedHere = declared.Count(ordinal => !anchorOrdinals.Contains(ordinal));
+                    missedDeclarationRows += missedHere;
+
+                    var jobName = Path.GetFileName(jobDir);
+                    perJobMissedRows[jobName] = perJobMissedRows.GetValueOrDefault(jobName) + missedHere;
+                    perJobTotal[jobName] = perJobTotal.GetValueOrDefault(jobName) + 1;
 
                     if (anchors.Count > 0)
                     {
                         reached++;
+                        perJobReached[jobName] = perJobReached.GetValueOrDefault(jobName) + 1;
                     }
                     else
                     {
-                        unreachedSteps.Add((Path.GetFileName(jobDir), step.Code, declared));
+                        unreachedSteps.Add((jobName, step.Code, declared));
                     }
                 }
             }
@@ -204,6 +219,12 @@ namespace ReSet.Core.Tests
             _output.WriteLine(
                 $"[역방향 - §7] 선언 있음·앵커 0 인 단계 {unreachedSteps.Count} · " +
                 $"놓친 선언 행 합계(부분 미도달 포함) {missedDeclarationRows} · 도달률 {reached}/{total}");
+            foreach (var job in perJobTotal.Keys.OrderBy(k => k, StringComparer.Ordinal))
+            {
+                _output.WriteLine(
+                    $"  [Job] {job} · 도달률 {perJobReached.GetValueOrDefault(job)}/{perJobTotal[job]} · " +
+                    $"놓친 선언 행 {perJobMissedRows.GetValueOrDefault(job)}");
+            }
             foreach (var s in unreachedSteps.OrderBy(s => s.Job, StringComparer.Ordinal).ThenBy(s => s.Step, StringComparer.Ordinal))
             {
                 _output.WriteLine(
