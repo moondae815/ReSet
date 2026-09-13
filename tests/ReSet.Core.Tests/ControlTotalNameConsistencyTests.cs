@@ -108,6 +108,22 @@ public sealed class ControlTotalNameConsistencyTests
         Assert.Empty(Validate(("S13", writer), ("S20", Fixture("Batch11-S20.md"))));
     }
 
+    // 한 단계가 리터럴로 쓰는 INSERT 와 매개변수로 쓰는 INSERT 를 함께 가지면 이름을 일부만 안다 - 모르는 쪽에 읽는 이름이
+    // 있을 수 있으니 침묵한다. 이 가지는 위 두 시험으로 안 잠긴다: 파서 구현에서 「모름」인 쓰기는 이름을 싣지 않아 그 둘은
+    // 「쓰는 이름 0」에서 먼저 조용해진다(2026-09-13 되돌림으로 확인 - 「모름」 판정을 걷어내도 둘 다 초록이었다).
+    [Fact]
+    public void WriterWithBothALiteralAndAParameterizedWrite_IsUnknown()
+    {
+        var original = Fixture("Batch11-S13.md");
+        var writer = original.Replace("-- SQL_VALIDATE_CAPTURE\n",
+            "-- SQL_VALIDATE_CAPTURE\nINSERT INTO batch.BatchControlTotal (RunId, StepCode, ControlName, ControlValue, CapturedAtUtc)\n" +
+            "VALUES (@p_runId, N'S13', @p_controlName, @p_controlValue, SYSUTCDATETIME());\n");
+        Assert.NotEqual(original, writer);
+
+        // 짝: 원본 S13(리터럴 쓰기만)이면 같은 S20 에 발화한다(첫 시험).
+        Assert.Empty(Validate(("S13", writer), ("S20", Fixture("Batch11-S20.md"))));
+    }
+
     [Fact]
     public void RealWriterWithNoReader_IsSilent()
     {
