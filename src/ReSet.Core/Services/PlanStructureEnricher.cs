@@ -327,23 +327,6 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
-        /// 이 단계의 TargetTables를 정적 분석의 쓰기 대상으로 교체하고 SchemaTables를 채운다.
-        /// 바뀐 것이 있으면 true.
-        ///
-        /// 오류코드와 달리 합집합하지 않는 이유: 두 재료의 신뢰도가 대칭이 아니다.
-        /// 오류코드는 명세서 산문에서 뽑고 모델도 같은 산문을 보지만, 테이블은 파서가
-        /// AST에서 확정하고 모델은 추측한다. 실측에서 한 단계가 선언한 네 테이블 중
-        /// 셋이 원본 DDL에 0회 등장했다 - 합집합했다면 그 허위가 검증 요건이 되고,
-        /// 재생성이 그것을 고착시켰을 것이다.
-        ///
-        /// SchemaTables는 이 메서드가 유일하게 채우는 곳이다(BatchStepPlan.cs의 불변식).
-        /// 도구가 채울 재료가 없는 두 경로 - LegacyProcedures가 비어 대조할 원본이
-        /// 없는 경우, 그리고 있어도 정적 분석 매칭이 하나도 안 남는 경우 - 에서는
-        /// 기존 SchemaTables를 지운다. 재수립 프롬프트가 이전 목차를 그대로 예시로
-        /// 붙여넣으므로, 지우지 않으면 모델이 흉내 낸 값이 살아남아 도구가 낸 것으로
-        /// 오인된다.
-        /// </summary>
-        /// <summary>
         /// <c>TargetTables</c> 에 적힌 제어 계약 별칭을 정본 이름으로 바꾸고, 그 결과 겹친 이름을 하나로 모은다.
         /// 바뀐 것이 있으면 true.
         ///
@@ -375,6 +358,23 @@ namespace ReSet.Core.Services
             return true;
         }
 
+        /// <summary>
+        /// 이 단계의 TargetTables를 정적 분석의 쓰기 대상으로 교체하고 SchemaTables를 채운다.
+        /// 바뀐 것이 있으면 true.
+        ///
+        /// 오류코드와 달리 합집합하지 않는 이유: 두 재료의 신뢰도가 대칭이 아니다.
+        /// 오류코드는 명세서 산문에서 뽑고 모델도 같은 산문을 보지만, 테이블은 파서가
+        /// AST에서 확정하고 모델은 추측한다. 실측에서 한 단계가 선언한 네 테이블 중
+        /// 셋이 원본 DDL에 0회 등장했다 - 합집합했다면 그 허위가 검증 요건이 되고,
+        /// 재생성이 그것을 고착시켰을 것이다.
+        ///
+        /// SchemaTables는 이 메서드가 유일하게 채우는 곳이다(BatchStepPlan.cs의 불변식).
+        /// 도구가 채울 재료가 없는 두 경로 - LegacyProcedures가 비어 대조할 원본이
+        /// 없는 경우, 그리고 있어도 정적 분석 매칭이 하나도 안 남는 경우 - 에서는
+        /// 기존 SchemaTables를 지운다. 재수립 프롬프트가 이전 목차를 그대로 예시로
+        /// 붙여넣으므로, 지우지 않으면 모델이 흉내 낸 값이 살아남아 도구가 낸 것으로
+        /// 오인된다.
+        /// </summary>
         private static bool RewriteTables(
             JsonObject step,
             IReadOnlyDictionary<string, SpecTargetTableExtractor.StepTableSets> tablesByProcedure,

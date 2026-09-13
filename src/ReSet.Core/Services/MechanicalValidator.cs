@@ -999,8 +999,10 @@ namespace ReSet.Core.Services
                         $"{reader} ({reader}이(가) {owner} 몫의 통제 합계를 ControlName " +
                         $"{string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"))}(으)로 읽는데 " +
                         $"{owner}이(가) 쓰는 이름은 " +
-                        $"{string.Join(", ", ownerNames.OrderBy(n => n, StringComparer.Ordinal).Take(12).Select(n => "`" + n + "`"))}" +
-                        $"{(ownerNames.Count > 12 ? " 등" : string.Empty)}입니다 - 겹치는 이름이 하나도 없어 이 대조는 어떤 실행에서도 " +
+                        // 전부 싣는다 - 이 문구가 재생성 프롬프트로 가고, 잘라 내면 맞출 이름이 빠진다(실측: 12 개로
+                        // 자르니 짝이 되는 PGTotal·POQIncome·TxAmt 가 알파벳 순서에 밀려 사라졌다).
+                        $"{string.Join(", ", ownerNames.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"))}" +
+                        "입니다 - 겹치는 이름이 하나도 없어 이 대조는 어떤 실행에서도 " +
                         $"{owner} 몫의 행을 찾지 못합니다. 읽는 이름을 {owner}이(가) 쓰는 이름으로 맞추십시오.)";
 
                     defects[reader] = defects.TryGetValue(reader, out var prior)

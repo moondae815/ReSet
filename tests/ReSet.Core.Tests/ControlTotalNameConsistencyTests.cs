@@ -54,6 +54,8 @@ public sealed class ControlTotalNameConsistencyTests
         Assert.Contains("S13", defect.Reason);
         Assert.Contains("LEDGER_ROW_COUNT", defect.Reason);
         Assert.Contains("LedgerRowCount", defect.Reason);
+        // 재생성 프롬프트로 가는 문구다 - 짝이 될 쓰기 이름이 잘려 나가면 모델이 맞출 수 없다.
+        foreach (var (_, writer) in NameFixes) Assert.Contains("`" + writer + "`", defect.Reason);
     }
 
     // 양성 대조 짝: 같은 S20 본문에서 읽는 이름만 S13 이름으로 바꾸면 조용해진다. 위 발화가
