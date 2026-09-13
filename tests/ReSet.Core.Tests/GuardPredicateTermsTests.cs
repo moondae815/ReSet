@@ -45,6 +45,8 @@ public sealed class GuardPredicateTermsTests
     [InlineData("Batch12-S03.md", "UP_Util_PG_Client_CMRate_Ins", "PLTID = 1", null)]
     [InlineData("Batch12-S10.md", "UP_UTIL_SETTLE_INS_EXTRA", "OutYMD <= @p_currYmd", "OutYMD IS NOT NULL")]
     [InlineData("Batch11-S11.md", "UP_UTIL_SETTLE_INS_EXTRA", "ISNULL(OutYMD, '') <> ''", "OutYMD IS NOT NULL")]
+    // claude-cli 판이다. 조건이 여럿 바뀌어 공통 항이 5/7 뿐이라, 처음 쓴 문턱(가드 항 수 − 1)으로는 조용했다.
+    [InlineData("Batch10-S08.md", "UP_UTIL_SETTLE_INS_EXTRA", "OutState IN (3, 4)", "OutState IN (1,5) AND OutYMD IS NOT NULL")]
     public void RealGuardTranslationsThatDrift_AreReported(string fixture, string procedure, string added, string? missing)
     {
         var error = Assert.Single(GuardErrors(Validate(Fixture(fixture), procedure)));
@@ -57,6 +59,7 @@ public sealed class GuardPredicateTermsTests
     [InlineData("Batch8-S03.md", "UP_Util_PG_Client_CMRate_Ins")]   // 같은 EXISTS (SELECT 1 …) 관용구로 원본대로
     [InlineData("Batch1-S02.md", "UP_Util_PG_Client_CMRate_Ins")]   // SELECT TOP 1 PLTID 모양
     [InlineData("Batch10-S04.md", "UP_UTIL_SETTLE_INS")]            // SELECT COUNT(1) 모양
+    [InlineData("Batch8-S09.md", "UP_UTIL_SETTLE_INS_EXTRA")]       // 조건 7 개 가드를 원본대로
     public void RealGuardTranslationsThatKeepTheOriginalConditions_AreSilent(string fixture, string procedure)
     {
         Assert.Empty(GuardErrors(Validate(Fixture(fixture), procedure)));
@@ -86,6 +89,33 @@ public sealed class GuardPredicateTermsTests
         Assert.NotEqual(original, mutated);
 
         Assert.Empty(GuardErrors(Validate(mutated, "UP_Util_PG_Client_CMRate_Ins")));
+    }
+
+    // [가드 중심 짝] 원본대로인 가드 번역 곁에, 가드와 조건 둘을 공유하는 사후 확인 질의가 있어도 조용하다 - 가드마다
+    // 공통 항이 가장 많은 질의 하나(진짜 번역)만 짝이 된다. 질의마다 가드를 고르면 이 질의가 가드와 짝지어져 발화한다.
+    [Fact]
+    public void ASimilarPostCheckBesideAFaithfulGuard_IsNotPairedWithTheGuard()
+    {
+        var original = Fixture("Batch8-S03.md");
+        var mutated = original.Replace(
+            "-- SQL_PRECHECK_SETTLED_EXISTS\n",
+            "-- SQL_POSTCHECK_REFUNDS\nSELECT COUNT(1) FROM SETTLE_POQ_DB.dbo.TSettleMst WHERE YMD = @p_ymd AND OutState IN (1, 5) AND UseState = 3;\n\n-- SQL_PRECHECK_SETTLED_EXISTS\n");
+        Assert.NotEqual(original, mutated);
+
+        Assert.Empty(GuardErrors(Validate(mutated, "UP_Util_PG_Client_CMRate_Ins")));
+    }
+
+    // [R7] 원본 `ExtraSettleFlag = 1` 을 이행이 매개변수로 바인딩한 것은 표류가 아니다 - 형제 앵커 술어 대조와 같은 규칙.
+    [Fact]
+    public void OriginalLiteralBoundAsAParameter_IsNotADrift()
+    {
+        var original = Fixture("Batch8-S09.md");
+        var mutated = original.Replace(
+            "       AND ExtraSettleFlag = 1\n       AND OutState IN (1,5)\n",
+            "       AND ExtraSettleFlag = @p_extraSettleFlag\n       AND OutState IN (1,5)\n");
+        Assert.NotEqual(original, mutated);
+
+        Assert.Empty(GuardErrors(Validate(mutated, "UP_UTIL_SETTLE_INS_EXTRA")));
     }
 
     // 지어낸 항의 컬럼이 원본 가드의 SELECT 목록 컬럼이면 그것이 조건이 아님을 처방에 싣는다(두 판이 그 오독을 했다).
