@@ -2578,12 +2578,21 @@ EXEC sp_executesql @v_sql, N'@p_batchDate CHAR(8)', @p_batchDate = @p_batchDate;
 
 -- SQL_DELETE_RANGE - never `DELETE FROM Target` without a WHERE, which discards rows
 -- belonging to other business dates (rule 4b)
+/* DELETE 1: 당일분 삭제 */
 DELETE FROM dbo.TargetTable WHERE BatchDate = @p_batchDate;
 
+-- The statement anchor goes on its OWN comment line, directly above the statement, and the
+-- anchor starts that comment. Never fold it into the block-name line as
+-- `-- SQL_DELETE_RANGE (DELETE 1: ...)` - the verifier reads the anchor only at the start of
+-- a comment, so a folded anchor is invisible and the statement loses its spec comparison.
+-- Anchor ONLY the statements the spec's DML range table declares. SQL_CHUNK_BOUNDS below is
+-- infrastructure this plan introduces, not a spec row, so it carries no anchor: inventing an
+-- ordinal for it would point at a table row that does not exist.
 -- SQL_CHUNK_BOUNDS
 SELECT MIN(Col1), MAX(Col1) FROM dbo.SourceTable WHERE BatchDate = @p_batchDate;
 
 -- SQL_INSERT_CHUNK
+/* INSERT 1: 정산 원장 적재 */
 INSERT INTO dbo.TargetTable (BatchDate, Col1, Col2)
 SELECT @p_batchDate, Col1, SUM(Col2) FROM dbo.SourceTable
  WHERE BatchDate = @p_batchDate
@@ -4842,6 +4851,17 @@ Consolidate the provided specifications into a single unified batch job named '{
             // 그때마다 새 표기가 나왔다. 고칠 자리는 리더가 아니라 계약이다.
             // 잠금: StatementAnchorClauseTests · 설계: docs/superpowers/specs/2026-09-08-U앵커-계약-표기-설계.md
             //
+            // [「맨 앞에 온다」를 왜 따로 적는가 - 2026-09-13, POQSettleBatch8]
+            // 자리를 안 적었더니 모델이 앵커를 이름표에 접어 넣었다
+            // (`-- SQL_FETCH_SETTLE_POST_SOURCE (SELECT 1: …)` 여섯 줄, Batch8/S12).
+            // 그것은 이 조항들을 하나도 어기지 않는다 - 앵커도 설명도 한 주석 안에 있다.
+            // 리더는 주석 첫머리만 앵커로 받으므로 그 단계는 통째로 안 읽혔고, 도달률이
+            // 5/5 여야 할 판이 4/5 로 보였다. 코퍼스 실측이 이 자리를 정한다: 형제 앵커
+            // 385 건 중 277 건이 「이름표 줄 + 앵커 줄」 두 줄이고, 접어 넣은 것은 96 건이다.
+            // 리더를 넓히는 대신 계약이 그 다수 관행을 못박는다 - 넓히면 산문
+            // (`SELECT1/DELETE1/INSERT1`)까지 앵커로 읽힌다.
+            // 판독: docs/audit-reports/2026-09-12-A2-신규Job-계약판정-착수기록.md
+            //
             // [축 B 감사가 요구하는 세 가지 - POQSettleBatch1 2026-08-24]
             // 앵커가 없으면 단계 검사가 문장을 명세서의 갱신 N에 붙일 수 없어 조인 키·술어
             // 컬럼 대조가 통째로 꺼진다. 규약 두 조항은 실측에서 금액·행 집합을 바꾼 치환이다.
@@ -4858,7 +4878,36 @@ Consolidate the provided specifications into a single unified batch job named '{
                 "**`U13-DELETE 1` 같은 복합 라벨은 쓰지 마십시오.** " +
                 "번호가 있어야 검증이 명세서 DML 범위 표의 조인 키·술어 컬럼과 문장 단위로 대조합니다. " +
                 "앵커와 설명은 **하나의 주석에** 담으십시오. 주석을 둘로 나누면(`/* U13 */`와 " +
-                "`/* 카드사 원가 반영 */`) 검증이 문장 바로 앞의 가장 가까운 주석 하나만 읽으므로 앵커를 놓칠 수 있습니다.");
+                "`/* 카드사 원가 반영 */`) 검증이 문장 바로 앞의 가장 가까운 주석 하나만 읽으므로 앵커를 놓칠 수 있습니다. " +
+                "**앵커는 그 주석의 맨 앞에 옵니다.** 이름 있는 SQL 블록의 이름표 줄에 괄호로 접어 넣지 마십시오 - " +
+                "`-- SQL_FETCH_SOURCE (SELECT 1: 원천 조회)`는 안 됩니다. 이름표는 자기 줄에 두고, 앵커 주석을 " +
+                "그 다음 줄 문장 바로 앞에 두십시오(`-- SQL_FETCH_SOURCE` 줄바꿈 `/* SELECT 1: 원천 조회 */`). " +
+                "**명세서 DML 범위 표에 행이 있는 문장에만 앵커를 답니다.** 이 계획이 새로 들이는 인프라 조회" +
+                "(청크 경계 조회·실행 ID 조회 등)에는 달지 마십시오 - 표에 없는 서수를 발명하면 대조할 행이 " +
+                "없어 불일치가 됩니다.");
+            // [예시를 규칙과 같은 자리에 두는 이유]
+            // 모델은 프롬프트의 산문보다 예시를 베낀다 - 청크 표기를 규칙으로만 적었을 때
+            // 배송본이 안 닫힌 자리가 이미 있다(`7feb3c54`). 자리 조항은 「어디에 쓰는가」라
+            // 말로만 적으면 특히 약하다.
+            builder.AppendLine();
+            builder.AppendLine("```sql");
+            builder.AppendLine("-- SQL_CHECK_EXISTING - 이 계획이 새로 들이는 가드 조회다.");
+            builder.AppendLine("-- 명세서 DML 범위 표에 이 문장의 행이 없으므로 앵커를 달지 않는다.");
+            builder.AppendLine("-- 여기에 `SELECT 1:` 을 달면 대조할 행이 없어 불일치가 된다.");
+            builder.AppendLine("SELECT COUNT(1) FROM dbo.TSettleMst WHERE YMD = @p_ymd;");
+            builder.AppendLine();
+            builder.AppendLine("-- SQL_FETCH_SETTLE_SOURCE");
+            builder.AppendLine("/* SELECT 1: 커서 원천 조회 */");
+            builder.AppendLine("SELECT CLIENTID, YMD FROM dbo.TSettleMst WHERE YMD = @p_ymd;");
+            builder.AppendLine();
+            builder.AppendLine("-- SQL_DELETE_RANGE");
+            builder.AppendLine("/* DELETE 1: 당일분 삭제 */");
+            builder.AppendLine("DELETE FROM dbo.TSettleMst WHERE YMD = @p_ymd;");
+            builder.AppendLine();
+            builder.AppendLine("-- SQL_APPLY_CARD_COST");
+            builder.AppendLine("/* U13: 카드사 원가 반영 */");
+            builder.AppendLine("UPDATE dbo.TSettleMst SET PGComm = @p_comm WHERE YMD = @p_ymd;");
+            builder.AppendLine("```");
             builder.AppendLine("- **스칼라 하위질의를 `CROSS APPLY`/`OUTER APPLY`로 바꾸지 마십시오.** " +
                 "명세서가 대입 우변을 스칼라 하위질의로 적은 자리는 무결과일 때 `NULL`이 대입되는 자리입니다. " +
                 "`CROSS APPLY`는 그 행을 갱신 대상에서 통째로 제외해, 같은 문장의 다른 컬럼 대입까지 사라집니다. " +
@@ -4997,7 +5046,7 @@ Consolidate the provided specifications into a single unified batch job named '{
    - Assess if the business logic and rules of individual specifications are accurately preserved in the consolidated batch job.
    - Verify that queries using `UNION`, `UNION ALL`, or multi-table JOINs are preserved in full. Penalize if source tables or aggregation formulas were simplified, merged, or omitted.
    - Verify that every branch of a `UNION ALL` projects the same column list in the same order, including the constant discriminator columns (`0 AS USESTATE`, `2 AS USESTATE`, `3 AS USESTATE`). A branch that omits a discriminator the other branches carry makes the statement invalid and loses the value that told the branches apart.
-   - Verify that each DML statement carries the specification's update number as a single comment immediately before it (`/* U13: ... */`). Without that anchor the mechanical check cannot bind the statement to the specification's DML scope table, so the join-key and predicate-column comparison is not run at all - it does not fail, it silently does not happen. Penalize a step whose DML statements carry no anchor, and penalize an anchor split across two comments.
+   - Verify that each DML statement carries the specification's update number as a single comment immediately before it (`/* U13: ... */`). Without that anchor the mechanical check cannot bind the statement to the specification's DML scope table, so the join-key and predicate-column comparison is not run at all - it does not fail, it silently does not happen. Penalize a step whose DML statements carry no anchor, and penalize an anchor split across two comments. The anchor must START its comment: an anchor folded into a named SQL block's label line (`-- SQL_FETCH_SOURCE (SELECT 1: ...)`) is invisible to the check, so penalize it and require the label on its own line with the anchor comment on the next line.
    - Verify that a scalar subquery in an assignment was NOT rewritten as `CROSS APPLY`/`OUTER APPLY` unless the specification already used that form. A scalar subquery assigns `NULL` when it finds nothing; `CROSS APPLY` drops the row from the update entirely, taking the other column assignments in the same statement with it.
    - Verify that several non-aggregate lookups were NOT merged into one aggregate statement unless the specification already used that form. Where the specification writes `SELECT @v = col` followed by an `@@ROWCOUNT > 1` branch, it is separating 'none' from 'several'; `MAX(col)` changes 'none' from `0` to `NULL` and inverts the branch.
 2. Data Model and CRUD Completeness (ScoreCrud):

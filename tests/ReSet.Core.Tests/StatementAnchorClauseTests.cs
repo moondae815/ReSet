@@ -165,6 +165,63 @@ namespace ReSet.Core.Tests
         }
 
         [Fact]
+        public async Task AnchorClause_RequiresTheAnchorToStartItsComment()
+        {
+            // POQSettleBatch8/S12 를 막는다. 모델이 앵커 여섯을 이름표 줄에 접어 넣었다
+            // (`-- SQL_FETCH_SETTLE_POST_SOURCE (SELECT 1: …)`). 그것은 기존 조항을
+            // 하나도 어기지 않는다 - 앵커도 설명도 한 주석 안에 있고 복합 라벨도 아니다.
+            // 빠진 것은 「자리」뿐이었고, 그 단계는 통째로 안 읽혀 도달률이 5/5 여야 할
+            // 판이 4/5 로 보였다.
+            await AssertBothCarryAsync(
+                "앵커는 그 주석의 맨 앞에 옵니다",
+                "자리를 말하지 않으면 모델이 앵커를 이름 있는 SQL 블록의 이름표에 접어 넣습니다.");
+        }
+
+        [Fact]
+        public async Task AnchorClause_ShowsTheTwoLineShapeAsAnExample()
+        {
+            // 산문만으로는 약하다 - 모델은 예시를 베낀다(청크 표기가 규칙에만 있었을 때
+            // 배송본이 안 닫혔다, `7feb3c54`). 이름표 줄과 앵커 줄이 붙어 있는 예시가
+            // 프롬프트 안에 실제로 있어야 한다.
+            await AssertBothCarryAsync(
+                "-- SQL_FETCH_SETTLE_SOURCE\n/* SELECT 1: 커서 원천 조회 */",
+                "두 줄 모양을 예시로 안 보여 주면 모델이 이름표와 앵커를 합칩니다.");
+        }
+
+        [Fact]
+        public async Task AnchorClause_DoesNotAnchorInfrastructureQueries()
+        {
+            // 예시가 「모든 조회에 앵커를 달라」로 읽히면 모델이 명세서에 없는 서수를
+            // 발명하고, 그 앵커는 대조할 행이 없어 불일치가 된다. 예시 안에서 앵커를
+            // 다는 문장과 안 다는 문장이 갈려 있어야 한다.
+            // [양 경로에 걸어야 하는 자리다 - 2026-09-13]
+            // 처음엔 이 문장을 ConsolidatedPlanRules 의 Few-Shot 쪽에만 넣었는데, 분할
+            // 생성 경로는 그 상수를 아예 안 싣는다. 그런데 Batch8 의 단계를 만든 것이
+            // 바로 그 경로다 - 잠금을 양 경로로 걸지 않았으면 「고쳤다」고 적고 안 도는
+            // 쪽만 고친 채 넘어갔을 것이다.
+            await AssertBothCarryAsync(
+                "명세서 DML 범위 표에 행이 있는 문장에만 앵커를 답니다",
+                "명세서 행에만 앵커를 달라고 말하지 않으면 인프라 조회에도 서수를 발명합니다.");
+        }
+
+        [Fact]
+        public async Task AnchorClause_ShowsAnUnanchoredInfrastructureQuery()
+        {
+            // POQSettleBatch9/S08 을 막는다. 자리 조항을 넣어 접어 넣기는 사라졌지만
+            // (Batch8 7 건 → Batch9 0 건), 이번엔 모델이 계획이 새로 들인 가드 조회
+            // (`SELECT COUNT(1) … 정산 데이터 존재 여부 확인`)에 `SELECT 1` 서수를
+            // 지어냈다. 그 SP 의 DML 범위 표에는 SELECT 행이 없고 원본 DDL 에는
+            // `COUNT(` 가 0 건이다 - 계획이 만든 문장이다.
+            //
+            // 산문 조항은 이미 있었는데도 났다. 예시에서 **모든** 문장에 앵커가 달려
+            // 있었기 때문이다 - 모델은 산문보다 예시를 베낀다. 앵커를 다는 문장과 안
+            // 다는 문장이 같은 예시 안에서 갈려 있어야 한다.
+            await AssertBothCarryAsync(
+                "SELECT COUNT(1) FROM dbo.TSettleMst WHERE YMD = @p_ymd;",
+                "앵커 없는 문장을 예시에 안 보여 주면 모델이 계획이 들인 조회에도 서수를 발명합니다.");
+        }
+
+        [Fact]
         public async Task AnchorClause_IsIdenticalOnBothPaths()
         {
             // 두 벌로 적히면 한쪽만 고쳐져 경로에 따라 다른 문서가 나온다.

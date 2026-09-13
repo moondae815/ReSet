@@ -68,6 +68,29 @@ SELECT ID
 ```
 ";
 
+        /// <summary>접어 넣은 표기. <c>POQSettleBatch8/S12</c> 89~96 행을 그대로 오려
+        /// 왔다(끝 두 줄만 문장을 닫으려고 줄였다). 모델이 앵커를 이름 있는 SQL 블록의
+        /// 이름표 줄에 괄호로 접어 넣은 실물이다 - 여섯 줄이 같은 모양이었다.
+        ///
+        /// [이것이 0 으로 읽히는 것은 의도다] 계약이 「앵커는 그 주석의 맨 앞에 온다」를
+        /// 못박는다(<see cref="StatementAnchorClauseTests"/>). 리더를 이 모양까지 넓히면
+        /// 산문(`SELECT1/DELETE1/INSERT1` 같은 열거)도 앵커로 읽혀 오탐이 된다. 그래서
+        /// 여기서 0 이 나오는 것은 리더의 결함이 아니라 계약 위반의 탐지다.
+        /// 실측 근거: docs/audit-reports/2026-09-12-A2-신규Job-계약판정-착수기록.md</summary>
+        private const string FoldedSelectAnchorStep = @"### S12 단계
+
+```sql
+-- SQL_CURRENT_RUN_ID
+SELECT RunId FROM batch.BatchRun
+ WHERE JobName = @p_jobName AND BatchYmd = @p_ymd AND RunStatus = N'Running';
+
+-- SQL_FETCH_SETTLE_POST_SOURCE (SELECT 1: 후취정산 대상 커서 원천 조회)
+SELECT A.ClientID AS ClientID,
+       A.YMD       AS YMD,
+  FROM SETTLE_POQ_DB.dbo.TSettleMst AS A;
+```
+";
+
         /// <summary>POQSettleBatch1/S06 모양 - SELECT 앵커가 없고 DML 앵커만 있다.</summary>
         private const string DmlOnlyStep = @"### S06 단계
 
@@ -109,6 +132,54 @@ SELECT DISTINCT
         public void ReadsSelectAnchorsWrittenWithTheBlockCommentFormFromRealCorpus()
         {
             Assert.Equal(new[] { 1, 2 }, StepSqlStatementReader.ReadSelectAnchors(BlockSelectAnchorStep));
+        }
+
+
+        [Fact]
+        public void DoesNotReadAnAnchorFoldedIntoTheBlockNameLine()
+        {
+            // 이 0 은 「못 읽는다」가 아니라 「계약 위반을 잡는다」다. 위 주석의 근거를
+            // 읽어라 - 넓히면 산문 열거까지 앵커가 된다.
+            var anchors = StepSqlStatementReader.ReadSelectAnchors(FoldedSelectAnchorStep);
+
+            Assert.Empty(anchors);
+        }
+
+        [Fact]
+        public void CountsTheFoldedAnchorSoAProbeCanReportTheContractViolation()
+        {
+            // 도달률 0 만으로는 「모델이 안 달았다」와 「달았는데 자리가 틀렸다」가
+            // 구분되지 않는다. 프로브가 그 둘을 갈라 보고하려면 접어 넣은 모양을
+            // 세는 자가 따로 있어야 한다 - 그래야 처방이 갈린다(Few-Shot 인가 자리인가).
+            Assert.Equal(1, StepSqlStatementReader.CountFoldedSelectAnchors(FoldedSelectAnchorStep));
+        }
+
+        [Fact]
+        public void DoesNotCountProseEnumerationsAsFoldedAnchors()
+        {
+            // 실물 오탐 후보. POQSettleBatch8/S09:91 이 이 모양이다 - 이름표도
+            // 괄호도 없고 콜론도 없다. 이것까지 세면 프로브가 없는 위반을 보고한다.
+            const string prose = @"### S09 단계
+
+```sql
+-- 명세서의 기계 확정 표에는 SELECT1/DELETE1/INSERT1/UPDATE1~5만 등재되어 있다
+SELECT 1;
+```
+";
+
+            Assert.Equal(0, StepSqlStatementReader.CountFoldedSelectAnchors(prose));
+        }
+
+        [Fact]
+        public void ReadsTheSameAnchorOnceItIsMovedToItsOwnLine()
+        {
+            // 양성 대조군. 위 시험의 0 이 「이 리더가 이 본문에서 아무것도 못 읽는다」
+            // 때문이 아님을 보인다 - 같은 본문에서 앵커를 자기 줄로 내리면 읽힌다.
+            var fixedUp = FoldedSelectAnchorStep.Replace(
+                "-- SQL_FETCH_SETTLE_POST_SOURCE (SELECT 1: 후취정산 대상 커서 원천 조회)",
+                "-- SQL_FETCH_SETTLE_POST_SOURCE\n/* SELECT 1: 후취정산 대상 커서 원천 조회 */");
+
+            Assert.Equal(new[] { 1 }, StepSqlStatementReader.ReadSelectAnchors(fixedUp));
         }
 
         [Fact]

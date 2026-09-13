@@ -272,6 +272,23 @@ namespace ReSet.Core.Services
             @"^\s*(?:/\*|--)\s*SELECT\s*(?<ordinal>\d{1,2})\s*:",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        /// <summary>
+        /// 앵커를 이름 있는 SQL 블록의 이름표 줄에 <b>접어 넣은</b> 모양. 앵커로
+        /// 인정하지 않되 <b>세기는 한다</b> - 「안 달았다」와 「달았는데 자리가
+        /// 틀렸다」는 처방이 다르기 때문이다(Few-Shot 인가 자리 조항인가).
+        ///
+        /// [왜 이름표와 여는 괄호를 함께 요구하나] 「주석 어디든 SELECT n:」으로
+        /// 넓히면 산문 열거(`SELECT1/DELETE1/INSERT1`, POQSettleBatch8/S09:91)가
+        /// 걸린다. 실물 실측에서 접어 넣은 모양은 예외 없이 「이름표 + 여는 괄호」
+        /// 였다(POQSettleBatch8/S12 여섯 줄 · POQSettleBatch7/S12).
+        ///
+        /// 이 자는 <b>탐지기이지 관용이 아니다</b>. 여기 걸리는 것은 계약 위반이며,
+        /// <see cref="ReadSelectAnchors"/> 는 여전히 그것을 앵커로 안 읽는다.
+        /// </summary>
+        private static readonly Regex FoldedSelectAnchorPattern = new(
+            @"^\s*(?:/\*|--)\s*[A-Za-z][A-Za-z0-9_]{2,}\s*\(\s*SELECT\s*(?<ordinal>\d{1,2})\s*:",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public static IReadOnlyList<StepSqlStatement> Read(string? stepMarkdown) =>
             Read(stepMarkdown, out _);
 
@@ -389,6 +406,46 @@ namespace ReSet.Core.Services
             }
 
             return ordinals;
+        }
+
+        /// <summary>
+        /// 계약이 금지한 「이름표에 접어 넣은」 SELECT 앵커의 수. 0 이 아니면 그
+        /// 단계는 앵커를 <b>썼지만 읽히지 않는 자리에</b> 쓴 것이다.
+        ///
+        /// <see cref="ReadSelectAnchors"/> 와 같은 세 층(펜스 → 토큰화 → 줄 첫머리)
+        /// 위에서 돈다 - 원시 마크다운 정규식으로 따로 훑지 않는다. 자가 갈리면
+        /// 두 수를 같은 문장에 실을 수 없다.
+        /// </summary>
+        public static int CountFoldedSelectAnchors(string? stepMarkdown)
+        {
+            var count = 0;
+            if (string.IsNullOrWhiteSpace(stepMarkdown)) return count;
+
+            foreach (Match fence in FencePattern.Matches(stepMarkdown))
+            {
+                var lexer = new TSql160Parser(initialQuotedIdentifiers: true);
+                var tokens = lexer.GetTokenStream(
+                    new StringReader(fence.Groups["sql"].Value), out var tokenErrors);
+
+                if (tokens == null || tokenErrors is { Count: > 0 }) continue;
+
+                for (int i = 0; i < tokens.Count; i++)
+                {
+                    var token = tokens[i];
+                    if (token.TokenType is not (TSqlTokenType.SingleLineComment
+                                                or TSqlTokenType.MultilineComment))
+                    {
+                        continue;
+                    }
+
+                    if (!PrecededByNewline(tokens, i)) continue;
+                    if (!FoldedSelectAnchorPattern.IsMatch(token.Text)) continue;
+
+                    count++;
+                }
+            }
+
+            return count;
         }
 
         private static (IReadOnlyList<StepSqlStatement> Statements, int LostStatementCount) ReadFence(string sql)
