@@ -559,6 +559,7 @@ namespace ReSet.Core.Services
             SafeCheck(() => CheckStepParameterTypeStated(stepMarkdown, step, stepInterfaces, result));
             SafeCheck(() => CheckBatchControlVocabulary(stepMarkdown, step, result));
             SafeCheck(() => CheckBatchControlRowOrigin(stepMarkdown, step, result));
+            SafeCheck(() => CheckBatchControlTableAlias(stepMarkdown, step, result));
             SafeCheck(() => CheckFirstStepRowCreation(stepMarkdown, step, runRowOwnedTables, result));
             SafeCheck(() => CheckShadowBackupContract(stepMarkdown, step, result));
             SafeCheck(() => CheckCatchDiscardsReturnCode(stepMarkdown, step, result));
@@ -2291,6 +2292,52 @@ namespace ReSet.Core.Services
                     "`batch`(작업 객체)와 `batch_shadow`(섀도 테이블)뿐입니다. Job 이름을 딴 스키마를 " +
                     "새로 만들지 말고 그 두 스키마 중 하나로 옮기십시오 - 회차 0의 인프라 객체 수집이 " +
                     "그 두 이름만 보므로, 다른 이름에 둔 객체는 아무도 만들지 않습니다.");
+            }
+        }
+
+        /// <summary>
+        /// [K1] 단계 SQL 이 제어 계약 표를 계약이 아는 <b>비정본 이름</b>(<see cref="BatchControlContract.FindAlias"/>)으로 부르는지 본다.
+        ///
+        /// 실측(POQSettleBatch11, 2026-09-13): S13 은 정본 <c>batch.BatchControlTotal</c> 에 쓰고 S20 은 별칭
+        /// <c>batch.ControlTotal</c> 을 읽고 써서 S20 의 대조가 어떤 실행에서도 짝을 못 찾았다. 계약은 그 별칭을
+        /// 2026-08-24 부터 알았고(「별칭은 받아들일 것이 아니라 보고할 것이다」) 제품 호출부가 0 이었다.
+        /// <see cref="CheckBatchControlVocabulary"/> 는 정본 이름이 보일 때만 돌아 이 자리를 원리적으로 못 본다.
+        ///
+        /// [왜 SQL 펜스의 코드만 보는가] 같은 판의 S13 이 산문에 「승인 단계 목록의 `batch.ControlTotal`은 논리 대상
+        /// 명칭이며 … 실제 물리 대상은 `batch.BatchControlTotal`이다」라고 적었다. 옳은 문장이다 - 산문이나 SQL 주석을
+        /// 보면 옳은 단계를 고발한다(<see cref="CheckNonCanonicalBatchSchema"/> 는 백틱 식별자 전부를 보지만 이 검사는
+        /// 그러면 안 된다). <see cref="CleanedSqlFences"/> 가 주석·문자열을 지운 펜스를 준다.
+        ///
+        /// [앞 경계] 별칭 맨이름이 정본 맨이름의 접미사다(<c>ControlTotal</c> ⊂ <c>BatchControlTotal</c>). 이름 조각
+        /// 앞에 단어 문자·<c>[</c>·<c>]</c>·<c>.</c> 가 없을 것을 요구해 정본 안에서 부분 일치하지 않게 한다.
+        /// 세 부분 이름(<c>DB.batch.ControlTotal</c>)은 놓친다 - 코퍼스 0 건이고 제어 표는 batch 스키마다.
+        /// </summary>
+        private static void CheckBatchControlTableAlias(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            var aliases = BatchControlContract.Tables
+                .Where(t => t.Aliases is { Count: > 0 })
+                .SelectMany(t => t.Aliases!.Select(a => (Bare: a[(a.LastIndexOf('.') + 1)..], Table: t)))
+                .ToList();
+            if (aliases.Count == 0) return;
+
+            var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (cleaned, _) in CleanedSqlFences(stepMarkdown))
+            {
+                foreach (var (bare, table) in aliases)
+                {
+                    if (reported.Contains(table.Name + "|" + bare)) continue;
+                    var pattern = $@"(?<![\w\[\].]){QualifiedTableNameFragment(bare)}";
+                    if (!Regex.IsMatch(cleaned, pattern, RegexOptions.IgnoreCase)) continue;
+
+                    reported.Add(table.Name + "|" + bare);
+                    var schema = table.Name[..(table.Name.LastIndexOf('.') + 1)];
+                    result.Errors.Add(
+                        $"{step.Code} 섹션의 SQL 이 제어 계약 표의 비정본 이름 `{schema}{bare}`을(를) 씁니다. " +
+                        $"계약의 정본 이름은 `{table.Name}`입니다 - 같은 표를 두 이름으로 부르면 어느 DDL 도 양쪽을 " +
+                        "만족시키지 못하고, 다른 단계가 정본 표에 쓴 행을 이 단계가 찾지 못합니다. " +
+                        "이 절의 SQL 에서 표 이름을 정본으로 바꾸십시오.");
+                }
             }
         }
 

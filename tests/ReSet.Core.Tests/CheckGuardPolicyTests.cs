@@ -217,7 +217,8 @@ namespace ReSet.Core.Tests
             Assert.Equal(9, counts["ValidateConsolidated"]);
             // 27: 2026-09-11 에 CheckAnchoredStatementPredicateTerms(앵커 DML 최상위 술어 대조)가 더해졌다.
             // 28: 2026-09-12 에 CheckStepParameterTypeStated(규칙 5-2)가 더해졌다.
-            Assert.Equal(28, counts["ValidateBatchStep"]);
+            // 29: 2026-09-13 에 CheckBatchControlTableAlias(제어 계약 표 별칭, K1)가 더해졌다.
+            Assert.Equal(29, counts["ValidateBatchStep"]);
         }
 
         private static string ValidatorSourcePath() =>
