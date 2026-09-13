@@ -131,6 +131,34 @@ public sealed class GuardPredicateTermsTests
         Assert.Equal("", Segment(error, "원본에 없는 조건"));
     }
 
+    // 다른 표의 존재 확인은 가드 번역이 아니다: B8/S03 가드 질의의 표만 바꾸고 지어낸 조건을 넣어도 조용하다 -
+    // 표를 안 가리면 조건 둘을 공유한다는 이유로 짝이 되어 발화한다.
+    [Fact]
+    public void AnExistenceCheckOnAnotherTable_IsNotPairedWithTheGuard()
+    {
+        var original = Fixture("Batch8-S03.md");
+        var mutated = original.Replace(
+            "    SELECT 1 FROM SETTLE_POQ_DB.dbo.TSettleMst\n     WHERE YMD = @p_ymd\n",
+            "    SELECT 1 FROM SETTLE_POQ_DB.dbo.TSettleMstHistory\n     WHERE PLTID = 1\n       AND YMD = @p_ymd\n");
+        Assert.NotEqual(original, mutated);
+
+        Assert.Empty(GuardErrors(Validate(mutated, "UP_Util_PG_Client_CMRate_Ins")));
+    }
+
+    // 청크 조건(실물 관용구 `PLTID >= @p_from AND PLTID < @p_to`, Batch10 계획서)은 지어낸 조건이 아니다 - 형제 앵커 술어
+    // 대조와 같은 오케스트레이션 면제.
+    [Fact]
+    public void ChunkRangeConditionOnTheGuardTranslation_IsNotADrift()
+    {
+        var original = Fixture("Batch8-S03.md");
+        var mutated = original.Replace(
+            "       AND OutYMD IS NOT NULL\n) THEN 1 ELSE 0 END;",
+            "       AND OutYMD IS NOT NULL\n       AND PLTID >= @p_from AND PLTID < @p_to\n) THEN 1 ELSE 0 END;");
+        Assert.NotEqual(original, mutated);
+
+        Assert.Empty(GuardErrors(Validate(mutated, "UP_Util_PG_Client_CMRate_Ins")));
+    }
+
     // [R7] 원본 `ExtraSettleFlag = 1` 을 이행이 매개변수로 바인딩한 것은 표류가 아니다 - 형제 앵커 술어 대조와 같은 규칙.
     [Fact]
     public void OriginalLiteralBoundAsAParameter_IsNotADrift()
