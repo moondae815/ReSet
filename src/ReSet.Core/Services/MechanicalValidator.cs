@@ -572,6 +572,8 @@ namespace ReSet.Core.Services
             // (statementFactsByProcedure)이 없어도 돌아야 한다. 아래 statementFacts 블록
             // 안에 넣으면 재료가 없는 Job에서 조용히 통째로 꺼진다.
             SafeCheck(() => CheckLocalVariableTypeContract(stepMarkdown, step, ddlByProcedure, result));
+            // 원본 IF EXISTS 가드를 옮긴 질의의 조건이 원본과 같은가. 오라클이 원본 DDL 하나라 facts 블록 밖에 둔다.
+            SafeCheck(() => CheckGuardPredicateTerms(stepMarkdown, step, ddlByProcedure, result));
             // [N6] 원본의 단일 트랜잭션이 여러 단계로 갈렸는가. statementFacts 없이도
             // 돌아야 하므로 facts 블록 밖에 둔다 - 재료는 원본 DDL 과 allSteps 뿐이다.
             SafeCheck(() => CheckTransactionSpanSplit(step, allSteps, ddlByProcedure, result));
@@ -9471,6 +9473,136 @@ namespace ReSet.Core.Services
         /// </summary>
         private static bool IsOrchestrationOnly(PredicateTerm term) =>
             term.Variables.Count > 0 && term.Variables.All(v => OrchestrationVariablePattern.IsMatch(v));
+
+        /// <summary>
+        /// [가드 술어 대조] 원본 <c>IF [NOT] EXISTS (SELECT … FROM T WHERE …)</c> 가드를 이행이 옮긴 <b>존재 확인 질의</b>의
+        /// WHERE 항이 원본과 같은지 본다. 오라클은 원본 DDL 이다(비순환).
+        ///
+        /// 실측(2026-09-13, 판독 <c>docs/audit-reports/2026-09-13-가드술어-표류-측정.md</c>): <c>CMRate_Ins</c> 20~24 행의 기지급 사전
+        /// 차단을 GPT Consolidator 두 판이 모두 원본에 없는 PLTID 조건으로 옮겼다(B11 <c>PLTID = 'POQ'</c> · B12 <c>PLTID = 1</c>) -
+        /// 차단이 사실상 꺼진다. B12 는 <c>INS_EXTRA</c> 가드의 <c>OutYMD IS NOT NULL</c> 도 <c>OutYMD &lt;= @p_currYmd</c> 로 바꿨다.
+        /// 명세서 기계 확정 표에 가드 행이 없어 검사 C·앵커 술어 대조가 원리적으로 못 봤고, Critic 만 잡았다.
+        ///
+        /// [짝 인정 - 다른 질의를 가드로 오인하지 않게 좁혔다] 존재 확인 모양(<c>EXISTS</c> 부질의 · <c>TOP (1)</c> ·
+        /// <c>COUNT</c> 한 열)이고 FROM 이 같은 표 하나인 질의만 후보다. 가드와 후보를 공통 항이 많은 순으로 일대일
+        /// 짝짓는다(문턱은 아래 [짝의 문턱이 바뀌었다]). 대가: <b>항이 하나뿐인 가드는 보지 않는다</b>
+        /// (<c>SETTLE_INS</c> 39 행 <c>YMD = @pi_strYMD</c>) - 사후 검증 질의와 가를 수 없다.
+        ///
+        /// [정규화] 형제 <see cref="CheckAnchoredStatementPredicateTerms"/> 와 같다 - 원본·이행 모두
+        /// <see cref="DmlScopeExtractor.PredicateTermsOf"/>, 원본 <c>컬럼 = 리터럴</c> 은 이행 <c>컬럼 = @V</c> 와도 맞는다(R7),
+        /// 조인 등식·오케스트레이션 변수 항은 뺀다.
+        ///
+        /// [처방] 원본 조건으로 되돌리라는 것이라 따르면 원본과 같아진다. 지어낸 항의 컬럼이 원본 가드의 SELECT 목록
+        /// 컬럼이면 그것이 조건이 아님을 덧붙인다 - 두 판이 그 오독을 했다.
+        ///
+        /// [짝의 문턱이 바뀌었다] 아래 본문 주석 참고 - 처음 쓴 「공통 항 ≥ 가드 항 수 − 1」은 조건이 여럿 바뀐 실물을
+        /// 놓쳤다. 이제 「공통 항 ≥ max(2, 가드 항 수의 절반)」이다.
+        /// </summary>
+        private static void CheckGuardPredicateTerms(
+            string stepMarkdown,
+            BatchStepPlan step,
+            IReadOnlyDictionary<string, string>? ddlByProcedure,
+            StepValidationResult result)
+        {
+            if (ddlByProcedure == null || ddlByProcedure.Count == 0) return;
+            if (step.LegacyProcedures == null || step.LegacyProcedures.Count == 0) return;
+
+            var guards = new List<(string Procedure, GuardPredicateFacts.Query Guard)>();
+            foreach (var source in step.LegacyProcedures)
+            {
+                var bare = BareObjectName(source);
+                if (bare.Length == 0 || !ddlByProcedure.TryGetValue(bare, out var ddl)) continue;
+                guards.AddRange(GuardPredicateFacts.GuardsFromDdl(ddl).Select(g => (bare, g)));
+            }
+            if (guards.Count == 0) return;
+
+            var queries = GuardPredicateFacts.ExistenceQueriesFromStep(stepMarkdown)
+                .Select(q => q with
+                {
+                    Terms = q.Terms
+                        .Where(t => !t.IsJoinEquality && !IsOrchestrationOnly(t))
+                        .GroupBy(t => t.Normalized, StringComparer.Ordinal)
+                        .Select(g => g.First())
+                        .ToList()
+                })
+                .Where(q => q.Terms.Count > 0)
+                .ToList();
+            if (queries.Count == 0) return;
+
+            // [가드 중심 짝 - 2026-09-13 코퍼스 실측으로 바꿨다] 처음엔 질의마다 가장 닮은 가드를 고르고 「공통 항 ≥
+            // 가드 항 수 − 1」로 인정했는데, 조건이 여럿 바뀐 실물(Batch10/S08: OutState IN (1,5) → (3,4), PLTID IS NOT NULL 추가,
+            // OutYMD IS NOT NULL 빠짐 — 공통 5/7)을 짝으로 못 잡아 조용했다. 이제 가드와 같은 표 존재 확인 질의의 쌍을 공통 항이
+            // 많은 순으로 <b>일대일</b> 배정한다 - 진짜 번역과 사후 검증 질의가 함께 있으면 진짜 번역이 먼저 짝이 되므로
+            // 문턱을 「가드 항 수의 절반」까지 내려도 엉뚱한 짝이 덜 생긴다.
+            //
+            // [일대일인 이유 - 최종 리뷰가 실행으로 확인] 두 SP 를 합친 단계에 모양이 같은 가드가 둘(CMRate_Ins 20 · SETTLE_INS 25)이면
+            // 번역도 둘이다. 가드마다 따로 최고 질의를 고르면 원본대로인 번역 하나를 둘 다 골라 다른 번역의 표류가 가려진다.
+            var originals = guards
+                .Select(g => g.Guard.Terms.Where(t => !t.IsJoinEquality).ToList())
+                .ToList();
+            var keysByGuard = originals
+                .Select(original =>
+                {
+                    var keys = new HashSet<string>(original.Select(t => t.Normalized), StringComparer.Ordinal);
+                    keys.UnionWith(original.Select(t => t.LiteralAsParameter).OfType<string>());
+                    return keys;
+                })
+                .ToList();
+
+            var candidates = new List<(int Guard, int Query, int Common)>();
+            for (var g = 0; g < guards.Count; g++)
+            {
+                if (originals[g].Count == 0) continue;
+                for (var q = 0; q < queries.Count; q++)
+                {
+                    if (!queries[q].Table.Equals(guards[g].Guard.Table, StringComparison.OrdinalIgnoreCase)) continue;
+                    var common = queries[q].Terms.Count(t => keysByGuard[g].Contains(t.Normalized));
+                    if (common < Math.Max(2, (originals[g].Count + 1) / 2)) continue;
+                    candidates.Add((g, q, common));
+                }
+            }
+
+            var pairedQueryByGuard = new Dictionary<int, int>();
+            var pairedQueries = new HashSet<int>();
+            foreach (var candidate in candidates.OrderByDescending(c => c.Common).ThenBy(c => c.Guard).ThenBy(c => c.Query))
+            {
+                if (pairedQueryByGuard.ContainsKey(candidate.Guard) || pairedQueries.Contains(candidate.Query)) continue;
+                pairedQueryByGuard[candidate.Guard] = candidate.Query;
+                pairedQueries.Add(candidate.Query);
+            }
+
+            foreach (var (g, q) in pairedQueryByGuard.OrderBy(p => p.Key))
+            {
+                var (procedure, guard) = guards[g];
+                var original = originals[g];
+                var keys = keysByGuard[g];
+                var paired = queries[q];
+
+                var implementationKeys = new HashSet<string>(paired.Terms.Select(t => t.Normalized), StringComparer.Ordinal);
+                var added = paired.Terms.Where(t => !keys.Contains(t.Normalized)).ToList();
+                var missing = original
+                    .Where(t => !implementationKeys.Contains(t.Normalized) &&
+                                !(t.LiteralAsParameter != null && implementationKeys.Contains(t.LiteralAsParameter)))
+                    .ToList();
+                if (added.Count == 0 && missing.Count == 0) continue;
+
+                var differences = new List<string>();
+                if (added.Count > 0) differences.Add($"원본에 없는 조건 `{string.Join(" AND ", added.Select(t => t.Raw))}`");
+                if (missing.Count > 0) differences.Add($"빠진 조건 `{string.Join(" AND ", missing.Select(t => t.Raw))}`");
+
+                var selectListColumn = guard.SelectColumns.FirstOrDefault(column =>
+                    added.Any(t => Regex.IsMatch(t.Raw, $@"(?<![\w@])(?:\w+\.)?{Regex.Escape(column)}\b", RegexOptions.IgnoreCase)));
+                var hint = selectListColumn == null
+                    ? string.Empty
+                    : $" 원본 가드의 SELECT 목록 컬럼 `{selectListColumn}` 은(는) 행이 있는지만 확인하는 자리이고 조건이 아닙니다.";
+
+                result.Errors.Add(
+                    $"{step.Code} 섹션이 원본 가드(`{procedure}` {guard.Line}행 IF EXISTS … FROM {guard.Table})를 옮긴 " +
+                    $"질의의 조건이 원본과 다릅니다: {string.Join(" · ", differences)}. 원본 조건은 " +
+                    $"`{string.Join(" AND ", original.Select(t => t.Raw))}`입니다 - 사전 차단 가드의 조건이 바뀌면 차단이 " +
+                    "걸리는 경우가 원본과 달라집니다. 원본 조건 그대로 옮기십시오(원본 변수 자리는 이 단계의 매개변수로)." + hint);
+            }
+        }
 
         /// <summary>
         /// 앵커 INSERT·UPDATE·DELETE 마다 이행 최상위 항을 원본 같은 문장의 최상위 항과 견준다.
