@@ -229,7 +229,7 @@ namespace ReSet.Core.Services
                     int.TryParse(Cell(cells, iLine), out var line) ? line : 0,
                     BareName(Cell(cells, iTarget)),
                     SplitColumns(Cell(cells, iPredicate)),
-                    SplitColumns(Cell(cells, iJoin)),
+                    SplitJoinKeys(Cell(cells, iJoin)),
                     SplitColumns(Cell(cells, iGroup)),
                     SplitColumns(Cell(cells, iOrder))));
             }
@@ -469,6 +469,18 @@ namespace ReSet.Core.Services
                 .Select(BareName)
                 .Where(c => c.Length > 0)
                 .ToList();
+        }
+
+        // 조인 키 칸은 키 목록 뒤에 외부 조인 꼬리를 싣는다(DmlScopeFact.JoinKeysCell,
+        // `PGName, PLTID · 외부 조인 Y(LEFT OUTER), 파생 테이블 X · E(LEFT OUTER)`). 꼬리 안에도
+        // 쉼표가 있으므로 쉼표로 쪼개기 **전에** 떼야 한다 - 안 떼면 마지막 키가 꼬리와 붙어
+        // 없는 컬럼 이름이 되고 검사 B 가 그것을 매 시도 요구한다(2026-09-13 판독).
+        // 키가 없으면 칸은 `(없음) · 외부 조인 …` 이라 떼고 나면 `(없음)` 이 남는다.
+        private static IReadOnlyList<string> SplitJoinKeys(string cell)
+        {
+            var cleaned = Clean(cell);
+            var tail = cleaned.IndexOf(DmlScopeFact.OuterJoinTailSeparator, StringComparison.Ordinal);
+            return SplitColumns(tail >= 0 ? cleaned[..tail] : cleaned);
         }
 
         // `A.YMD` → `YMD`. 별칭은 문서마다 다르고 대조에 쓸 수 없다.
