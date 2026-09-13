@@ -88,6 +88,19 @@ public sealed class ControlTotalNameConsistencyTests
         Assert.Empty(defects);
     }
 
+    // 리터럴 이름이 보여도 같은 쓰기 문장에 이름 매개변수가 섞이면 실제로 무엇이 쓰이는지 모른다 - 침묵한다.
+    // 위 시험만으로는 이 가지가 안 잠긴다: Batch10/S17 은 리터럴이 0 이라 「쓰는 이름 0」 조건이 먼저 침묵시킨다
+    // (되돌림으로 확인 - 매개변수 판정을 걷어내도 위 시험은 초록이었다).
+    [Fact]
+    public void ReaderOfAWriterMixingLiteralNamesWithANameParameter_IsSilent()
+    {
+        var original = Fixture("Batch11-S13.md");
+        var writer = original.Replace("    C.ControlName,\n    C.ControlValue,", "    @p_controlName,\n    C.ControlValue,");
+        Assert.NotEqual(original, writer);
+
+        Assert.Empty(Validate(("S13", writer), ("S20", Fixture("Batch11-S20.md"))));
+    }
+
     [Fact]
     public void RealWriterWithNoReader_IsSilent()
     {
