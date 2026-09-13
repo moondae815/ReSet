@@ -97,10 +97,30 @@ if [[ ! -e "$LOCAL" ]]; then
   exit 1
 fi
 
+# ── 선택: 계획 시도(채점) 예산 못박기
+#
+# PLANONLY_MAX_L2_ATTEMPTS=0 이면 계획 시도가 1 회로 끝난다(총 시도 = 1 + 이 값).
+# L1 수리 예산(MaxL1RepairAttempts)은 따로라 이 값과 무관하게 남는다.
+# 비우면 설정 파일 값(기본 5 → 6 회)을 쓴다. 2026-09-13 판독: 6 회 판의 약 80% 가
+# 2 차 이후 시도였고 채택 점수는 76 → 78 이었다.
+MAX_L2=${PLANONLY_MAX_L2_ATTEMPTS:-}
+if [[ -n "$MAX_L2" && ! "$MAX_L2" =~ '^[0-9]+$' ]]; then
+  echo "중단: PLANONLY_MAX_L2_ATTEMPTS 는 0 이상의 정수여야 한다 ('$MAX_L2')." >&2
+  exit 1
+fi
+
 mkdir -p $LOGDIR
 git -C $RUNROOT rev-parse HEAD > $LOGDIR/COMMIT
 git -C $RUNROOT log -1 --oneline >> $LOGDIR/COMMIT
 print -l $SPS > $LOGDIR/SPS
+# 이 회차가 환경변수로 못박은 값. 설정 파일은 공유라 나중에 바뀌어도 이 파일이 참으로 남는다.
+print -l \
+  "AiSettings__Provider=claude-cli" \
+  "AiSettings__ModelName=claude-sonnet-5" \
+  "AiSettings__Consolidator__Provider=claude-cli" \
+  "AiSettings__Consolidator__ModelName=claude-sonnet-5" \
+  "AiSettings__PromptContextScope=Narrow" \
+  "AiSettings__MaxL2Attempts=${MAX_L2:-(설정 파일)}" > $LOGDIR/RUN-ENV
 
 echo "───────────────────────────────────────────────"
 echo " 새 Job:      $JOB"
@@ -108,6 +128,7 @@ echo " 스텝 재료:   ${#SPS} 편 (순서 = 위 나열)"
 echo " 로그:        $LOGDIR"
 echo " 커밋:        $(head -1 $LOGDIR/COMMIT)"
 echo " 실행 루트:   $RUNROOT"
+if [[ -n "$MAX_L2" ]]; then echo " 계획 시도:   $((MAX_L2 + 1)) 회 (못박음)"; else echo " 계획 시도:   설정 파일 값"; fi
 echo " 산출 경로:   $REPO/output/Jobs/$JOB"
 echo "───────────────────────────────────────────────"
 
@@ -127,6 +148,7 @@ AiSettings__ModelName=claude-sonnet-5 \
 AiSettings__Consolidator__Provider=claude-cli \
 AiSettings__Consolidator__ModelName=claude-sonnet-5 \
 AiSettings__PromptContextScope=Narrow \
+env ${MAX_L2:+AiSettings__MaxL2Attempts=$MAX_L2} \
 dotnet run --project src/ReSet.Cli -- \
   --plan-only \
   --job-name $JOB \
