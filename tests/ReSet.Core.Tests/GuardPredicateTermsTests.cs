@@ -40,6 +40,15 @@ public sealed class GuardPredicateTermsTests
     private static IReadOnlyList<string> GuardErrors(StepValidationResult result) =>
         result.Errors.Where(e => e.Contains(Marker)).ToList();
 
+    // 메시지의 「<칸 이름> `…`」 백틱 안. 칸이 없으면 빈 문자열.
+    private static string Segment(string error, string label)
+    {
+        var start = error.IndexOf(label + " `", StringComparison.Ordinal);
+        if (start < 0) return "";
+        start += label.Length + 2;
+        return error.Substring(start, error.IndexOf('`', start) - start);
+    }
+
     [Theory]
     [InlineData("Batch11-S05.md", "UP_Util_PG_Client_CMRate_Ins", "PLTID = 'POQ'", null)]
     [InlineData("Batch12-S03.md", "UP_Util_PG_Client_CMRate_Ins", "PLTID = 1", null)]
@@ -51,8 +60,9 @@ public sealed class GuardPredicateTermsTests
     {
         var error = Assert.Single(GuardErrors(Validate(Fixture(fixture), procedure)));
 
-        Assert.Contains(added, error);
-        if (missing != null) Assert.Contains(missing, error);
+        Assert.Contains(added, Segment(error, "원본에 없는 조건"));
+        // 메시지 끝의 「원본 조건은 `…`」에도 원본 항이 실리므로 칸 안에서 본다.
+        if (missing != null) Assert.Contains(missing, Segment(error, "빠진 조건"));
     }
 
     [Theory]
@@ -103,6 +113,22 @@ public sealed class GuardPredicateTermsTests
         Assert.NotEqual(original, mutated);
 
         Assert.Empty(GuardErrors(Validate(mutated, "UP_Util_PG_Client_CMRate_Ins")));
+    }
+
+    // 빠지기만 한 표류: 조건 7 개 가드를 원본대로 옮긴 B8/S09 에서 `OutYMD IS NOT NULL` 하나만 빼면 발화한다 -
+    // 발화 실물은 모두 지어낸 항을 함께 가져서, 빠진 항 판정을 없애도 위 발화 시험은 초록이었다(되돌림 측정).
+    [Fact]
+    public void GuardTranslationThatOnlyDropsACondition_IsReported()
+    {
+        var original = Fixture("Batch8-S09.md");
+        var mutated = original.Replace(
+            "       AND OutState IN (1,5)\n       AND OutYMD IS NOT NULL\n",
+            "       AND OutState IN (1,5)\n");
+        Assert.NotEqual(original, mutated);
+
+        var error = Assert.Single(GuardErrors(Validate(mutated, "UP_UTIL_SETTLE_INS_EXTRA")));
+        Assert.Equal("OutYMD IS NOT NULL", Segment(error, "빠진 조건"));
+        Assert.Equal("", Segment(error, "원본에 없는 조건"));
     }
 
     // [R7] 원본 `ExtraSettleFlag = 1` 을 이행이 매개변수로 바인딩한 것은 표류가 아니다 - 형제 앵커 술어 대조와 같은 규칙.

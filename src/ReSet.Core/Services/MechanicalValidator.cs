@@ -9471,6 +9471,9 @@ namespace ReSet.Core.Services
         /// 항의 변수가 <b>모두</b> 오케스트레이션 변수인가. OR 묶음에 업무 변수가 하나라도 섞이면
         /// 면제하지 않는다 - 그 묶음은 업무 행을 고른다.
         /// </summary>
+        private static bool IsOrchestrationOnly(PredicateTerm term) =>
+            term.Variables.Count > 0 && term.Variables.All(v => OrchestrationVariablePattern.IsMatch(v));
+
         /// <summary>
         /// [가드 술어 대조] 원본 <c>IF [NOT] EXISTS (SELECT … FROM T WHERE …)</c> 가드를 이행이 옮긴 <b>존재 확인 질의</b>의
         /// WHERE 항이 원본과 같은지 본다. 오라클은 원본 DDL 이다(비순환).
@@ -9481,8 +9484,8 @@ namespace ReSet.Core.Services
         /// 명세서 기계 확정 표에 가드 행이 없어 검사 C·앵커 술어 대조가 원리적으로 못 봤고, Critic 만 잡았다.
         ///
         /// [짝 인정 - 다른 질의를 가드로 오인하지 않게 좁혔다] 존재 확인 모양(<c>EXISTS</c> 부질의 · <c>TOP (1)</c> ·
-        /// <c>COUNT</c> 한 열)이고 FROM 이 같은 표 하나인 질의만 후보다. 후보마다 공통 항이 가장 많은 가드와 짝짓고,
-        /// 짝으로 인정한다(문턱은 아래 [짝의 문턱이 바뀌었다]). 대가: <b>항이 하나뿐인 가드는 보지 않는다</b>
+        /// <c>COUNT</c> 한 열)이고 FROM 이 같은 표 하나인 질의만 후보다. 가드마다 후보 중 공통 항이 가장 많은 질의 하나만
+        /// 짝으로 삼는다(문턱은 아래 [짝의 문턱이 바뀌었다]). 대가: <b>항이 하나뿐인 가드는 보지 않는다</b>
         /// (<c>SETTLE_INS</c> 39 행 <c>YMD = @pi_strYMD</c>) - 사후 검증 질의와 가를 수 없다.
         ///
         /// [정규화] 형제 <see cref="CheckAnchoredStatementPredicateTerms"/> 와 같다 - 원본·이행 모두
@@ -9492,9 +9495,8 @@ namespace ReSet.Core.Services
         /// [처방] 원본 조건으로 되돌리라는 것이라 따르면 원본과 같아진다. 지어낸 항의 컬럼이 원본 가드의 SELECT 목록
         /// 컬럼이면 그것이 조건이 아님을 덧붙인다 - 두 판이 그 오독을 했다.
         ///
-        /// [짝의 문턱이 바뀌었다] 아래 본문 주석 참고 - 「공통 항 ≥ 가드 항 수 − 1」은 조건이 여럿 바뀐 실물을 놓쳤다.
-        /// 이제 가드마다 공통 항이 가장 많은 질의 하나를 「공통 항 ≥ max(2, 가드 항 수의 절반)」으로 인정한다.
-        /// 항이 하나뿐인 가드는 여전히 보지 않는다.
+        /// [짝의 문턱이 바뀌었다] 아래 본문 주석 참고 - 처음 쓴 「공통 항 ≥ 가드 항 수 − 1」은 조건이 여럿 바뀐 실물을
+        /// 놓쳤다. 이제 「공통 항 ≥ max(2, 가드 항 수의 절반)」이다.
         /// </summary>
         private static void CheckGuardPredicateTerms(
             string stepMarkdown,
@@ -9572,9 +9574,6 @@ namespace ReSet.Core.Services
                     "걸리는 경우가 원본과 달라집니다. 원본 조건 그대로 옮기십시오." + hint);
             }
         }
-
-        private static bool IsOrchestrationOnly(PredicateTerm term) =>
-            term.Variables.Count > 0 && term.Variables.All(v => OrchestrationVariablePattern.IsMatch(v));
 
         /// <summary>
         /// 앵커 INSERT·UPDATE·DELETE 마다 이행 최상위 항을 원본 같은 문장의 최상위 항과 견준다.
