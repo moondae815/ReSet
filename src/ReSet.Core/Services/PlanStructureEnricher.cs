@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -140,6 +141,7 @@ namespace ReSet.Core.Services
                 var enrichedFromSpecCount = 0;
                 var issuedReservedCount = 0;
                 var enrichedTableCount = 0;
+                var aliasNormalizedCount = 0;
                 foreach (var stepNode in steps)
                 {
                     if (stepNode is not JsonObject step)
@@ -166,6 +168,12 @@ namespace ReSet.Core.Services
                     {
                         enrichedTableCount++;
                     }
+
+                    // 대상 테이블을 다시 쓴 뒤에 돈다 - 어느 출처에서 온 이름이든 마지막에 정본으로 모은다.
+                    if (NormalizeControlTableAliases(step))
+                    {
+                        aliasNormalizedCount++;
+                    }
                 }
 
                 if (enrichedFromSpecCount > 0)
@@ -183,7 +191,13 @@ namespace ReSet.Core.Services
                     Log.Information("목차의 대상 테이블을 정적 분석에서 보강했습니다 - 단계 수: {Count}개", enrichedTableCount);
                 }
 
-                anyStepChanged = enrichedFromSpecCount > 0 || issuedReservedCount > 0 || enrichedTableCount > 0;
+                if (aliasNormalizedCount > 0)
+                {
+                    Log.Information("목차 대상 테이블의 제어 계약 별칭을 정본 이름으로 바꿨습니다 - 단계 수: {Count}개", aliasNormalizedCount);
+                }
+
+                anyStepChanged = enrichedFromSpecCount > 0 || issuedReservedCount > 0 || enrichedTableCount > 0
+                    || aliasNormalizedCount > 0;
 
                 // 파서가 다시 읽을 수 있는 형태여야 한다. 들여쓰기는 사람이 읽기 위한 것이다.
                 return root.ToJsonString(WriteOptions) + "\n";
@@ -310,6 +324,39 @@ namespace ReSet.Core.Services
             }
 
             return merged.ToArray();
+        }
+
+        /// <summary>
+        /// <c>TargetTables</c> 에 적힌 제어 계약 별칭을 정본 이름으로 바꾸고, 그 결과 겹친 이름을 하나로 모은다.
+        /// 바뀐 것이 있으면 true.
+        ///
+        /// [왜 목차에서 바꾸는가 - 2026-09-13 POQSettleBatch11]
+        /// 목차가 <c>batch.BatchControlTotal</c> 의 별칭 <c>batch.ControlTotal</c> 을 S13·S20 에 적었다. 승인 단계 목록이
+        /// 그 이름을 모든 단계 프롬프트에 싣고, 목차를 따른 S20 은 별칭 표를 읽고 골격을 따른 S13 은 정본 표에 써서
+        /// S20 의 대조가 어떤 실행에서도 짝을 못 찾았다. 거기에 T36(목차에 없는 표)이 **옳은 쪽 S13** 을 고발했다.
+        /// 계약(<see cref="BatchControlContract.FindAlias"/>)이 그 별칭을 이미 알므로 모델을 부를 이유가 없다 -
+        /// 오류코드 예약 대역 발급과 같은 결정적 보강이다.
+        ///
+        /// 계약이 모르는 이름은 건드리지 않는다(그것이 결함인지는 이 자리가 판정할 수 없다).
+        /// </summary>
+        private static bool NormalizeControlTableAliases(JsonObject step)
+        {
+            var tables = ReadStringArray(step, "TargetTables");
+            // 별칭이 하나도 없으면 손대지 않는다 - 별칭과 무관한 중복 선언까지 이 자리가 정리하면
+            // 보강의 뜻이 넓어진다.
+            if (!tables.Any(t => BatchControlContract.FindAlias(t) != null)) return false;
+
+            var result = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var table in tables)
+            {
+                var name = BatchControlContract.FindAlias(table)?.Name ?? table;
+                // 맨이름으로 겹침을 본다 - `[batch].[BatchControlTotal]` 과 별칭을 함께 적어도 하나로 모인다(리뷰 M4).
+                if (seen.Add(BatchControlContract.BareName(name))) result.Add(name);
+            }
+
+            step["TargetTables"] = new JsonArray(result.Select(t => (JsonNode?)JsonValue.Create(t)).ToArray());
+            return true;
         }
 
         /// <summary>

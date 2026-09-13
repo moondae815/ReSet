@@ -559,6 +559,7 @@ namespace ReSet.Core.Services
             SafeCheck(() => CheckStepParameterTypeStated(stepMarkdown, step, stepInterfaces, result));
             SafeCheck(() => CheckBatchControlVocabulary(stepMarkdown, step, result));
             SafeCheck(() => CheckBatchControlRowOrigin(stepMarkdown, step, result));
+            SafeCheck(() => CheckBatchControlTableAlias(stepMarkdown, step, result));
             SafeCheck(() => CheckFirstStepRowCreation(stepMarkdown, step, runRowOwnedTables, result));
             SafeCheck(() => CheckShadowBackupContract(stepMarkdown, step, result));
             SafeCheck(() => CheckCatchDiscardsReturnCode(stepMarkdown, step, result));
@@ -914,6 +915,115 @@ namespace ReSet.Core.Services
 
             return defects;
         }
+
+        /// <summary>
+        /// [K2] 읽는 단계가 <c>StepCode</c> 로 특정 단계 몫을 걸러 읽는 통제명이, 그 단계가 실제로 쓰는 통제명과
+        /// <b>하나도</b> 겹치지 않는지 본다. 결함은 <b>읽는 단계</b>에 귀속한다.
+        ///
+        /// 실측(POQSettleBatch11, 2026-09-13): S13 은 <c>CROSS APPLY (VALUES (N'LedgerRowCount', …))</c> 로 쓰고 S20 은
+        /// <c>StepCode IN (N'S13', N'S20') AND ControlName IN (N'LEDGER_ROW_COUNT', …)</c> 로 읽어 S20 의 대조가 어떤 실행에서도
+        /// S13 몫을 못 찾았다. 표 이름(<see cref="CheckBatchControlTableAlias"/>)을 고쳐도 남는 결함이고, Critic 만 잡았다.
+        ///
+        /// [왜 문서 단위인가] 다른 단계의 본문을 봐야 한다 - <see cref="ValidateControlStatusTerminalWrites"/> 와 같은 논거다.
+        ///
+        /// [오라클이 자기일관성이라 좁혔다 - 사전 선언 §3] 쓰는 쪽·읽는 쪽 둘 다 모델 산출이고 코퍼스 표본이 하나다.
+        /// 그래서 틀리는 방향을 「덜 보고한다」로 고정한다.
+        /// ① 쓰기 이름은 <b>넓게</b> 모은다 - 제어 합계 표에 INSERT·MERGE 하는 문장의 식별자 모양 문자열 리터럴 전부.
+        /// ② 읽기 이름은 <b>좁게</b> 모은다 - 제어 합계 표를 FROM·JOIN 으로 읽는 문장의 <c>ControlName =</c>·<c>IN (…)</c> 리터럴만.
+        /// ③ 몫은 같은 문장의 <c>StepCode =</c>·<c>IN (…)</c> 리터럴로만 정한다. 없으면 누구와 맞대야 할지 몰라 침묵한다.
+        /// ④ 대상 단계가 이름을 매개변수로 쓰거나(<c>@…Name…</c>) 리터럴 이름이 하나도 없으면 무엇을 쓰는지 몰라 침묵한다.
+        /// ⑤ <b>교집합이 비었을 때만</b> 발화한다 - 일부만 겹치는 것은 정당한 부분 비교일 수 있다.
+        /// 문자열을 읽어야 하므로 <c>BlankCommentsAndStrings</c> 계열을 쓰지 않고 SQL 주석만 지운다.
+        /// </summary>
+        public IReadOnlyDictionary<string, StepDefect> ValidateControlTotalNameConsistency(
+            IReadOnlyDictionary<string, string> sectionsByStepCode,
+            IReadOnlyList<BatchStepPlan> allSteps,
+            string? sharedConventions = null)
+        {
+            var defects = new Dictionary<string, StepDefect>(StringComparer.OrdinalIgnoreCase);
+            if (sectionsByStepCode == null || sectionsByStepCode.Count == 0) return defects;
+            if (allSteps == null || allSteps.Count == 0) return defects;
+
+            var tableNames = BatchControlContract.Tables
+                .Where(t => t.Columns.Any(c => string.Equals(c.Name, "ControlName", StringComparison.OrdinalIgnoreCase)))
+                .SelectMany(t => new[] { t.Name }.Concat(t.Aliases ?? Array.Empty<string>()))
+                .Select(n => n[(n.LastIndexOf('.') + 1)..])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (tableNames.Count == 0) return defects;
+
+            var planned = new HashSet<string>(allSteps.Select(s => s.Code), StringComparer.OrdinalIgnoreCase);
+            var written = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var unknownWriters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var reads = new List<(string Reader, IReadOnlyCollection<string> Owners, HashSet<string> Names)>();
+
+            foreach (var (code, markdown) in sectionsByStepCode)
+            {
+                if (string.IsNullOrWhiteSpace(markdown) || !planned.Contains(code)) continue;
+
+                var (writes, stepReads) = ControlTotalNameFacts.Collect(markdown, tableNames);
+                foreach (var write in writes)
+                {
+                    if (write.Unknown) unknownWriters.Add(code);
+                    if (!written.TryGetValue(code, out var set)) written[code] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    set.UnionWith(write.Names);
+                }
+
+                foreach (var read in stepReads)
+                {
+                    var owners = read.Owners.Where(o => StepCodeLiteralRegex.IsMatch(o)).ToList();
+                    if (owners.Count > 0) reads.Add((code, owners, new HashSet<string>(read.Names, StringComparer.OrdinalIgnoreCase)));
+                }
+            }
+
+            foreach (var (reader, owners, names) in reads)
+            {
+                foreach (var owner in owners.OrderBy(o => o, StringComparer.Ordinal))
+                {
+                    if (unknownWriters.Contains(owner)) continue;
+                    if (!written.TryGetValue(owner, out var ownerNames) || ownerNames.Count == 0) continue;
+                    if (names.Overlaps(ownerNames)) continue;
+
+                    var readList = string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
+                    // 전부 싣는다 - 이 문구가 재생성 프롬프트로 가고, 잘라 내면 맞출 이름이 빠진다(실측: 12 개로
+                    // 자르니 짝이 되는 PGTotal·POQIncome·TxAmt 가 알파벳 순서에 밀려 사라졌다).
+                    var writeList = string.Join(", ", ownerNames.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
+
+                    // [누가 어겼는가 - 최종 리뷰 I4] 모든 단계가 받는 공통 규약이 읽는 쪽 이름을 담고 쓰는 쪽 이름을 하나도
+                    // 안 담으면, 어긴 것은 쓰는 단계다. 그때 읽는 단계에게 「쓰는 쪽에 맞추라」고 하면 규약에서 멀어지게 시킨다.
+                    string target, reason;
+                    if (MentionsAnyLiteral(sharedConventions, names) && !MentionsAnyLiteral(sharedConventions, ownerNames))
+                    {
+                        target = owner;
+                        reason =
+                            $"{owner} ({owner}이(가) 통제 합계를 {writeList}(으)로 쓰는데 공통 규약에는 그 이름이 없고, " +
+                            $"{reader}이(가) 공통 규약의 이름 {readList}(으)로 {owner} 몫을 읽습니다 - 겹치는 이름이 하나도 없어 " +
+                            $"{reader}의 대조가 어떤 실행에서도 {owner} 몫의 행을 찾지 못합니다. 쓰는 이름을 공통 규약대로 맞추십시오.)";
+                    }
+                    else
+                    {
+                        target = reader;
+                        reason =
+                            $"{reader} ({reader}이(가) {owner} 몫의 통제 합계를 ControlName {readList}(으)로 읽는데 " +
+                            $"{owner}이(가) 쓰는 이름은 {writeList}입니다 - 겹치는 이름이 하나도 없어 이 대조는 어떤 실행에서도 " +
+                            $"{owner} 몫의 행을 찾지 못합니다. 읽는 이름을 {owner}이(가) 쓰는 이름으로 맞추십시오.)";
+                    }
+
+                    defects[target] = defects.TryGetValue(target, out var prior)
+                        ? prior with { Reason = prior.Reason + " " + reason }
+                        : new StepDefect(StepDefectKind.QualityFloor, reason);
+                }
+            }
+
+            return defects;
+        }
+
+        private static readonly Regex StepCodeLiteralRegex = new(@"^S\d+$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        /// <summary>공통 규약이 이 이름들 중 하나라도 문자열 리터럴(<c>'이름'</c>)로 담는가. 규약이 없으면 false.</summary>
+        private static bool MentionsAnyLiteral(string? conventions, IEnumerable<string> names) =>
+            !string.IsNullOrWhiteSpace(conventions) &&
+            names.Any(n => conventions.Contains("'" + n + "'", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
         /// 코드 펜스의 <b>원문</b> 본문. mermaid 는 뺀다.
@@ -2291,6 +2401,56 @@ namespace ReSet.Core.Services
                     "`batch`(작업 객체)와 `batch_shadow`(섀도 테이블)뿐입니다. Job 이름을 딴 스키마를 " +
                     "새로 만들지 말고 그 두 스키마 중 하나로 옮기십시오 - 회차 0의 인프라 객체 수집이 " +
                     "그 두 이름만 보므로, 다른 이름에 둔 객체는 아무도 만들지 않습니다.");
+            }
+        }
+
+        /// <summary>
+        /// [K1] 단계 SQL 이 제어 계약 표를 계약이 아는 <b>비정본 이름</b>(<see cref="BatchControlContract.FindAlias"/>)으로 부르는지 본다.
+        ///
+        /// 실측(POQSettleBatch11, 2026-09-13): S13 은 정본 <c>batch.BatchControlTotal</c> 에 쓰고 S20 은 별칭
+        /// <c>batch.ControlTotal</c> 을 읽고 써서 S20 의 대조가 어떤 실행에서도 짝을 못 찾았다. 계약은 그 별칭을
+        /// 2026-08-24 부터 알았고(「별칭은 받아들일 것이 아니라 보고할 것이다」) 제품 호출부가 0 이었다.
+        /// <see cref="CheckBatchControlVocabulary"/> 는 정본 이름이 보일 때만 돌아 이 자리를 원리적으로 못 본다.
+        ///
+        /// [왜 SQL 펜스의 코드만 보는가] 같은 판의 S13 이 산문에 「승인 단계 목록의 `batch.ControlTotal`은 논리 대상
+        /// 명칭이며 … 실제 물리 대상은 `batch.BatchControlTotal`이다」라고 적었다. 옳은 문장이다 - 산문이나 SQL 주석을
+        /// 보면 옳은 단계를 고발한다(<see cref="CheckNonCanonicalBatchSchema"/> 는 백틱 식별자 전부를 보지만 이 검사는
+        /// 그러면 안 된다). <see cref="CleanedSqlFences"/> 가 주석·문자열을 지운 펜스를 준다.
+        ///
+        /// [어디서 찾는가 - 최종 리뷰 I1] 테이블 자리(<c>FROM·JOIN·INTO·UPDATE·MERGE·TABLE</c>) 바로 뒤의 <b>batch 스키마로
+        /// 한정된</b> 별칭만 본다. 별칭 맨이름은 정본 맨이름의 접미사이기도 해서(<c>ControlTotal</c> ⊂ <c>BatchControlTotal</c>)
+        /// 한정자 뒤 이름 전체가 맞아야 한다. 한정자 없는 <c>FROM ControlTotal</c> 은 CTE·임시 이름일 수 있어 보지 않는다 -
+        /// 계약 표는 전부 batch 스키마다(코퍼스 실물은 전부 한정형). 세 부분 이름(<c>DB.batch.ControlTotal</c>)도 놓친다.
+        /// </summary>
+        private static void CheckBatchControlTableAlias(
+            string stepMarkdown, BatchStepPlan step, StepValidationResult result)
+        {
+            var aliases = BatchControlContract.Tables
+                .Where(t => t.Aliases is { Count: > 0 })
+                .SelectMany(t => t.Aliases!.Select(a => (Bare: a[(a.LastIndexOf('.') + 1)..], Table: t)))
+                .ToList();
+            if (aliases.Count == 0) return;
+
+            var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (cleaned, _) in CleanedSqlFences(stepMarkdown))
+            {
+                foreach (var (bare, table) in aliases)
+                {
+                    if (reported.Contains(table.Name + "|" + bare)) continue;
+                    // [최종 리뷰 I1] 테이블 자리에서, batch 스키마로 한정된 이름만 본다 - 그래야 열 별칭
+                    // (`AS ControlTotal`)·변수(`@ControlTotal`)·임시 표(`#ControlTotal`)·CTE 이름·다른 표의 열
+                    // (`ct.ControlTotal`)에 안 걸린다. 계약 표는 전부 batch 스키마다.
+                    var pattern = $@"\b(?:FROM|JOIN|INTO|UPDATE|MERGE|TABLE)\s+\[?batch\]?\.(?:\[{Regex.Escape(bare)}\]|{Regex.Escape(bare)}\b)";
+                    if (!Regex.IsMatch(cleaned, pattern, RegexOptions.IgnoreCase)) continue;
+
+                    reported.Add(table.Name + "|" + bare);
+                    var schema = table.Name[..(table.Name.LastIndexOf('.') + 1)];
+                    result.Errors.Add(
+                        $"{step.Code} 섹션의 SQL 이 제어 계약 표의 비정본 이름 `{schema}{bare}`을(를) 씁니다. " +
+                        $"계약의 정본 이름은 `{table.Name}`입니다 - 같은 표를 두 이름으로 부르면 어느 DDL 도 양쪽을 " +
+                        "만족시키지 못하고, 다른 단계가 정본 표에 쓴 행을 이 단계가 찾지 못합니다. " +
+                        "이 절의 SQL 에서 표 이름을 정본으로 바꾸십시오.");
+                }
             }
         }
 
