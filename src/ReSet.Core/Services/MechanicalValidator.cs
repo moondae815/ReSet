@@ -9484,8 +9484,8 @@ namespace ReSet.Core.Services
         /// 명세서 기계 확정 표에 가드 행이 없어 검사 C·앵커 술어 대조가 원리적으로 못 봤고, Critic 만 잡았다.
         ///
         /// [짝 인정 - 다른 질의를 가드로 오인하지 않게 좁혔다] 존재 확인 모양(<c>EXISTS</c> 부질의 · <c>TOP (1)</c> ·
-        /// <c>COUNT</c> 한 열)이고 FROM 이 같은 표 하나인 질의만 후보다. 가드마다 후보 중 공통 항이 가장 많은 질의 하나만
-        /// 짝으로 삼는다(문턱은 아래 [짝의 문턱이 바뀌었다]). 대가: <b>항이 하나뿐인 가드는 보지 않는다</b>
+        /// <c>COUNT</c> 한 열)이고 FROM 이 같은 표 하나인 질의만 후보다. 가드와 후보를 공통 항이 많은 순으로 일대일
+        /// 짝짓는다(문턱은 아래 [짝의 문턱이 바뀌었다]). 대가: <b>항이 하나뿐인 가드는 보지 않는다</b>
         /// (<c>SETTLE_INS</c> 39 행 <c>YMD = @pi_strYMD</c>) - 사후 검증 질의와 가를 수 없다.
         ///
         /// [정규화] 형제 <see cref="CheckAnchoredStatementPredicateTerms"/> 와 같다 - 원본·이행 모두
@@ -9531,26 +9531,55 @@ namespace ReSet.Core.Services
 
             // [가드 중심 짝 - 2026-09-13 코퍼스 실측으로 바꿨다] 처음엔 질의마다 가장 닮은 가드를 고르고 「공통 항 ≥
             // 가드 항 수 − 1」로 인정했는데, 조건이 여럿 바뀐 실물(Batch10/S08: OutState IN (1,5) → (3,4), PLTID IS NOT NULL 추가,
-            // OutYMD IS NOT NULL 빠짐 — 공통 5/7)을 짝으로 못 잡아 조용했다. 이제 가드마다 같은 표의 존재 확인 질의 중
-            // 공통 항이 가장 많은 <b>하나</b>만 짝으로 삼는다 - 진짜 번역과 사후 검증 질의가 함께 있으면 진짜 번역이 이기므로
+            // OutYMD IS NOT NULL 빠짐 — 공통 5/7)을 짝으로 못 잡아 조용했다. 이제 가드와 같은 표 존재 확인 질의의 쌍을 공통 항이
+            // 많은 순으로 <b>일대일</b> 배정한다 - 진짜 번역과 사후 검증 질의가 함께 있으면 진짜 번역이 먼저 짝이 되므로
             // 문턱을 「가드 항 수의 절반」까지 내려도 엉뚱한 짝이 덜 생긴다.
-            foreach (var (procedure, guard) in guards)
+            //
+            // [일대일인 이유 - 최종 리뷰가 실행으로 확인] 두 SP 를 합친 단계에 모양이 같은 가드가 둘(CMRate_Ins 20 · SETTLE_INS 25)이면
+            // 번역도 둘이다. 가드마다 따로 최고 질의를 고르면 원본대로인 번역 하나를 둘 다 골라 다른 번역의 표류가 가려진다.
+            var originals = guards
+                .Select(g => g.Guard.Terms.Where(t => !t.IsJoinEquality).ToList())
+                .ToList();
+            var keysByGuard = originals
+                .Select(original =>
+                {
+                    var keys = new HashSet<string>(original.Select(t => t.Normalized), StringComparer.Ordinal);
+                    keys.UnionWith(original.Select(t => t.LiteralAsParameter).OfType<string>());
+                    return keys;
+                })
+                .ToList();
+
+            var candidates = new List<(int Guard, int Query, int Common)>();
+            for (var g = 0; g < guards.Count; g++)
             {
-                var original = guard.Terms.Where(t => !t.IsJoinEquality).ToList();
-                if (original.Count == 0) continue;
-                var keys = new HashSet<string>(original.Select(t => t.Normalized), StringComparer.Ordinal);
-                keys.UnionWith(original.Select(t => t.LiteralAsParameter).OfType<string>());
+                if (originals[g].Count == 0) continue;
+                for (var q = 0; q < queries.Count; q++)
+                {
+                    if (!queries[q].Table.Equals(guards[g].Guard.Table, StringComparison.OrdinalIgnoreCase)) continue;
+                    var common = queries[q].Terms.Count(t => keysByGuard[g].Contains(t.Normalized));
+                    if (common < Math.Max(2, (originals[g].Count + 1) / 2)) continue;
+                    candidates.Add((g, q, common));
+                }
+            }
 
-                var best = queries
-                    .Where(q => q.Table.Equals(guard.Table, StringComparison.OrdinalIgnoreCase))
-                    .Select(q => (Query: q, Common: q.Terms.Count(t => keys.Contains(t.Normalized))))
-                    .OrderByDescending(c => c.Common)
-                    .FirstOrDefault();
-                if (best.Query == null) continue;
-                if (best.Common < Math.Max(2, (original.Count + 1) / 2)) continue;
+            var pairedQueryByGuard = new Dictionary<int, int>();
+            var pairedQueries = new HashSet<int>();
+            foreach (var candidate in candidates.OrderByDescending(c => c.Common).ThenBy(c => c.Guard).ThenBy(c => c.Query))
+            {
+                if (pairedQueryByGuard.ContainsKey(candidate.Guard) || pairedQueries.Contains(candidate.Query)) continue;
+                pairedQueryByGuard[candidate.Guard] = candidate.Query;
+                pairedQueries.Add(candidate.Query);
+            }
 
-                var implementationKeys = new HashSet<string>(best.Query.Terms.Select(t => t.Normalized), StringComparer.Ordinal);
-                var added = best.Query.Terms.Where(t => !keys.Contains(t.Normalized)).ToList();
+            foreach (var (g, q) in pairedQueryByGuard.OrderBy(p => p.Key))
+            {
+                var (procedure, guard) = guards[g];
+                var original = originals[g];
+                var keys = keysByGuard[g];
+                var paired = queries[q];
+
+                var implementationKeys = new HashSet<string>(paired.Terms.Select(t => t.Normalized), StringComparer.Ordinal);
+                var added = paired.Terms.Where(t => !keys.Contains(t.Normalized)).ToList();
                 var missing = original
                     .Where(t => !implementationKeys.Contains(t.Normalized) &&
                                 !(t.LiteralAsParameter != null && implementationKeys.Contains(t.LiteralAsParameter)))
@@ -9571,7 +9600,7 @@ namespace ReSet.Core.Services
                     $"{step.Code} 섹션이 원본 가드(`{procedure}` {guard.Line}행 IF EXISTS … FROM {guard.Table})를 옮긴 " +
                     $"질의의 조건이 원본과 다릅니다: {string.Join(" · ", differences)}. 원본 조건은 " +
                     $"`{string.Join(" AND ", original.Select(t => t.Raw))}`입니다 - 사전 차단 가드의 조건이 바뀌면 차단이 " +
-                    "걸리는 경우가 원본과 달라집니다. 원본 조건 그대로 옮기십시오." + hint);
+                    "걸리는 경우가 원본과 달라집니다. 원본 조건 그대로 옮기십시오(원본 변수 자리는 이 단계의 매개변수로)." + hint);
             }
         }
 

@@ -121,16 +121,25 @@ namespace ReSet.Core.Services
         {
             internal List<Query> Queries { get; } = new();
 
+            // `EXISTS (SELECT TOP (1) …)` 은 두 방문이 같은 절을 본다 - 한 번만 센다(가드와 질의를 일대일로 짝지으므로
+            // 두 번 세면 한 질의가 가드 둘의 짝을 다 채운다).
+            private readonly HashSet<QuerySpecification> _seen = new(ReferenceEqualityComparer.Instance);
+
             public override void ExplicitVisit(ExistsPredicate node)
             {
-                if (FromSpecification(Unwrap(node.Subquery?.QueryExpression)) is { } query) Queries.Add(query);
+                if (Unwrap(node.Subquery?.QueryExpression) is { } spec) Add(spec);
                 base.ExplicitVisit(node);
             }
 
             public override void ExplicitVisit(QuerySpecification node)
             {
-                if ((IsTopOne(node) || IsSingleCount(node)) && FromSpecification(node) is { } query) Queries.Add(query);
+                if (IsTopOne(node) || IsSingleCount(node)) Add(node);
                 base.ExplicitVisit(node);
+            }
+
+            private void Add(QuerySpecification spec)
+            {
+                if (FromSpecification(spec) is { } query && _seen.Add(spec)) Queries.Add(query);
             }
 
             private static bool IsTopOne(QuerySpecification node) =>

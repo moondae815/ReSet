@@ -22,15 +22,18 @@ public sealed class GuardPredicateTermsTests
     private static string Fixture(string name) => File.ReadAllText(Path.Combine(
         RepoPaths.FindRepoRoot(), "tests", "ReSet.Core.Tests", "Fixtures", "guard-predicate", name));
 
-    private static StepValidationResult Validate(string markdown, string procedure, bool withDdl = true)
+    private static StepValidationResult Validate(string markdown, string procedure, bool withDdl = true) =>
+        Validate(markdown, new[] { procedure }, withDdl);
+
+    private static StepValidationResult Validate(string markdown, IReadOnlyList<string> procedures, bool withDdl = true)
     {
         var step = new BatchStepPlan(
             Code: "S03", Name: "가드 단계",
-            LegacyProcedures: new[] { "dbo." + procedure },
+            LegacyProcedures: procedures.Select(p => "dbo." + p).ToArray(),
             TargetTables: new[] { "SETTLE_POQ_DB.dbo.TSettleMst" },
             ErrorCodes: new[] { "-9" }, Chunkable: false, SchemaTables: Array.Empty<string>());
         var ddl = withDdl
-            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [procedure] = Fixture(procedure + ".sql") }
+            ? procedures.ToDictionary(p => p, p => Fixture(p + ".sql"), StringComparer.OrdinalIgnoreCase)
             : null;
 
         return new MechanicalValidator().ValidateBatchStep(
@@ -157,6 +160,45 @@ public sealed class GuardPredicateTermsTests
         Assert.NotEqual(original, mutated);
 
         Assert.Empty(GuardErrors(Validate(mutated, "UP_Util_PG_Client_CMRate_Ins")));
+    }
+
+    // [한 질의는 한 가드의 짝] 두 SP 를 합친 단계에 모양이 같은 가드가 둘이면(`CMRate_Ins` 20 행 · `SETTLE_INS` 25 행) 번역도 둘이다.
+    // 원본대로인 번역이 앞에 있으면 두 가드가 모두 그것을 짝으로 골라 뒤의 표류가 가려졌다(최종 리뷰가 실행으로 확인) - 순서 둘 다 본다.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TwoSameShapeGuardsTranslatedOnceEach_ReportTheDriftedTranslationInEitherOrder(bool faithfulFirst)
+    {
+        const string faithful = "-- SQL_PRECHECK_SETTLED_EXISTS\n";
+        const string drifted =
+            "-- SQL_PRECHECK_SETTLE_INS_EXISTS\n" +
+            "SELECT CASE WHEN EXISTS (\n    SELECT 1 FROM SETTLE_POQ_DB.dbo.TSettleMst\n     WHERE PLTID = 1\n       AND YMD = @p_ymd\n" +
+            "       AND OutState IN (1, 5)\n       AND OutYMD IS NOT NULL\n) THEN 1 ELSE 0 END;\n\n";
+        var original = Fixture("Batch8-S03.md");
+        var mutated = faithfulFirst
+            ? original.Replace("-- SQL_DELETE1_TPGSETTLERATE\n", drifted + "-- SQL_DELETE1_TPGSETTLERATE\n")
+            : original.Replace(faithful, drifted + faithful);
+        Assert.NotEqual(original, mutated);
+
+        var error = Assert.Single(GuardErrors(Validate(mutated, new[] { "UP_Util_PG_Client_CMRate_Ins", "UP_UTIL_SETTLE_INS" })));
+        Assert.Equal("PLTID = 1", Segment(error, "원본에 없는 조건"));
+    }
+
+    // `EXISTS (SELECT TOP (1) …)` 은 질의 하나다 - 두 번 세면 그 한 질의가 가드 둘의 짝을 다 채워 뒤의 표류 번역이 가려진다.
+    [Fact]
+    public void TopOneInsideExists_CountsAsOneTranslation()
+    {
+        var original = Fixture("Batch8-S03.md");
+        var mutated = original
+            .Replace("    SELECT 1 FROM SETTLE_POQ_DB.dbo.TSettleMst\n     WHERE YMD = @p_ymd\n",
+                     "    SELECT TOP (1) 1 FROM SETTLE_POQ_DB.dbo.TSettleMst\n     WHERE YMD = @p_ymd\n")
+            .Replace("-- SQL_DELETE1_TPGSETTLERATE\n",
+                     "-- SQL_PRECHECK_SETTLE_INS_EXISTS\nSELECT COUNT(1) FROM SETTLE_POQ_DB.dbo.TSettleMst\n" +
+                     " WHERE PLTID = 1 AND YMD = @p_ymd AND OutState IN (1, 5) AND OutYMD IS NOT NULL;\n\n-- SQL_DELETE1_TPGSETTLERATE\n");
+        Assert.NotEqual(original, mutated);
+
+        var error = Assert.Single(GuardErrors(Validate(mutated, new[] { "UP_Util_PG_Client_CMRate_Ins", "UP_UTIL_SETTLE_INS" })));
+        Assert.Equal("PLTID = 1", Segment(error, "원본에 없는 조건"));
     }
 
     // [R7] 원본 `ExtraSettleFlag = 1` 을 이행이 매개변수로 바인딩한 것은 표류가 아니다 - 형제 앵커 술어 대조와 같은 규칙.
