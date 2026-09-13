@@ -231,6 +231,83 @@ namespace ReSet.Core.Tests
             Assert.Contains("### 기계 판독 실행 단계 목록", enriched);
         }
 
+        // [K0 - 계약 별칭을 정본으로] POQSettleBatch11(2026-09-13) 목차의 S13·S20 항목 그대로다.
+        // 목차가 batch.BatchControlTotal 의 계약 별칭 batch.ControlTotal 을 적었고, 목차를 따른 S20 은
+        // 별칭 표를, 골격을 따른 S13 은 정본 표를 써서 S20 의 대조가 영원히 짝을 못 찾았다.
+        // 계약(BatchControlContract.FindAlias)이 그 별칭을 이미 알므로 모델을 부르지 않고 바꾼다.
+        // 판독: docs/audit-reports/2026-09-13-통제합계-어휘-일치-사전선언.md
+        private const string AliasStructure = @"# 목차
+
+### 기계 판독 실행 단계 목록
+
+```json
+{
+  ""Steps"": [
+    {
+      ""Code"": ""S13"",
+      ""Name"": ""원장 동결 통제 합계"",
+      ""LegacyProcedures"": [],
+      ""TargetTables"": [
+        ""batch.ControlTotal""
+      ],
+      ""ErrorCodes"": [
+        ""-9130""
+      ],
+      ""Chunkable"": false
+    },
+    {
+      ""Code"": ""S20"",
+      ""Name"": ""통합 정합성 검증"",
+      ""LegacyProcedures"": [],
+      ""TargetTables"": [
+        ""batch.ControlTotal"",
+        ""batch.ReconciliationResult""
+      ],
+      ""ErrorCodes"": [
+        ""-9200""
+      ],
+      ""Chunkable"": false
+    }
+  ]
+}
+```
+";
+
+        [Fact]
+        public void Enrich_ShouldReplaceAContractAliasInTargetTablesWithTheCanonicalTable()
+        {
+            var enriched = PlanStructureEnricher.Enrich(AliasStructure, Codes(), EmptyTables).Markdown;
+
+            Assert.Equal(new[] { "batch.BatchControlTotal" }, Step(enriched, "S13").TargetTables);
+            // 계약이 모르는 이름(ReconciliationResult)은 그대로 둔다 - 순서도 지킨다.
+            Assert.Equal(new[] { "batch.BatchControlTotal", "batch.ReconciliationResult" }, Step(enriched, "S20").TargetTables);
+        }
+
+        [Fact]
+        public void Enrich_ShouldCollapseAnAliasDeclaredAlongsideItsCanonicalTable()
+        {
+            var both = AliasStructure.Replace(
+                @"""batch.ControlTotal"",
+        ""batch.ReconciliationResult""",
+                @"""[batch].[ControlTotal]"",
+        ""batch.BatchControlTotal""");
+            Assert.NotEqual(AliasStructure, both);
+
+            var enriched = PlanStructureEnricher.Enrich(both, Codes(), EmptyTables).Markdown;
+
+            Assert.Equal(new[] { "batch.BatchControlTotal" }, Step(enriched, "S20").TargetTables);
+        }
+
+        [Fact]
+        public void Enrich_ShouldKeepTheCanonicalTableAndStayIdempotentAfterReplacingAnAlias()
+        {
+            var once = PlanStructureEnricher.Enrich(AliasStructure, Codes(), EmptyTables).Markdown;
+            var twice = PlanStructureEnricher.Enrich(once, Codes(), EmptyTables).Markdown;
+
+            Assert.Equal(once, twice);
+            Assert.DoesNotContain("batch.ControlTotal\"", once);
+        }
+
         [Fact]
         public void Enrich_ShouldBeIdempotent()
         {
