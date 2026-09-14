@@ -83,7 +83,8 @@ namespace ReSet.Cli
                         continue;
                     }
 
-                    markdownByCode[step.Code] = File.ReadAllText(stepPath);
+                    // 번들 내보내기가 붙인 하한 미달·검증 불가 배너를 벗긴다 - 판 안의 검사는 배너 붙기 전 섹션을 본다(2026-09-14 스윕 인공물).
+                    markdownByCode[step.Code] = InstructionBundleWriter.StripFloorBanner(File.ReadAllText(stepPath));
                     stepMtimes.Add(File.GetLastWriteTime(stepPath));
                 }
 

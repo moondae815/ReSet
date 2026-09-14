@@ -322,6 +322,31 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>
+        /// <see cref="BuildFloorBanner"/> 가 단계 파일 머리에 붙인 배너를 벗긴다 - 배너가 없으면 입력 그대로.
+        ///
+        /// [왜 필요한가 - 2026-09-14 스윕 인공물] 단계 검사 스윕이 배송된 단계 파일을 그대로 읽어, 배너 때문에
+        /// 「`### ` 헤딩으로 시작하지 않습니다」를 발화했다(Batch13 4 · Batch14 2 · Batch15 2, 코퍼스 배너 단계 36).
+        /// 판 안의 검사는 배너가 붙기 전 섹션을 본다 - 스윕도 같은 입력을 봐야 한다.
+        ///
+        /// 배너 머리 문구(<c>&gt; ⚠️ **이 단계는</c>)로만 판정한다. 섹션 자신의 인용문으로 시작하는 파일은 건드리지 않는다.
+        /// </summary>
+        public static string StripFloorBanner(string stepFileMarkdown)
+        {
+            if (string.IsNullOrEmpty(stepFileMarkdown)) return stepFileMarkdown;
+
+            var text = stepFileMarkdown.TrimStart('\uFEFF');
+            if (!text.StartsWith(FloorBannerHeadlinePrefix, StringComparison.Ordinal)) return stepFileMarkdown;
+
+            var lines = text.Replace("\r\n", "\n").Split('\n');
+            var index = 0;
+            while (index < lines.Length && lines[index].StartsWith(">", StringComparison.Ordinal)) index++;
+            if (index < lines.Length && lines[index].Length == 0) index++;
+            return string.Join("\n", lines.Skip(index));
+        }
+
+        private const string FloorBannerHeadlinePrefix = "> ⚠️ **이 단계는";
+
+        /// <summary>
         /// 하한 미달 기록이 있는 단계에만 배너를 붙인다. 이전에는 문서 전체 상단에
         /// 배너 하나만 있어 어느 단계가 부실한지 에이전트가 알 수 없었다.
         ///
