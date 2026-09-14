@@ -1014,14 +1014,35 @@ namespace ReSet.Core.Services
             var errors = new List<DetailedError>();
             if (string.IsNullOrWhiteSpace(planMarkdown) || sectionsByStepCode == null || allSteps == null) return errors;
 
+            // [자기 가드 - 작성 계약 6] 오케스트레이터가 SafeCheck 밖(통합 L1 결과에 더하는 자리)에서 부른다. 이 검사의 예외가
+            // 회차의 L1 판정 전체를 무너뜨리지 않게, 이미 찾은 것만 돌려주고 남긴다.
+            try
+            {
+                CollectVerificationControlTotalNameErrors(planMarkdown, sectionsByStepCode, allSteps, sharedConventions, errors);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "검증 SQL 세트 통제명 대조를 끝내지 못했습니다 - 찾은 {Count}건만 보고합니다.", errors.Count);
+            }
+
+            return errors;
+        }
+
+        private static void CollectVerificationControlTotalNameErrors(
+            string planMarkdown,
+            IReadOnlyDictionary<string, string> sectionsByStepCode,
+            IReadOnlyList<BatchStepPlan> allSteps,
+            string? sharedConventions,
+            List<DetailedError> errors)
+        {
             var lines = MarkdownSectionLocator.SplitLines(planMarkdown);
             var (header, end) = MarkdownSectionLocator.LocateSection(
                 lines, "## " + RequiredConsolidatedHeaders[3], "## ", exact: false);
-            if (header < 0) return errors;
+            if (header < 0) return;
             var verification = string.Join("\n", lines.Skip(header).Take(end - header));
 
             var facts = CollectControlTotalFacts(sectionsByStepCode, allSteps);
-            if (facts == null) return errors;
+            if (facts == null) return;
 
             var (_, verificationReads) = ControlTotalNameFacts.Collect(verification, facts.TableNames);
             foreach (var read in verificationReads)
@@ -1062,8 +1083,6 @@ namespace ReSet.Core.Services
                     });
                 }
             }
-
-            return errors;
         }
 
         /// <summary>K2 두 판(단계·검증 세트)이 같이 쓰는 재료. 단계 섹션의 쓰기 이름·「모름」 단계·읽기. 재료가 없으면 null.</summary>
