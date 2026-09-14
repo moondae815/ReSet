@@ -79,6 +79,21 @@ namespace ReSet.Core.Services
 
             internal List<Read> Reads { get; } = new();
 
+            // 지금 방문 중인 문장의 CTE. 「조인으로 끌어온 이름」이 같은 문장의 CTE 를 풀 때 쓴다.
+            private IReadOnlyDictionary<string, CommonTableExpression> _ctes =
+                new Dictionary<string, CommonTableExpression>(StringComparer.OrdinalIgnoreCase);
+
+            public override void ExplicitVisit(SelectStatement node)
+            {
+                var outer = _ctes;
+                _ctes = node.WithCtesAndXmlNamespaces?.CommonTableExpressions
+                    .GroupBy(c => c.ExpressionName.Value, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase)
+                    ?? new Dictionary<string, CommonTableExpression>(StringComparer.OrdinalIgnoreCase);
+                base.ExplicitVisit(node);
+                _ctes = outer;
+            }
+
             public override void ExplicitVisit(InsertStatement node)
             {
                 if (IsControlTable(node.InsertSpecification?.Target))
@@ -107,8 +122,175 @@ namespace ReSet.Core.Services
                     if (owners.Count > 0 && names.Count > 0) Reads.Add(new Read(owners, names));
                 }
 
+                CollectJoinedNameReads(node);
                 base.ExplicitVisit(node);
             }
+
+            /// <summary>
+            /// [조인으로 끌어온 이름 - POQSettleBatch13 V04, 2026-09-14] 제어 표 읽기 문장에 <c>ControlName</c> 리터럴이 없고, 이름은
+            /// 조인 조건 <c>X.ControlName = Y.ControlName</c> 로 붙는 다른 출처(같은 문장의 CTE·인라인 <c>VALUES</c>)에 리터럴로만 있는 모양.
+            /// X 는 몫(<c>StepCode</c> 리터럴)이 있고 이름 리터럴이 없는 제어 표 읽기(같은 문장 CTE 또는 제어 표 자신), Y 는 ControlName 출력이
+            /// <b>전부</b> 문자열 리터럴인 출처여야 한다. 하나라도 어긋나면 더하지 않는다(덜 보고한다).
+            /// </summary>
+            private void CollectJoinedNameReads(QuerySpecification node)
+            {
+                if (node.FromClause == null) return;
+
+                var sources = new List<TableReference>();
+                var conditions = new List<BooleanExpression>();
+                foreach (var reference in node.FromClause.TableReferences) JoinParts(reference, sources, conditions);
+                if (conditions.Count == 0) return;
+
+                foreach (var condition in conditions)
+                {
+                    foreach (var (left, right) in ControlNameEqualities(condition))
+                    {
+                        if (Source(sources, left) is not { } leftSource || Source(sources, right) is not { } rightSource) continue;
+
+                        foreach (var (readerSide, nameSide) in new[] { (leftSource, rightSource), (rightSource, leftSource) })
+                        {
+                            if (ReaderOwners(node, readerSide) is not { Count: > 0 } owners) continue;
+                            if (LiteralNames(nameSide) is not { Count: > 0 } names) continue;
+                            Reads.Add(new Read(owners, names));
+                        }
+                    }
+                }
+            }
+
+            private static void JoinParts(TableReference reference, List<TableReference> sources, List<BooleanExpression> conditions)
+            {
+                switch (reference)
+                {
+                    case QualifiedJoin qualified:
+                        JoinParts(qualified.FirstTableReference, sources, conditions);
+                        JoinParts(qualified.SecondTableReference, sources, conditions);
+                        if (qualified.SearchCondition != null) conditions.Add(qualified.SearchCondition);
+                        break;
+                    case JoinTableReference join:
+                        JoinParts(join.FirstTableReference, sources, conditions);
+                        JoinParts(join.SecondTableReference, sources, conditions);
+                        break;
+                    case JoinParenthesisTableReference parenthesis:
+                        JoinParts(parenthesis.Join, sources, conditions);
+                        break;
+                    default:
+                        sources.Add(reference);
+                        break;
+                }
+            }
+
+            /// <summary>AND 로 이어진 <c>한정자.ControlName = 한정자.ControlName</c> 등식의 두 한정자.</summary>
+            private static IEnumerable<(string Left, string Right)> ControlNameEqualities(BooleanExpression expression)
+            {
+                switch (expression)
+                {
+                    case BooleanBinaryExpression { BinaryExpressionType: BooleanBinaryExpressionType.And } and:
+                        foreach (var pair in ControlNameEqualities(and.FirstExpression)) yield return pair;
+                        foreach (var pair in ControlNameEqualities(and.SecondExpression)) yield return pair;
+                        break;
+                    case BooleanParenthesisExpression parenthesis:
+                        foreach (var pair in ControlNameEqualities(parenthesis.Expression)) yield return pair;
+                        break;
+                    case BooleanComparisonExpression
+                    {
+                        ComparisonType: BooleanComparisonType.Equals,
+                        FirstExpression: ColumnReferenceExpression first,
+                        SecondExpression: ColumnReferenceExpression second
+                    } when QualifiedControlName(first) is { } left && QualifiedControlName(second) is { } right:
+                        yield return (left, right);
+                        break;
+                }
+            }
+
+            private static string? QualifiedControlName(ColumnReferenceExpression column) =>
+                column.MultiPartIdentifier?.Identifiers is { Count: >= 2 } ids &&
+                ids[^1].Value.Equals("ControlName", StringComparison.OrdinalIgnoreCase)
+                    ? ids[^2].Value
+                    : null;
+
+            private static TableReference? Source(IEnumerable<TableReference> sources, string qualifier) =>
+                sources.FirstOrDefault(r => r switch
+                {
+                    TableReferenceWithAlias { Alias: { } alias } => alias.Value.Equals(qualifier, StringComparison.OrdinalIgnoreCase),
+                    NamedTableReference named => named.SchemaObject.BaseIdentifier.Value.Equals(qualifier, StringComparison.OrdinalIgnoreCase),
+                    _ => false
+                });
+
+            /// <summary>
+            /// 이 출처가 몫 리터럴이 있고 이름 리터럴이 없는 제어 표 읽기면 그 몫. 같은 문장 CTE 는 본문의 모든 가지가 그래야 하고,
+            /// 제어 표 자신이면 바깥 문장의 WHERE 에서 그 한정자의 조건을 본다. 아니면 null.
+            /// </summary>
+            private IReadOnlyCollection<string>? ReaderOwners(QuerySpecification outer, TableReference source)
+            {
+                if (source is NamedTableReference named && IsControlTable(named))
+                {
+                    var qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { named.SchemaObject.BaseIdentifier.Value };
+                    if (named.Alias != null) qualifiers.Add(named.Alias.Value);
+                    return OwnersWithoutNames(outer.WhereClause?.SearchCondition, qualifiers);
+                }
+
+                if (CteBody(source) is not { } body) return null;
+
+                var owners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var spec in Flatten(body))
+                {
+                    var qualifiers = ControlTableQualifiers(spec.FromClause);
+                    if (qualifiers.Count == 0) return null;
+                    if (OwnersWithoutNames(spec.WhereClause?.SearchCondition, qualifiers) is not { } specOwners) return null;
+                    owners.UnionWith(specOwners);
+                }
+
+                return owners.Count > 0 ? owners : null;
+            }
+
+            private static IReadOnlyCollection<string>? OwnersWithoutNames(BooleanExpression? where, HashSet<string> qualifiers)
+            {
+                if (where == null) return null;
+                var owners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                CollectFilters(where, qualifiers, owners, names);
+                return owners.Count > 0 && names.Count == 0 ? owners : null;
+            }
+
+            /// <summary>이 출처의 <c>ControlName</c> 출력이 전부 문자열 리터럴이면 그 이름들. 하나라도 아니면 null.</summary>
+            private IReadOnlyCollection<string>? LiteralNames(TableReference source)
+            {
+                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                if (source is InlineDerivedTable inline)
+                    return ResolveInline(new[] { inline }, "ControlName", names) && names.Count > 0 ? names : null;
+
+                if (source is not NamedTableReference { SchemaObject.SchemaIdentifier: null } named ||
+                    !_ctes.TryGetValue(named.SchemaObject.BaseIdentifier.Value, out var cte)) return null;
+
+                var specs = Flatten(cte.QueryExpression).ToList();
+                if (specs.Count == 0) return null;
+
+                // 열 위치: CTE 열 목록이 있으면 그것, 없으면 첫 가지의 별칭·열 이름.
+                var position = cte.Columns.Count > 0
+                    ? cte.Columns.ToList().FindIndex(c => c.Value.Equals("ControlName", StringComparison.OrdinalIgnoreCase))
+                    : specs[0].SelectElements.ToList().FindIndex(e => e is SelectScalarExpression scalar &&
+                        (scalar.ColumnName?.Value ?? (scalar.Expression as ColumnReferenceExpression is { } c ? LastIdentifier(c) : null))
+                            ?.Equals("ControlName", StringComparison.OrdinalIgnoreCase) == true);
+                if (position < 0) return null;
+
+                foreach (var spec in specs)
+                {
+                    if (spec.SelectElements.Count <= position ||
+                        spec.SelectElements[position] is not SelectScalarExpression { Expression: StringLiteral literal }) return null;
+                    names.Add(literal.Value);
+                }
+
+                return names;
+            }
+
+            private QueryExpression? CteBody(TableReference source) => source switch
+            {
+                NamedTableReference { SchemaObject.SchemaIdentifier: null } named when
+                    _ctes.TryGetValue(named.SchemaObject.BaseIdentifier.Value, out var cte) => cte.QueryExpression,
+                QueryDerivedTable derived => derived.QueryExpression,
+                _ => null
+            };
 
             private bool IsControlTable(TableReference? reference) =>
                 reference is NamedTableReference named &&

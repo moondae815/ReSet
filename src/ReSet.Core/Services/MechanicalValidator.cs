@@ -103,6 +103,9 @@ namespace ReSet.Core.Services
         // 강제가 없어 모델 교체만으로 사라졌고 검사 D가 조용히 꺼졌다. 위 항목들과
         // 같은 이유로 서수 이동은 기능에 영향이 없다.
         LocalVariableTableMismatch,
+        // 통합 검증 SQL 세트가 단계 몫의 통제 합계를 그 단계가 쓰지 않는 이름으로만 읽는다(K2 의 검증 세트판,
+        // POQSettleBatch13 V04↔S11). 어휘가 검증 세트 원문 줄이라 골격으로 귀속된다.
+        VerificationControlTotalNameMismatch,
         General
     }
 
@@ -943,47 +946,14 @@ namespace ReSet.Core.Services
             string? sharedConventions = null)
         {
             var defects = new Dictionary<string, StepDefect>(StringComparer.OrdinalIgnoreCase);
-            if (sectionsByStepCode == null || sectionsByStepCode.Count == 0) return defects;
-            if (allSteps == null || allSteps.Count == 0) return defects;
+            var facts = CollectControlTotalFacts(sectionsByStepCode, allSteps);
+            if (facts == null) return defects;
 
-            var tableNames = BatchControlContract.Tables
-                .Where(t => t.Columns.Any(c => string.Equals(c.Name, "ControlName", StringComparison.OrdinalIgnoreCase)))
-                .SelectMany(t => new[] { t.Name }.Concat(t.Aliases ?? Array.Empty<string>()))
-                .Select(n => n[(n.LastIndexOf('.') + 1)..])
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            if (tableNames.Count == 0) return defects;
-
-            var planned = new HashSet<string>(allSteps.Select(s => s.Code), StringComparer.OrdinalIgnoreCase);
-            var written = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-            var unknownWriters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var reads = new List<(string Reader, IReadOnlyCollection<string> Owners, HashSet<string> Names)>();
-
-            foreach (var (code, markdown) in sectionsByStepCode)
-            {
-                if (string.IsNullOrWhiteSpace(markdown) || !planned.Contains(code)) continue;
-
-                var (writes, stepReads) = ControlTotalNameFacts.Collect(markdown, tableNames);
-                foreach (var write in writes)
-                {
-                    if (write.Unknown) unknownWriters.Add(code);
-                    if (!written.TryGetValue(code, out var set)) written[code] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    set.UnionWith(write.Names);
-                }
-
-                foreach (var read in stepReads)
-                {
-                    var owners = read.Owners.Where(o => StepCodeLiteralRegex.IsMatch(o)).ToList();
-                    if (owners.Count > 0) reads.Add((code, owners, new HashSet<string>(read.Names, StringComparer.OrdinalIgnoreCase)));
-                }
-            }
-
-            foreach (var (reader, owners, names) in reads)
+            foreach (var (reader, owners, names) in facts.Reads)
             {
                 foreach (var owner in owners.OrderBy(o => o, StringComparer.Ordinal))
                 {
-                    if (unknownWriters.Contains(owner)) continue;
-                    if (!written.TryGetValue(owner, out var ownerNames) || ownerNames.Count == 0) continue;
+                    if (facts.OwnerNamesOrNull(owner) is not { } ownerNames) continue;
                     if (names.Overlaps(ownerNames)) continue;
 
                     var readList = string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
@@ -1018,6 +988,150 @@ namespace ReSet.Core.Services
             }
 
             return defects;
+        }
+
+        /// <summary>
+        /// [K2 · 검증 SQL 세트] 통합 데이터 정합성 검증 SQL 세트가 <c>StepCode</c> 로 특정 단계 몫을 걸러 읽는 통제명이, 그 단계가 쓰는
+        /// 통제명과 하나도 겹치지 않는지 본다. 재료 수집·침묵 규칙은 <see cref="ValidateControlTotalNameConsistency"/> 와 같다.
+        ///
+        /// 실측(POQSettleBatch13, 2026-09-14): V04 가 S11 몫을 <c>TSettleMst.RowCount</c>·<c>TxAmt</c>·<c>CLTotal</c>·<c>PGTotal</c> 로 읽고 S11 은
+        /// <c>SettleFactRowCount</c>… 로 써서 V04 가 어떤 실행에서도 전부 불일치를 냈다. 단계 K2 는 검증 세트를 입력으로 받지 않았고,
+        /// 입력만 넣어도 못 봤다 - 이름이 제어 표 읽기 문장이 아니라 조인한 다른 CTE 에 있다(<see cref="ControlTotalNameFacts"/> 의
+        /// 「조인으로 끌어온 이름」). 같은 측정이 POQSettleBatch11 검증 세트의 <c>LedgerPOQIncome</c> 읽기(S13 은 <c>POQIncome</c>)를 찾았다.
+        /// 판독: <c>docs/audit-reports/2026-09-14-K2-검증SQL세트-사전선언.md</c>.
+        ///
+        /// [왜 단계 하한이 아니라 통합 L1 인가] 하한 위반 사전은 단계 코드 키뿐이라 골격으로 보낼 길이 없다. 결과를 <see cref="DetailedError"/> 로
+        /// 내고 <see cref="DetailedError.Lexemes"/> 에 <b>검증 세트 원문 줄</b>을 실어 <see cref="L1ViolationAttribution"/> 이 골격(패치 수리)으로
+        /// 귀속하게 한다 - K2 의 원칙(읽는 쪽이 쓰는 쪽에 맞춘다)을 그대로 따른다. 공통 규약이 검증 세트의 이름만 담으면 어긴 쪽은 쓰는
+        /// 단계라 그 단계의 원문 줄을 싣는다(K2 의 동률 규칙과 대칭). 검증 세트 안의 쓰기는 몫을 모르므로 쓰기 재료에 넣지 않는다.
+        /// </summary>
+        public IReadOnlyList<DetailedError> ValidateVerificationControlTotalNames(
+            string? planMarkdown,
+            IReadOnlyDictionary<string, string>? sectionsByStepCode,
+            IReadOnlyList<BatchStepPlan>? allSteps,
+            string? sharedConventions = null)
+        {
+            var errors = new List<DetailedError>();
+            if (string.IsNullOrWhiteSpace(planMarkdown) || sectionsByStepCode == null || allSteps == null) return errors;
+
+            var lines = MarkdownSectionLocator.SplitLines(planMarkdown);
+            var (header, end) = MarkdownSectionLocator.LocateSection(
+                lines, "## " + RequiredConsolidatedHeaders[3], "## ", exact: false);
+            if (header < 0) return errors;
+            var verification = string.Join("\n", lines.Skip(header).Take(end - header));
+
+            var facts = CollectControlTotalFacts(sectionsByStepCode, allSteps);
+            if (facts == null) return errors;
+
+            var (_, verificationReads) = ControlTotalNameFacts.Collect(verification, facts.TableNames);
+            foreach (var read in verificationReads)
+            {
+                var names = new HashSet<string>(read.Names, StringComparer.OrdinalIgnoreCase);
+                foreach (var owner in read.Owners.Where(o => StepCodeLiteralRegex.IsMatch(o)).OrderBy(o => o, StringComparer.Ordinal))
+                {
+                    if (facts.OwnerNamesOrNull(owner) is not { } ownerNames) continue;
+                    if (names.Overlaps(ownerNames)) continue;
+
+                    var readList = string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
+                    var writeList = string.Join(", ", ownerNames.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
+
+                    string message;
+                    IReadOnlyList<string> lexemes;
+                    if (MentionsAnyLiteral(sharedConventions, names) && !MentionsAnyLiteral(sharedConventions, ownerNames))
+                    {
+                        message =
+                            $"{owner}이(가) 통제 합계를 {writeList}(으)로 쓰는데 공통 규약에는 그 이름이 없고, 통합 데이터 정합성 검증 SQL 세트가 " +
+                            $"공통 규약의 이름 {readList}(으)로 {owner} 몫을 읽습니다 - 겹치는 이름이 하나도 없어 그 검증이 어떤 실행에서도 " +
+                            $"{owner} 몫의 행을 찾지 못합니다. {owner}의 쓰는 이름을 공통 규약대로 맞추십시오.";
+                        lexemes = LinesMentioningLiterals(sectionsByStepCode[owner], ownerNames);
+                    }
+                    else
+                    {
+                        message =
+                            $"통합 데이터 정합성 검증 SQL 세트가 {owner} 몫의 통제 합계를 ControlName {readList}(으)로 읽는데 " +
+                            $"{owner}이(가) 쓰는 이름은 {writeList}입니다 - 겹치는 이름이 하나도 없어 이 검증은 어떤 실행에서도 " +
+                            $"{owner} 몫의 행을 찾지 못합니다. 검증 SQL 이 읽는 이름을 {owner}이(가) 쓰는 이름으로 맞추십시오.";
+                        lexemes = LinesMentioningLiterals(verification, names);
+                    }
+
+                    errors.Add(new DetailedError
+                    {
+                        Type = ErrorType.VerificationControlTotalNameMismatch,
+                        Message = message,
+                        Lexemes = lexemes
+                    });
+                }
+            }
+
+            return errors;
+        }
+
+        /// <summary>K2 두 판(단계·검증 세트)이 같이 쓰는 재료. 단계 섹션의 쓰기 이름·「모름」 단계·읽기. 재료가 없으면 null.</summary>
+        private static ControlTotalFacts? CollectControlTotalFacts(
+            IReadOnlyDictionary<string, string>? sectionsByStepCode, IReadOnlyList<BatchStepPlan>? allSteps)
+        {
+            if (sectionsByStepCode == null || sectionsByStepCode.Count == 0) return null;
+            if (allSteps == null || allSteps.Count == 0) return null;
+
+            var tableNames = BatchControlContract.Tables
+                .Where(t => t.Columns.Any(c => string.Equals(c.Name, "ControlName", StringComparison.OrdinalIgnoreCase)))
+                .SelectMany(t => new[] { t.Name }.Concat(t.Aliases ?? Array.Empty<string>()))
+                .Select(n => n[(n.LastIndexOf('.') + 1)..])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (tableNames.Count == 0) return null;
+
+            var planned = new HashSet<string>(allSteps.Select(s => s.Code), StringComparer.OrdinalIgnoreCase);
+            var facts = new ControlTotalFacts(tableNames);
+
+            foreach (var (code, markdown) in sectionsByStepCode)
+            {
+                if (string.IsNullOrWhiteSpace(markdown) || !planned.Contains(code)) continue;
+
+                var (writes, stepReads) = ControlTotalNameFacts.Collect(markdown, tableNames);
+                foreach (var write in writes)
+                {
+                    if (write.Unknown) facts.UnknownWriters.Add(code);
+                    if (!facts.Written.TryGetValue(code, out var set)) facts.Written[code] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    set.UnionWith(write.Names);
+                }
+
+                foreach (var read in stepReads)
+                {
+                    var owners = read.Owners.Where(o => StepCodeLiteralRegex.IsMatch(o)).ToList();
+                    if (owners.Count > 0) facts.Reads.Add((code, owners, new HashSet<string>(read.Names, StringComparer.OrdinalIgnoreCase)));
+                }
+            }
+
+            return facts;
+        }
+
+        private sealed class ControlTotalFacts
+        {
+            internal ControlTotalFacts(IReadOnlyCollection<string> tableNames) => TableNames = tableNames;
+
+            internal IReadOnlyCollection<string> TableNames { get; }
+
+            internal Dictionary<string, HashSet<string>> Written { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+            internal HashSet<string> UnknownWriters { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+            internal List<(string Reader, IReadOnlyCollection<string> Owners, HashSet<string> Names)> Reads { get; } = new();
+
+            /// <summary>이 단계가 쓰는 이름. 「모름」이거나 쓰는 이름이 없으면 null - 누구와 맞대야 할지 몰라 침묵한다.</summary>
+            internal HashSet<string>? OwnerNamesOrNull(string owner) =>
+                !UnknownWriters.Contains(owner) && Written.TryGetValue(owner, out var names) && names.Count > 0 ? names : null;
+        }
+
+        /// <summary>이름 중 하나를 문자열 리터럴(<c>'이름'</c>)로 담는 원문 줄(앞뒤 공백 제거·중복 제거). 귀속 어휘다(작성 계약 9).</summary>
+        private static IReadOnlyList<string> LinesMentioningLiterals(string text, IEnumerable<string> names)
+        {
+            var quoted = names.Select(n => "'" + n + "'").ToList();
+            return MarkdownSectionLocator.SplitLines(text)
+                .Select(line => line.Trim())
+                .Where(line => line.Length > 0 && quoted.Any(q => line.Contains(q, StringComparison.OrdinalIgnoreCase)))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
         }
 
         private static readonly Regex StepCodeLiteralRegex = new(@"^S\d+$", RegexOptions.Compiled | RegexOptions.IgnoreCase);

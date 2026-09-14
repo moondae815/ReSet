@@ -2325,6 +2325,17 @@ namespace ReSet.Core.Services
                     l1Result.IsValid = false;
                 }
 
+                // [K2 · 검증 SQL 세트] 검증 세트가 단계 몫의 통제 합계를 그 단계가 쓰지 않는 이름으로만 읽는가(POQSettleBatch13 V04↔S11).
+                // 단계 하한 사전은 단계 코드 키뿐이라 골격으로 보낼 길이 없어 여기서 L1 로 더한다 - 어휘가 검증 세트 원문 줄이라
+                // 아래 귀속이 골격(패치 수리)으로 보낸다. 판독: docs/audit-reports/2026-09-14-K2-검증SQL세트-사전선언.md
+                foreach (var verificationError in _validator.ValidateVerificationControlTotalNames(
+                             consolidatedPlan, lastStepSections, currentSteps, BatchPlanAssembler.ExtractSharedConventions(lastSkeleton)))
+                {
+                    l1Result.Errors.Add(verificationError.Message);
+                    l1Result.DetailedErrors.Add(verificationError);
+                    l1Result.IsValid = false;
+                }
+
                 // 누락 코드를 단계로 귀속한다(설계서 §3-5(b)). missingErrorCodes는
                 // 방금 위에서 이번 회차 값으로 채워졌다 - 오류 코드 검사는 L1에서
                 // 판정되므로 귀속도 여기서 일어나야 한다(FIX ROUND 2 리뷰 지적:
