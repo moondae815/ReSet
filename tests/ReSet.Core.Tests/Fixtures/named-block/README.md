@@ -8,3 +8,4 @@
 | `Batch16-skeleton.md` | `output/Jobs/POQSettleBatch16/raw/attempts/run-001/skeleton.md` 바이트 복사(골격 시도 1 회뿐이라 판 안 골격과 같다) | 공통 규약 재료 |
 | `Batch1-S08.md` | `output/Jobs/POQSettleBatch1/agent/steps/S08.md` 바이트 복사 | 배송본 — `SQL_CURRENT_RUN_ID`(공통 정의) + 공통에도 없는 다섯 |
 | `Batch1-01-step-contract.md` | `output/Jobs/POQSettleBatch1/agent/common/01-step-contract.md` 바이트 복사 | 배송 공통 규약 — `-- SQL_CURRENT_RUN_ID` 정의와 의사코드 호출을 함께 담는다 |
+| `Batch1-S05.md` | `output/Jobs/POQSettleBatch1/agent/steps/S05.md` 바이트 복사 | 배송본 — 공통 규약에 **템플릿**(`<TargetTable>` 등)으로만 있는 `SQL_CREATE_AND_CAPTURE_SHADOW`·`SQL_DELETE_CHUNK`·`SQL_INSERT_CHUNK` 를 절 안에 구체적으로 정의했다. 시험은 그 세 정의 줄을 지워 「템플릿은 정의가 아니다」를 본다(최종 리뷰 C1) |

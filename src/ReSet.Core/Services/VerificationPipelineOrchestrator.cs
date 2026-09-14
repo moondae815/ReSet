@@ -4121,6 +4121,41 @@ namespace ReSet.Core.Services
                 ? steps.Where(step => defectiveSteps.Contains(step.Code, StringComparer.OrdinalIgnoreCase)).ToList()
                 : steps.ToList();
 
+            // [이름 블록 · 공통 규약 - 동결 섹션] 단계 하한 검사는 공통 규약에 정의된 블록을 부르기만 한 섹션을
+            // 통과시킨다(MechanicalValidator.UndefinedSqlBlockNames). 그런데 골격을 새로 만든 회차에서 동결 섹션은
+            // 다시 검증되지 않는다 - 새 골격이 그 블록을 잃거나 개명하면 호출이 어디에도 정의 없이 배송된다
+            // (SkeletonRevisionGuard 는 H2·단계 코드·오류 코드만 지킨다). 그래서 동결 섹션을 새 공통 규약으로 다시
+            // 대고, <b>이번 골격 변경 때문에</b> 정의를 잃은 단계만 재생성 대상에 넣는다 - 직전 골격 아래에서도
+            // 없던 이름은 섹션 자신의 하한 기록이 이미 지고 있다. 직전 골격을 모르면(SkeletonDefective 가 골격을
+            // 지웠거나 재개가 골격만 버렸다) 새 공통 규약에 없는 호출 전부를 본다.
+            // 판독: docs/audit-reports/2026-09-14-이름블록-공통규약-사전선언.md §최종 리뷰 반영
+            if (!reuseSkeleton && canTargetSections)
+            {
+                var priorSkeleton = skeletonRevision?.PreviousSkeleton ?? previousSkeleton;
+                var priorConventions = priorSkeleton == null ? null : BatchPlanAssembler.ExtractSharedConventions(priorSkeleton);
+                foreach (var step in steps)
+                {
+                    if (pending.Any(p => p.Code.Equals(step.Code, StringComparison.OrdinalIgnoreCase))) continue;
+                    if (!sections.TryGetValue(step.Code, out var frozen)) continue;
+
+                    var lostNow = MechanicalValidator.UndefinedSqlBlockNames(frozen, conventions);
+                    if (lostNow.Count == 0) continue;
+
+                    var lostByThisSkeleton = priorConventions == null
+                        ? lostNow
+                        : lostNow.Except(MechanicalValidator.UndefinedSqlBlockNames(frozen, priorConventions), StringComparer.Ordinal).ToList();
+                    if (lostByThisSkeleton.Count == 0) continue;
+
+                    pending.Add(step);
+                    _userInteraction.NotifyStatus(
+                        $"  [yellow]* {step.Code} 단계가 부르는 공통 SQL 블록이 새 골격에 없어 다시 생성합니다: " +
+                        $"{string.Join(", ", lostByThisSkeleton)}[/]");
+                    Log.Warning(
+                        "골격 변경으로 동결 섹션이 공통 SQL 블록 정의를 잃었습니다 - Step: {Step}, Names: {Names}",
+                        step.Code, string.Join(", ", lostByThisSkeleton));
+                }
+            }
+
             foreach (var step in pending)
             {
                 floorViolations.Remove(step.Code);

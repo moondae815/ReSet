@@ -34,6 +34,7 @@ public sealed class NamedBlockSharedConventionsTests
 
     private static readonly BatchStepPlan B16S04 = Step("S04", "dbo.UP_Util_PG_Client_CMRate_Ins");
     private static readonly BatchStepPlan B1S08 = Step("S08", "dbo.UP_UTIL_SETTLE_EXCEPTION_PROC");
+    private static readonly BatchStepPlan B1S05 = Step("S05", "dbo.UP_UTIL_SETTLE_INS_EXTRA");
 
     // N1: B16 S04 첫 초안은 공통 규약의 저널 블록 셋을 부르기만 했다 — 공통 규약과 함께면 침묵.
     [Fact]
@@ -79,6 +80,38 @@ public sealed class NamedBlockSharedConventionsTests
         Assert.Contains("SQL_CURRENT_RUN_ID", NamedInError(errors[0]));
     }
 
+    // N9(최종 리뷰 C1): 공통 규약의 템플릿 블록(`<TargetTable>` 같은 자리표시자)은 정의가 아니다 - 구현자는 테이블·필터가 빠진 모양만 받는다.
+    [Fact]
+    public void TemplateBlocksInSharedConventionsAreNotDefinitions()
+    {
+        var section = Fixture("Batch1-S05.md");
+        var contract = Fixture("Batch1-01-step-contract.md");
+        Assert.Empty(NamedBlockErrors(section, B1S05, contract));
+
+        var withoutOwnDefinitions = Regex.Replace(
+            section, @"^-- (SQL_CREATE_AND_CAPTURE_SHADOW|SQL_DELETE_CHUNK|SQL_INSERT_CHUNK)\b[^\n]*\n", string.Empty, RegexOptions.Multiline);
+        Assert.NotEqual(section, withoutOwnDefinitions);
+
+        var errors = NamedBlockErrors(withoutOwnDefinitions, B1S05, contract);
+
+        Assert.Single(errors);
+        Assert.Equal(new[] { "SQL_CREATE_AND_CAPTURE_SHADOW", "SQL_DELETE_CHUNK", "SQL_INSERT_CHUNK" }, NamedInError(errors[0]));
+    }
+
+    // N10(최종 리뷰 C1): 공통 규약의 이름은 토큰으로 맞춘다 - `SQL_MARK_STEP_FAILED_V2` 정의가 `SQL_MARK_STEP_FAILED` 호출을 덮지 않는다.
+    [Fact]
+    public void ALongerNameInSharedConventionsDoesNotDefineItsPrefix()
+    {
+        var conventions = BatchPlanAssembler.ExtractSharedConventions(Fixture("Batch16-skeleton.md"));
+        var renamed = Regex.Replace(conventions, @"^-- SQL_MARK_STEP_FAILED\s*$", "-- SQL_MARK_STEP_FAILED_V2", RegexOptions.Multiline);
+        Assert.NotEqual(conventions, renamed);
+
+        var errors = NamedBlockErrors(Fixture("Batch16-S04-first-draft.md"), B16S04, renamed);
+
+        Assert.Single(errors);
+        Assert.Equal(new[] { "SQL_MARK_STEP_FAILED" }, NamedInError(errors[0]));
+    }
+
     // N4: 재료가 없으면 종전 동작.
     [Theory]
     [InlineData(null)]
@@ -97,7 +130,9 @@ public sealed class NamedBlockSharedConventionsTests
         var call = Regex.Match(source, @"_validator\.ValidateBatchStep\((?<args>.*?)\);", RegexOptions.Singleline);
 
         Assert.True(call.Success);
-        Assert.Contains("sharedConventions: conventions", call.Groups["args"].Value);
+        // 주석 줄을 지우고 본다 - 주석에 인자 이름을 적기만 해도 통과하면 잠금이 아니다.
+        var code = Regex.Replace(call.Groups["args"].Value, @"//[^\n]*", string.Empty);
+        Assert.Matches(new Regex(@"\bsharedConventions:\s*conventions\b"), code);
     }
 
     // N5: 스윕 서비스는 SweepJob.SharedConventions 로 같은 판정을 한다.
@@ -124,7 +159,8 @@ public sealed class NamedBlockSharedConventionsTests
     {
         var source = File.ReadAllText(Path.Combine(RepoPaths.FindRepoRoot(), "src", "ReSet.Cli", "SweepCommand.cs"));
 
-        Assert.Contains("\"01-step-contract.md\"", source);
-        Assert.Matches(new Regex(@"SharedConventions\s*=", RegexOptions.None), source);
+        var code = Regex.Replace(source, @"//[^\n]*", string.Empty);
+        Assert.Matches(new Regex(@"Path\.Combine\(jobDir,\s*""agent"",\s*""common"",\s*""01-step-contract\.md""\)"), code);
+        Assert.Matches(new Regex(@"SharedConventions\s*=\s*File\.Exists\(stepContractPath\)\s*\?\s*File\.ReadAllText\(stepContractPath\)"), code);
     }
 }
