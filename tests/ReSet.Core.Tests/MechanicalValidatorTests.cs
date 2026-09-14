@@ -12328,7 +12328,8 @@ END";
         //
         // 사전 선언: docs/audit-reports/2026-09-08-T36-사전선언.md
         // 「어느 쪽이 기준인가」는 풀지 않는다 - 양쪽이 순환이다. 해의 방향만 쓴다:
-        // 본문이 쓰는데 목차에 없으면 권한이 없어 실행이 실패한다.
+        // 본문이 쓰는데 목차에 없으면 그 표의 DDL 을 정의할 자리가 빈다. 제어 계약 표는 DDL 이 계약에
+        // 있어 면제다(2026-09-14, docs/audit-reports/2026-09-14-목차밖-계약표-면제-사전선언.md).
 
         private static BatchStepPlan DeclaringStep(string code, params string[] targets) => new(
             Code: code, Name: $"{code} 단계",

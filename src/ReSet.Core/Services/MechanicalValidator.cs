@@ -9922,17 +9922,19 @@ namespace ReSet.Core.Services
         /// 단계 본문이 <b>쓰는</b> 대상 표가 목차에 <b>없는</b> 것을 본다
         /// (축 B 잔여 결함 <b>T36</b>).
         ///
-        /// [무엇을 잡는가 - 실물]
-        /// <c>POQSettleBatch1/S16</c> 의 목차는 <c>batch.BatchReconciliationResult</c> 하나인데
-        /// 본문은 <c>batch.BatchControlTotal</c>·<c>batch.BatchValidationIssue</c> 에도 쓴다.
-        /// 목차가 권한·DDL 을 끌고 가므로 <b>그 표에 권한이 없어 실행이 실패한다.</b>
+        /// [무엇을 잡는가]
+        /// 본문이 제어 계약 <b>밖</b> 표(신설 배치 표·스테이징·업무 표)에 쓰는데 목차가 선언하지 않은 것.
+        /// 그 표의 DDL 은 계약에 없어 목차·골격이 정의해야 한다. 종전 실물 <c>POQSettleBatch1/S16</c>
+        /// (목차 <c>batch.BatchReconciliationResult</c> · 본문 <c>batch.BatchControlTotal</c>·<c>batch.BatchValidationIssue</c>)는
+        /// 둘 다 계약 표라 2026-09-14 부터 면제다 - 아래 [면제를 계약 표 전부로 넓혔다] 참고.
         ///
         /// [「어느 쪽이 기준인가」는 풀지 않는다 - 풀 필요가 없다]
         /// 승인 표(<c>[Approved Step List]</c>)의 <c>Tables:</c> 칸은 기계 렌더지만
         /// (<c>AiService</c> 가 목차의 <c>TargetTables</c> 를 그대로 찍는다) <b>그 목차 자체가
         /// 모델 산출</b>이라 양쪽이 모델로 수렴한다 - <b>순환이다.</b> 그래서 진리는 못 정한다.
-        /// <b>대신 해가 나는 방향은 정해져 있다</b> - 본문 ⊄ 목차는 실행 실패이고, 역방향
-        /// (목차에 있는데 본문이 안 씀)은 과다 부여라 해가 작다. 외부 오라클 없이 서는
+        /// <b>대신 해가 나는 방향은 정해져 있다</b> - 본문 ⊄ 목차는 DDL 을 정의할 자리가 빈 것이고, 역방향
+        /// (목차에 있는데 본문이 안 씀)은 해가 작다. (종전 문구 「권한이 없어 실행 실패」는 권한을 목차에서
+        /// 끌어오는 코드가 없어 2026-09-14 에 버렸다.) 외부 오라클 없이 서는
         /// <b>자기일관성 검사</b>이고 <see cref="CheckDuplicateProjectionNames"/> 와 같은 계열이다.
         ///
         /// [면제의 근거가 비순환이다]
