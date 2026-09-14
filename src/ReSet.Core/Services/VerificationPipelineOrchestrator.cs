@@ -2456,6 +2456,13 @@ namespace ReSet.Core.Services
                                 AddSkeletonOwner(detail);
                                 break;
 
+                            case ErrorType.VerificationControlTotalNameMismatch when detail.OwnerStepCode is { } ownerStepCode:
+                                // [K2 검증 세트판 · 공통 규약 동률] 어긴 것이 쓰는 단계라고 검사가 이미 안다. 그 단계의 쓰기 SQL 은 대개
+                                // 코드 없는 하위 헤딩 아래라 어휘 검색이 어느 자리에도 안 붙는다(DetailedError.OwnerStepCode 참고).
+                                // 읽는 쪽(골격) 귀속은 OwnerStepCode 가 없어 아래 어휘 검색으로 간다.
+                                AddOwner(ownerStepCode);
+                                break;
+
                             case ErrorType.MermaidCliError:
                                 {
                                     // 이 유형은 메시지가 mermaid 컴파일 로그라 백틱 토큰이

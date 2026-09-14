@@ -86,10 +86,7 @@ namespace ReSet.Core.Services
             public override void ExplicitVisit(SelectStatement node)
             {
                 var outer = _ctes;
-                _ctes = node.WithCtesAndXmlNamespaces?.CommonTableExpressions
-                    .GroupBy(c => c.ExpressionName.Value, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase)
-                    ?? new Dictionary<string, CommonTableExpression>(StringComparer.OrdinalIgnoreCase);
+                _ctes = CtesOf(node.WithCtesAndXmlNamespaces);
                 base.ExplicitVisit(node);
                 _ctes = outer;
             }
@@ -101,8 +98,19 @@ namespace ReSet.Core.Services
                     Writes.Add(ReadInsert(node));
                 }
 
+                // WITH 가 INSERT 에 붙는 모양(`WITH … INSERT INTO … SELECT … JOIN …`)도 같은 문장 CTE 를 풀어야 한다 -
+                // 처음엔 SelectStatement 에서만 채워 조인으로 끌어온 이름이 조용했다(최종 리뷰 Important 1).
+                var outer = _ctes;
+                _ctes = CtesOf(node.WithCtesAndXmlNamespaces);
                 base.ExplicitVisit(node);
+                _ctes = outer;
             }
+
+            private static IReadOnlyDictionary<string, CommonTableExpression> CtesOf(WithCtesAndXmlNamespaces? with) =>
+                with?.CommonTableExpressions
+                    .GroupBy(c => c.ExpressionName.Value, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase)
+                ?? new Dictionary<string, CommonTableExpression>(StringComparer.OrdinalIgnoreCase);
 
             public override void ExplicitVisit(MergeStatement node)
             {

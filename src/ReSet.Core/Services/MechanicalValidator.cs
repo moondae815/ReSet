@@ -135,6 +135,15 @@ namespace ReSet.Core.Services
         /// 멀쩡한 단계를 다시 쓰게 되어 회귀 롤백이 막으려는 회귀를 다시 들인다.
         /// </summary>
         public IReadOnlyList<string>? Lexemes { get; set; }
+
+        /// <summary>
+        /// 위반을 고칠 단계를 검사가 이미 안다면 그 코드. 귀속 스위치가 어휘 검색 대신 이것으로 연다.
+        ///
+        /// [왜 어휘로 안 되나 - 2026-09-14 K2 검증 세트판 최종 리뷰] <see cref="L1ViolationAttribution"/> 은 단계 안의 코드 없는 하위
+        /// 헤딩(<c>#### …</c>) 아래를 판정 불가로 둔다. GPT 판 단계 대부분이 쓰기 SQL 을 그 아래 두어, 단계 원문 줄을 어휘로 실어도 실물에서
+        /// 어느 자리에도 안 붙고 전량 재생성으로 떨어졌다.
+        /// </summary>
+        public string? OwnerStepCode { get; set; }
     }
 
     /// <summary>
@@ -1044,7 +1053,9 @@ namespace ReSet.Core.Services
             var facts = CollectControlTotalFacts(sectionsByStepCode, allSteps);
             if (facts == null) return;
 
-            var (_, verificationReads) = ControlTotalNameFacts.Collect(verification, facts.TableNames);
+            var (verificationWrites, verificationReads) = ControlTotalNameFacts.Collect(verification, facts.TableNames);
+            // 검증 세트가 제어 표에 스스로 쓰면 그 행이 누구 몫인지 모른다(단계 코드를 달고 쓴 뒤 되읽는 모양) - 침묵한다(최종 리뷰 Minor 3).
+            if (verificationWrites.Count > 0) return;
             foreach (var read in verificationReads)
             {
                 var names = new HashSet<string>(read.Names, StringComparer.OrdinalIgnoreCase);
@@ -1058,6 +1069,7 @@ namespace ReSet.Core.Services
 
                     string message;
                     IReadOnlyList<string> lexemes;
+                    string? ownerStepCode = null;
                     if (MentionsAnyLiteral(sharedConventions, names) && !MentionsAnyLiteral(sharedConventions, ownerNames))
                     {
                         message =
@@ -1065,6 +1077,7 @@ namespace ReSet.Core.Services
                             $"공통 규약의 이름 {readList}(으)로 {owner} 몫을 읽습니다 - 겹치는 이름이 하나도 없어 그 검증이 어떤 실행에서도 " +
                             $"{owner} 몫의 행을 찾지 못합니다. {owner}의 쓰는 이름을 공통 규약대로 맞추십시오.";
                         lexemes = LinesMentioningLiterals(sectionsByStepCode[owner], ownerNames);
+                        ownerStepCode = owner;
                     }
                     else
                     {
@@ -1079,7 +1092,8 @@ namespace ReSet.Core.Services
                     {
                         Type = ErrorType.VerificationControlTotalNameMismatch,
                         Message = message,
-                        Lexemes = lexemes
+                        Lexemes = lexemes,
+                        OwnerStepCode = ownerStepCode
                     });
                 }
             }

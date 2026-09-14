@@ -56,6 +56,7 @@ public sealed class VerificationControlTotalNamesTests
         var error = Assert.Single(Validate(Fixture("Batch13-verification.md"), null, ("S11", Fixture("Batch13-S11.md"))));
 
         Assert.Equal(ErrorType.VerificationControlTotalNameMismatch, error.Type);
+        Assert.Null(error.OwnerStepCode);   // 읽는 쪽(골격)이 고친다 - 단계를 열지 않는다
         foreach (var (reader, writer) in Batch13NameFixes)
         {
             Assert.Contains("`" + reader + "`", error.Message);
@@ -133,6 +134,34 @@ public sealed class VerificationControlTotalNamesTests
         Assert.Empty(Validate(Fixture("Batch13-verification.md"), null, ("S11", parameterized)));
     }
 
+    // [INSERT 문장의 CTE - 최종 리뷰 Important 1] WITH 가 INSERT 에 붙으면(`WITH … INSERT INTO … SELECT … JOIN …`) 같은 문장 CTE 를
+    // 풀 수 있어야 한다. 처음엔 SelectStatement 방문에서만 CTE 를 채워 이 모양이 조용했다.
+    [Fact]
+    public void JoinedNamesInsideAnInsertWithCtes_AreRead()
+    {
+        var original = Fixture("Batch13-verification.md");
+        var inserted = original.Replace(
+            ")\nSELECT\n    COALESCE(R.ControlName, C.ControlName) AS ControlName,",
+            ")\nINSERT INTO batch.BatchReconciliation (ControlName, FrozenValue, CurrentValue)\nSELECT\n    COALESCE(R.ControlName, C.ControlName) AS ControlName,");
+        Assert.NotEqual(original, inserted);
+
+        Assert.Contains("`TSettleMst.RowCount`", Assert.Single(Validate(inserted, null, ("S11", Fixture("Batch13-S11.md")))).Message);
+    }
+
+    // [검증 세트가 제어 표에 스스로 쓴다 - 최종 리뷰 Minor 3] 검증 SQL 이 단계 코드를 달고 직접 쓴 뒤 되읽으면 그 행이 누구 몫인지 모른다 - 침묵.
+    [Fact]
+    public void VerificationSetThatWritesTheControlTableItself_IsSilent()
+    {
+        var original = Fixture("Batch13-verification.md");
+        var selfWriting = original.Replace(
+            "### V04 TSettleMst 동결 지문\n",
+            "### V04 TSettleMst 동결 지문\n\n```sql\nINSERT INTO batch.BatchControlTotal (RunId, StepCode, ControlName, ControlValue, CapturedAtUtc)\n" +
+            "VALUES (@p_runId, N'S11', N'TSettleMst.RowCount', 0, SYSUTCDATETIME());\n```\n");
+        Assert.NotEqual(original, selfWriting);
+
+        Assert.Empty(Validate(selfWriting, null, ("S11", Fixture("Batch13-S11.md"))));
+    }
+
     // [귀속] 어휘는 검증 세트의 원문 줄이다 - 조립 문서에서 골격만 열고 단계는 열지 않는다(골격 패치 수리로 간다).
     [Fact]
     public void OnTheAssembledPlan_TheDefectOpensOnlyTheSkeleton()
@@ -155,10 +184,10 @@ public sealed class VerificationControlTotalNamesTests
     // [공통 규약 동률] 규약이 검증 세트의 이름을 담고 쓰는 단계의 이름을 하나도 안 담으면 어긴 것은 쓰는 단계다 - 어휘를
     // 쓰는 단계의 원문 줄로 싣는다(검증 세트 줄은 싣지 않는다).
     //
-    // [조립 문서 귀속까지는 재지 않는다 - 발견] 실물 S11 의 쓰기 SQL 은 `#### ` 하위 헤딩 아래에 있고,
-    // L1ViolationAttribution.MapRegions 는 단계 안의 코드 없는 하위 헤딩 아래를 Unknown 으로 둔다 - 프로브에서 이 어휘가
-    // 단계에도 골격에도 귀속되지 않았다. 코퍼스 GPT 판은 단계 대부분이 그 모양이다(B11 22 중 18 · B12 18 중 17 · B13 19 중 16).
-    // 이 검사 밖의 기존 한계라 여기서 고치지 않고 판독에 적는다.
+    // [하위 헤딩 - 최종 리뷰 Important 2] 실물 S11 의 쓰기 SQL 은 `#### ` 하위 헤딩 아래에 있고,
+    // L1ViolationAttribution.MapRegions 는 단계 안의 코드 없는 하위 헤딩 아래를 Unknown 으로 둔다 - 어휘만 실으면 이 분기는
+    // 실물에서 단계에도 골격에도 안 붙어 전량 재생성으로 떨어진다(코퍼스 GPT 판 단계 대부분이 그 모양: B11 22 중 18 · B12 18 중 17 ·
+    // B13 19 중 16). 그래서 쓰는 단계 코드를 OwnerStepCode 로 직접 싣는다. MapRegions 자체는 이 브랜치 밖이라 고치지 않았다.
     [Fact]
     public void WhenOnlyTheVerificationSetFollowsTheSharedConventions_TheWritersLinesAreTheLexemes()
     {
@@ -168,6 +197,8 @@ public sealed class VerificationControlTotalNamesTests
 
         var error = Assert.Single(Validate(plan, conventions, ("S11", s11)));
         Assert.Contains("공통 규약", error.Message);
+        // 어휘로는 이 단계에 귀속되지 않는다(아래 [하위 헤딩]) - 쓰는 단계를 직접 싣고 오케스트레이터가 그것으로 연다.
+        Assert.Equal("S11", error.OwnerStepCode);
 
         var lexemes = MechanicalValidator.ViolationLexemes(error);
         Assert.Equal(6, lexemes.Count);
@@ -204,6 +235,18 @@ public sealed class VerificationControlTotalNamesTests
 
         Assert.Matches(new Regex(
             @"foreach\s*\(\s*var\s+\w+\s+in\s+_validator\.ValidateVerificationControlTotalNames\(\s*consolidatedPlan\s*,\s*lastStepSections\s*,\s*currentSteps\s*,\s*BatchPlanAssembler\.ExtractSharedConventions\(\s*lastSkeleton\s*\)\s*\)\s*\)\s*\{[^}]*l1Result\.DetailedErrors\.Add"),
+            source);
+    }
+
+    // [배선 - 쓰는 단계 직접 귀속] 공통 규약 동률 분기는 어휘로 단계에 안 붙는다(하위 헤딩). 귀속 스위치가 OwnerStepCode 로 그 단계를 연다.
+    [Fact]
+    public void OrchestratorOpensTheOwnerStepFromTheErrorItself()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            RepoPaths.FindRepoRoot(), "src", "ReSet.Core", "Services", "VerificationPipelineOrchestrator.cs"));
+
+        Assert.Matches(new Regex(
+            @"case\s+ErrorType\.VerificationControlTotalNameMismatch\s+when\s+detail\.OwnerStepCode\s+is\s*\{\s*\}\s*(\w+)\s*:\s*(?://[^\n]*\n\s*)*AddOwner\(\s*\1\s*\)\s*;\s*break\s*;"),
             source);
     }
 }
