@@ -415,8 +415,11 @@ namespace ReSet.Core.Services
                         "The FIRST step that lists this table as a target INSERTs this row. " +
                         "Later steps UPDATE this row. No column self-issues a value here - " +
                         "every key value is supplied by the step.",
+                    // 「각 단계」를 RunId 가 생긴 뒤로 좁혔다(2026-09-14) - 첫 단계를 읽기 전용 사전 검증으로 두는 목차에서 그 단계는
+                    // 행을 쓸 RunId 가 없다. 무조건 「EACH step」 이면 모델이 그 단계에도 행이 있다고 보고 게이트가 그것을 요구했다.
                     ControlRowOrigin.EachStepInserts =>
-                        "EACH step INSERTs its own row when it starts, then UPDATEs it when it ends. Never UPDATE a row you did not insert.",
+                        "EACH step that runs after the run row exists INSERTs its own row when it starts, then UPDATEs it when it ends. " +
+                        "Never UPDATE a row you did not insert. See the run id lifetime note below the table.",
                     _ => "The producing step INSERTs only. There is no state transition."
                 };
 
@@ -430,6 +433,17 @@ namespace ReSet.Core.Services
                         $"| `{table.Name}` | `{col.Name}` | {col.SqlType}{nullability} | {values} | {origin} |");
                 }
             }
+
+            // [RunId 수명 - 2026-09-14] GPT 판 4 개 중 3 개가 S01(사전 검증)을 발급 단계 S02 앞에 두고, 게이트가 S01 의 체크포인트·저널
+            // Succeeded 를 요구해 게시 불가 계획서를 배송했다. 판독 docs/audit-reports/2026-09-14-RunId수명-계약-사전선언.md
+            sb.AppendLine();
+            sb.AppendLine(
+                // 표 이름에 백틱을 달지 않는다 - 표 행 잠금 시험들이 백틱 이름으로 행을 골라낸다(이 문단은 행이 아니다).
+                "Run id lifetime: the run id exists only after the step that INSERTs the run row (batch.BatchRun) has run. " +
+                "A step that runs BEFORE that step (for example a read-only pre-validation step) has no run id, " +
+                "so it writes NO step journal or checkpoint row (batch.BatchStepJournal, batch.BatchCheckpoint). " +
+                "A completion gate that requires steps to be 'Succeeded' for a run - a `StepCode IN (...)` list, " +
+                "a `VALUES` list of step codes, or a `BETWEEN` range - MUST NOT list such a step: that gate could never pass.");
 
             return sb.ToString();
         }
