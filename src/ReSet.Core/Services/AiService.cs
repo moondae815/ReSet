@@ -5040,6 +5040,21 @@ Consolidate the provided specifications into a single unified batch job named '{
                 builder.AppendLine();
                 builder.Append(interfaceTable);
             }
+
+            // [가드 조건 - 2026-09-14] 단계 프롬프트에 원본 DDL 이 없어 GPT 가 명세서 CRUD 참조 컬럼 칸의 SELECT 목록 PLTID 를 가드 조건으로 옮겼다
+            // (GPT 판 다섯 연속). 같은 요청 재생에서 이 표를 붙이면 0/3(그대로 2/3). 가드가 없으면 싣지 않는다 - 그 Job 프롬프트는 바이트 그대로다.
+            // 판독 docs/audit-reports/2026-09-14-가드PLTID-날조-원인-측정.md
+            var guardTable = StepInterfaceFacts.RenderGuardTable(stepInterfaces ?? Array.Empty<StepInterface>());
+            if (guardTable.Length > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine("[Original Guard Conditions]");
+                builder.AppendLine("These are the source procedures' IF [NOT] EXISTS checks, read from their DDL. Translate each check with EXACTLY these WHERE");
+                builder.AppendLine("conditions - the columns in the check's SELECT list are only what EXISTS projects, not a condition.");
+                builder.AppendLine("Do not add, drop, or change a condition.");
+                builder.AppendLine();
+                builder.Append(guardTable);
+            }
         }
 
         public async Task<ReviewResult> ReviewConsolidatedPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string planMarkdown, string jobName, string? effort = null, CancellationToken cancellationToken = default)

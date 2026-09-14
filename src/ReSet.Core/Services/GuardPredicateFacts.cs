@@ -17,11 +17,14 @@ namespace ReSet.Core.Services
     /// </summary>
     internal static class GuardPredicateFacts
     {
+        /// <param name="Negated">원본 가드가 <c>IF NOT EXISTS</c> 인가(존재 확인 질의 쪽은 늘 false). 같은 WHERE 라도 뜻이 반대다 -
+        /// 프롬프트 가드 표가 행마다 싣는다(2026-09-14 최종 리뷰).</param>
         internal sealed record Query(
             string Table,
             IReadOnlyList<PredicateTerm> Terms,
             IReadOnlyList<string> SelectColumns,
-            int Line);
+            int Line,
+            bool Negated = false);
 
         private static readonly Regex SqlFence = new(@"```sql[^\n]*\n(?<body>.*?)```", RegexOptions.Singleline | RegexOptions.IgnoreCase);
 
@@ -99,21 +102,21 @@ namespace ReSet.Core.Services
 
             public override void ExplicitVisit(IfStatement node)
             {
-                if (ExistsOf(node.Predicate) is { } exists &&
+                if (ExistsOf(node.Predicate, false) is ({ } exists, var negated) &&
                     FromSpecification(Unwrap(exists.Subquery?.QueryExpression)) is { } guard)
                 {
-                    Guards.Add(guard with { Line = node.StartLine });
+                    Guards.Add(guard with { Line = node.StartLine, Negated = negated });
                 }
 
                 base.ExplicitVisit(node);
             }
 
-            private static ExistsPredicate? ExistsOf(BooleanExpression? expression) => expression switch
+            private static (ExistsPredicate? Exists, bool Negated) ExistsOf(BooleanExpression? expression, bool negated) => expression switch
             {
-                ExistsPredicate exists => exists,
-                BooleanNotExpression not => ExistsOf(not.Expression),
-                BooleanParenthesisExpression parenthesis => ExistsOf(parenthesis.Expression),
-                _ => null
+                ExistsPredicate exists => (exists, negated),
+                BooleanNotExpression not => ExistsOf(not.Expression, !negated),
+                BooleanParenthesisExpression parenthesis => ExistsOf(parenthesis.Expression, negated),
+                _ => (null, negated)
             };
         }
 
