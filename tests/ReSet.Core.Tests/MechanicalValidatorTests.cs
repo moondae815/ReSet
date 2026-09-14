@@ -12346,14 +12346,15 @@ END";
         [Fact]
         public void ValidateBatchStep_CheckUndeclaredWriteTargets_ReportsATableTheOutlineDoesNotDeclare()
         {
-            // 실물(POQSettleBatch1/S16): 목차는 BatchReconciliationResult 하나인데
-            // 본문은 BatchControlTotal·BatchValidationIssue 에도 쓴다.
+            // 목차는 BatchReconciliationResult 하나인데 본문은 계약 밖 스테이징 표에도 쓴다.
+            // [2026-09-14] 종전 실물(POQSettleBatch1/S16 의 BatchControlTotal)은 제어 계약 표라 이제 면제다 -
+            // 발화 예를 계약 밖 표로 옮겼다(docs/audit-reports/2026-09-14-목차밖-계약표-면제-사전선언.md U4).
             var result = ValidateTargets(
                 DeclaringStep("S16", "batch.BatchReconciliationResult"),
-                "INSERT INTO batch.BatchControlTotal (RunId, ControlName) VALUES (@r, N'X');");
+                "INSERT INTO batch.SettleStaging (RunId, ControlName) VALUES (@r, N'X');");
 
             Assert.Contains(result.Errors, e =>
-                e.Contains(UndeclaredTableMarker) && e.Contains("BatchControlTotal"));
+                e.Contains(UndeclaredTableMarker) && e.Contains("SettleStaging"));
         }
 
         [Fact]
@@ -12362,8 +12363,8 @@ END";
             // 발화 단위는 표다 - 어느 표에 권한이 없는지가 이행자가 알아야 할 것이다.
             var result = ValidateTargets(
                 DeclaringStep("S16", "batch.BatchReconciliationResult"),
-                "INSERT INTO batch.BatchControlTotal (RunId) VALUES (@r);\n" +
-                "INSERT INTO batch.BatchValidationIssue (RunId) VALUES (@r);");
+                "INSERT INTO batch.SettleStaging (RunId) VALUES (@r);\n" +
+                "INSERT INTO batch.BatchReconciliationSummary (RunId) VALUES (@r);");
 
             Assert.Equal(2, result.Errors.Count(e => e.Contains(UndeclaredTableMarker)));
         }
@@ -12372,8 +12373,8 @@ END";
         public void ValidateBatchStep_CheckUndeclaredWriteTargets_StaysSilentWhenTheOutlineDeclaresIt()
         {
             var result = ValidateTargets(
-                DeclaringStep("S16", "batch.BatchControlTotal"),
-                "INSERT INTO batch.BatchControlTotal (RunId) VALUES (@r);");
+                DeclaringStep("S16", "batch.SettleStaging"),
+                "INSERT INTO batch.SettleStaging (RunId) VALUES (@r);");
 
             Assert.DoesNotContain(result.Errors, e => e.Contains(UndeclaredTableMarker));
         }
@@ -12400,7 +12401,7 @@ END";
                 "S16", "S16 단계", Array.Empty<string>(), Array.Empty<string>(),
                 new[] { "-9160" }, false, Array.Empty<string>());
 
-            var result = ValidateTargets(empty, "INSERT INTO batch.BatchControlTotal (RunId) VALUES (@r);");
+            var result = ValidateTargets(empty, "INSERT INTO batch.SettleStaging (RunId) VALUES (@r);");
 
             Assert.DoesNotContain(result.Errors, e => e.Contains(UndeclaredTableMarker));
         }
@@ -12421,8 +12422,8 @@ END";
         {
             // 목차는 한정자를 붙이거나 뗄 수 있다 - 맨이름으로 맞춘다(이 파일의 관례).
             var result = ValidateTargets(
-                DeclaringStep("S16", "[batch].[BatchControlTotal]"),
-                "INSERT INTO batch.BatchControlTotal (RunId) VALUES (@r);");
+                DeclaringStep("S16", "[batch].[SettleStaging]"),
+                "INSERT INTO batch.SettleStaging (RunId) VALUES (@r);");
 
             Assert.DoesNotContain(result.Errors, e => e.Contains(UndeclaredTableMarker));
         }

@@ -9941,6 +9941,15 @@ namespace ReSet.Core.Services
         /// <b>면제하지 않으면 코퍼스 발화 25 중 약 23 이 그것이다</b>(실측 2026-09-08).
         /// 임의로 좁힌 것이 아니라 <see cref="BatchControlContract"/>(커밋된 소스)가 가진 축이다.
         ///
+        /// [면제를 계약 표 전부로 넓혔다 - 2026-09-14] 남은 발화도 전부 계약 표였다 - 코퍼스 로그 전체의 발화 26 ·
+        /// 배송본 스윕 17 이 <c>BatchRun</c>·<c>BatchRunLock</c>·<c>BatchValidationIssue</c>·<c>BatchControlTotal</c> 이고
+        /// 계약 밖 표는 0 이었다. 종전 오류문의 「목차가 권한과 DDL 을 끌고 가므로 권한이 없어 실행이 실패한다」는
+        /// 근거가 없었다 - 목차 <c>TargetTables</c> 를 권한·DDL 에 쓰는 코드가 없고, 계약 표의 DDL 은 계약이 정해
+        /// 모든 단계 프롬프트에 실린다. 대부분은 목차가 비정본 이름(<c>ControlTotal</c>·<c>RunLock</c>·
+        /// <c>BatchExecutionJournal</c>)을 적고 본문이 정본을 쓴 경우라 틀린 쪽은 목차였다. 그래서 정본 이름의 계약 표는
+        /// 전부 면제하고, 이 검사는 DDL 이 계약에 없는 표만 든다. 본문이 쓴 <b>별칭</b>은 면제하지 않는다(K1 이 따로 든다).
+        /// 판독: docs/audit-reports/2026-09-14-목차밖-계약표-면제-사전선언.md
+        ///
         /// [기각한 자 셋 - 다시 집지 마라. 근거는 2026-09-08-T25-T36-오라클-실측.md §2]
         /// ① 목차 이름이 계약에 없는가 → 신설 표와 오기를 못 가른다(발화 9) ② 부분 문자열
         /// 철자 충돌 → <c>BatchRun</c> 과 <c>BatchRunLock</c> 을 같은 표의 두 철자로 오탐한다.
@@ -9972,7 +9981,6 @@ namespace ReSet.Core.Services
             if (statements.Count == 0) return;
 
             var exempt = BatchControlContract.Tables
-                .Where(t => t.Origin == ControlRowOrigin.EachStepInserts)
                 .Select(t => BareObjectName(t.Name))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -9990,8 +9998,8 @@ namespace ReSet.Core.Services
                 result.PlanDefects.Add(
                     $"{step.Code} 본문이 `{table}`에 쓰는데 그 표가 목차에 없습니다 - " +
                     $"목차가 선언한 것은 {string.Join(", ", declared.OrderBy(d => d, StringComparer.Ordinal))}뿐입니다. " +
-                    "목차가 권한과 DDL 을 끌고 가므로, 승인된 표만 보고 권한을 잡으면 이 표에 " +
-                    "권한이 없어 실행이 실패합니다.");
+                    "이 표의 DDL 은 제어 계약에 없으므로 목차가 대상으로 선언하고 골격이나 이 단계가 " +
+                    "정의해야 합니다.");
             }
         }
 
