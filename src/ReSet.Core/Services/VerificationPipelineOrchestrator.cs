@@ -1830,7 +1830,7 @@ namespace ReSet.Core.Services
                 var parsed = BatchStepPlanParser.TryParse(structure ?? string.Empty);
                 return parsed == null
                     ? new List<StepInterface>()
-                    : StepInterfaceFacts.Build(parsed, parametersByProcedure).ToList();
+                    : StepInterfaceFacts.Build(parsed, parametersByProcedure, ddlByProcedure).ToList();
             }
 
             // 이 경고는 분할 생성 진입 여부와 무관하게 실행당 한 번 뜬다. 목차 JSON
@@ -4065,7 +4065,7 @@ namespace ReSet.Core.Services
             // 단계별 인터페이스. steps가 이미 확정돼 있으므로 골격 호출보다 앞에서 만든다 -
             // 골격도 이 표를 받아야 한다(규칙 5가 그 표를 가리킨다). 재시도 루프 밖이라
             // 단계마다 뽑아도 결과가 같다.
-            var stepInterfaces = StepInterfaceFacts.Build(steps, parametersByProcedure);
+            var stepInterfaces = StepInterfaceFacts.Build(steps, parametersByProcedure, ddlByProcedure);
 
             string skeleton;
             AiResult generation;

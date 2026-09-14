@@ -88,7 +88,8 @@ namespace ReSet.Cli
             }
 
             var parameters = StepInterfaceFacts.CollectParameters(materials.Definitions);
-            var stepInterfaces = StepInterfaceFacts.Build(steps, parameters);
+            // 실물 판과 같은 프롬프트를 받게 원본 DDL 을 넘긴다 - 안 넘기면 [Original Guard Conditions] 가 빠진 프롬프트를 재게 된다.
+            var stepInterfaces = StepInterfaceFacts.Build(steps, parameters, StepInterfaceFacts.CollectDdl(materials.Definitions));
             var callGraph = StepInterfaceFacts.BuildCallGraph(materials.Definitions);
 
             var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");

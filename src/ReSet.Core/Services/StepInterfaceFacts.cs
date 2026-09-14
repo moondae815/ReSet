@@ -7,10 +7,18 @@ using ReSet.Core.Models;
 namespace ReSet.Core.Services
 {
     /// <param name="Parameters">원본 선언 그대로. "@pi_strYMD varchar(8)" 형태다.</param>
+    /// <param name="Guards">원본 DDL 의 <c>IF [NOT] EXISTS (SELECT … FROM T WHERE …)</c> 가드. DDL 이 없으면 null.</param>
     public sealed record StepInterface(
         string StepCode,
         IReadOnlyList<string> Procedures,
-        IReadOnlyList<string> Parameters);
+        IReadOnlyList<string> Parameters,
+        IReadOnlyList<StepGuard>? Guards = null);
+
+    /// <summary>
+    /// 원본 가드 한 줄. <paramref name="Where"/> 는 WHERE 최상위 항의 원문을 AND 로 이은 것(공백 접힘),
+    /// <paramref name="SelectColumns"/> 는 EXISTS 가 투영하는 목록일 뿐 조건이 아니다.
+    /// </summary>
+    public sealed record StepGuard(string Procedure, int Line, string Table, string Where, IReadOnlyList<string> SelectColumns);
 
     /// <summary>
     /// 단계별 원본 프로시저 인터페이스를 모은다.
@@ -218,9 +226,15 @@ namespace ReSet.Core.Services
             return map;
         }
 
+        /// <param name="ddlByProcedure">
+        /// [가드 조건 - 2026-09-14] 주면 단계의 원본 프로시저 DDL 에서 가드를 뽑아 <see cref="StepInterface.Guards"/> 에 싣는다.
+        /// 단계 프롬프트에 원본 DDL 이 없어(<c>Narrow</c>) GPT 가 명세서 CRUD 참조 컬럼 칸의 SELECT 목록 PLTID 를 가드 조건으로 옮겼고,
+        /// 같은 요청 재생에서 이 조건을 알려 주면 날조가 0/3 이었다(그대로 2/3). 판독 docs/audit-reports/2026-09-14-가드PLTID-날조-원인-측정.md
+        /// </param>
         public static IReadOnlyList<StepInterface> Build(
             IReadOnlyList<BatchStepPlan>? steps,
-            IReadOnlyDictionary<string, IReadOnlyList<string>>? parametersByProcedure)
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? parametersByProcedure,
+            IReadOnlyDictionary<string, string>? ddlByProcedure = null)
         {
             if (steps == null || steps.Count == 0 ||
                 parametersByProcedure == null || parametersByProcedure.Count == 0)
@@ -234,6 +248,7 @@ namespace ReSet.Core.Services
             {
                 var procedures = new List<string>();
                 var parameters = new List<string>();
+                var guards = new List<StepGuard>();
 
                 foreach (var legacy in step.LegacyProcedures ?? (IReadOnlyList<string>)Array.Empty<string>())
                 {
@@ -246,6 +261,18 @@ namespace ReSet.Core.Services
                     }
 
                     procedures.Add(legacy);
+                    if (ddlByProcedure != null &&
+                        (ddlByProcedure.TryGetValue(legacy, out var ddl) || ddlByProcedure.TryGetValue(BareName(legacy), out ddl)))
+                    {
+                        foreach (var guard in GuardPredicateFacts.GuardsFromDdl(ddl))
+                        {
+                            guards.Add(new StepGuard(
+                                legacy, guard.Line, guard.Table,
+                                System.Text.RegularExpressions.Regex.Replace(string.Join(" AND ", guard.Terms.Select(t => t.Raw)), @"\s+", " ").Trim(),
+                                guard.SelectColumns));
+                        }
+                    }
+
                     foreach (var p in declared)
                     {
                         if (!parameters.Contains(p, StringComparer.OrdinalIgnoreCase))
@@ -257,7 +284,7 @@ namespace ReSet.Core.Services
 
                 if (parameters.Count > 0)
                 {
-                    result.Add(new StepInterface(step.Code, procedures, parameters));
+                    result.Add(new StepInterface(step.Code, procedures, parameters, guards.Count > 0 ? guards : null));
                 }
             }
 
@@ -298,6 +325,29 @@ namespace ReSet.Core.Services
                 sb.AppendLine(
                     $"| {iface.StepCode} | {string.Join(", ", iface.Procedures)} | " +
                     $"{string.Join(" · ", iface.Parameters)} |");
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 원본 가드 표. 인터페이스 표와 같은 이유로 **전 단계** 것을 통째로 싣는다(공유 접두사 캐시). 가드가 없으면 빈 문자열 - 절을 싣지 않는다.
+        /// </summary>
+        public static string RenderGuardTable(IReadOnlyList<StepInterface> interfaces)
+        {
+            var rows = (interfaces ?? Array.Empty<StepInterface>())
+                .SelectMany(i => (i.Guards ?? Array.Empty<StepGuard>()).Select(g => (i.StepCode, Guard: g)))
+                .ToList();
+            if (rows.Count == 0) return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine("| Step | Legacy procedure | DDL line | Table | WHERE conditions (exact) | SELECT list (not a condition) |");
+            sb.AppendLine("|---|---|---|---|---|---|");
+            foreach (var (code, guard) in rows)
+            {
+                sb.AppendLine(
+                    $"| {code} | {guard.Procedure} | {guard.Line} | {guard.Table} | `{guard.Where}` | " +
+                    $"{(guard.SelectColumns.Count > 0 ? string.Join(", ", guard.SelectColumns.Select(c => "`" + c + "`")) : "-")} |");
             }
 
             return sb.ToString();
