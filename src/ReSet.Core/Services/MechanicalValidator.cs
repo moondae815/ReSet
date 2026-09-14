@@ -11151,14 +11151,23 @@ namespace ReSet.Core.Services
             var undefined = UndefinedSqlBlockNames(stepMarkdown, sharedConventions);
             if (undefined.Count == 0) return;
 
+            result.Errors.Add(UndefinedSqlBlockError(step.Code, undefined));
+        }
+
+        /// <summary>
+        /// <see cref="CheckUndefinedSqlBlockReference"/> 의 오류문. 골격을 다시 만든 회차의 동결 섹션 재대조가 첫 재생성 피드백으로
+        /// 같은 문장을 싣는다 - 판 안 검사와 다른 말로 지시하면 모델이 두 지시를 따로 맞추려 한다.
+        /// </summary>
+        public static string UndefinedSqlBlockError(string stepCode, IEnumerable<string> undefinedNames)
+        {
             // 백틱 토큰은 실제로 지목한 식별자다 - 작성 계약 9의 기본 경로(메시지의 백틱
             // 스캔)가 그대로 옳게 동작한다. 처방 문구에는 백틱을 쓰지 않는다.
-            var named = string.Join(", ", undefined.Select(n => "`" + n + "`"));
-            result.Errors.Add(
-                $"{step.Code} 섹션이 이름 있는 SQL 블록을 호출하는데 그 블록이 이 절에 " +
+            var named = string.Join(", ", undefinedNames.Select(n => "`" + n + "`"));
+            return
+                $"{stepCode} 섹션이 이름 있는 SQL 블록을 호출하는데 그 블록이 이 절에 " +
                 $"정의돼 있지 않습니다: {named}. 호출한 이름마다 두 붙임표로 시작하는 주석 " +
                 "줄로 블록을 열어 같은 절에 실으십시오. 한 줄에 여러 이름을 묶어 적은 표기와 " +
-                "별표를 붙인 접두사 표기도 정의로 인정합니다.");
+                "별표를 붙인 접두사 표기도 정의로 인정합니다.";
         }
 
         /// <summary>
@@ -11249,9 +11258,19 @@ namespace ReSet.Core.Services
             Regex.Matches(markdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline)
                 .Select(fence => fence.Groups["sql"].Value);
 
-        /// <summary>블록 머리 줄의 이름 토큰(별표 접두사 포함).</summary>
+        /// <summary>
+        /// 공통 규약 블록의 머리 줄 - 주석 표지 바로 뒤에 이름이 온다(`-- SQL_X` · `-- SQL_A / SQL_B / SQL_C_*` · `/* SQL_X — … */`).
+        /// 「이름이 나오는 줄이면 머리」로 두면 템플릿 블록 안의 `-- 커밋 후 SQL_JOURNAL_START 를 다시 부르지 않는다` 같은
+        /// 언급이 블록을 쪼개 자리표시자가 뒤 조각으로 가고 템플릿 이름이 정의로 인정된다(최종 재리뷰 실측). 코퍼스 공통
+        /// 규약 21 개에서 두 규칙의 판정은 같다(템플릿 블록 22).
+        /// </summary>
+        private static readonly Regex SqlBlockHeaderRegex = new(
+            @"^\s*(?:--|/\*)\s*SQL_",
+            RegexOptions.Compiled);
+
+        /// <summary>블록 머리 줄의 이름 토큰(별표 접두사 포함). `@SQL_TEXT` 같은 변수·긴 식별자의 꼬리는 이름이 아니다.</summary>
         private static readonly Regex SqlBlockNameTokenRegex = new(
-            @"SQL_[A-Za-z0-9_]*?[A-Za-z0-9]_\*|SQL_[A-Za-z0-9_]+",
+            @"(?<![A-Za-z0-9_@])(?:SQL_[A-Za-z0-9_]*?[A-Za-z0-9]_\*|SQL_[A-Za-z0-9_]+)",
             RegexOptions.Compiled);
 
         /// <summary>
@@ -11286,13 +11305,11 @@ namespace ReSet.Core.Services
 
                 foreach (var line in fence.Split('\n'))
                 {
-                    var tokens = SqlBlockNameTokenRegex.Matches(SqlBlockCallRegex.Replace(line, string.Empty))
-                        .Select(match => match.Value)
-                        .ToList();
-                    if (tokens.Count > 0)
+                    var withoutCalls = SqlBlockCallRegex.Replace(line, string.Empty);
+                    if (SqlBlockHeaderRegex.IsMatch(withoutCalls))
                     {
                         Commit();
-                        blockNames = tokens;
+                        blockNames = SqlBlockNameTokenRegex.Matches(withoutCalls).Select(match => match.Value).ToList();
                         block.Clear();
                     }
 

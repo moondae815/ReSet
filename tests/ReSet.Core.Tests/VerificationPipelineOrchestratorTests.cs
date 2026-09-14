@@ -7563,7 +7563,8 @@ SELECT 1;
             HealthyStepSection(code, table, errorCode) + "\n\n```pseudocode\nexecute(SQL_MARK_OK, { p_runId: runId })\n```";
 
         private static async Task<IAiService> RunSkeletonChangeWithFrozenS02(
-            string? previousSkeleton, SkeletonRevision? revision, string revisedSkeleton, string frozenS02)
+            string? previousSkeleton, SkeletonRevision? revision, string revisedSkeleton, string frozenS02,
+            Dictionary<string, StepDefect>? previousViolations = null)
         {
             var aiService = Substitute.For<IAiService>();
             aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
@@ -7588,11 +7589,17 @@ SELECT 1;
             var result = await InvokeGenerateBySplitAsync(
                 orchestrator, "목차", steps, new List<(string FileName, string Content)> { ("dbo.USP_Spec1", "content1") }, "C#", "Job_Test",
                 NullProgressScope.Instance, previousSkeleton, previousSkeleton == null ? null : new AiResult { Content = previousSkeleton },
-                previousSections, new Dictionary<string, StepDefect>(), Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None,
+                previousSections, previousViolations ?? new Dictionary<string, StepDefect>(), Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None,
                 skeletonRevision: revision);
             Assert.NotNull(result);
             return aiService;
         }
+
+        private static string? S02FirstFloorFeedback(IAiService aiService) =>
+            aiService.ReceivedCalls()
+                .Where(call => call.GetMethodInfo().Name == nameof(IAiService.GenerateBatchStepSectionAsync))
+                .Select(call => call.GetArguments())
+                .First(arguments => ((BatchStepPlan)arguments[0]!).Code == "S02")[8] as string;
 
         private static Task<AiResult> S02Generation(IAiService aiService) =>
             aiService.GenerateBatchStepSectionAsync(
@@ -7609,6 +7616,8 @@ SELECT 1;
                 SectionCallingSharedBlock("S02", "dbo.T2", "-2"));
 
             await S02Generation(ai.Received(1));
+            // 첫 시도부터 무엇을 잃었는지 싣는다 - 직전 본문만 주면 모델이 그대로 돌려준다.
+            Assert.Contains("`SQL_MARK_OK`", S02FirstFloorFeedback(ai));
             await ai.DidNotReceive().GenerateBatchStepSectionAsync(
                 Arg.Is<BatchStepPlan>(s => s.Code == "S01"), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(),
                 Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(),
@@ -7627,15 +7636,32 @@ SELECT 1;
         }
 
         [Fact]
-        public async Task GenerateBySplitAsync_FrozenSectionAlreadyMissingTheBlockBeforeRevision_IsNotRetargetedByTheSkeletonChange()
+        public async Task GenerateBySplitAsync_FrozenSectionWhoseLostBlockIsAlreadyInItsFloorRecord_IsNotRetargeted()
         {
-            // 직전 골격에도 정의가 없었다 - 이번 골격 변경이 깨뜨린 것이 아니다. 그 결함은 섹션 자신의 하한 기록이 이미 지고 있다.
+            // 섹션이 이미 그 결함을 하한 기록으로 지고 있다(재시도 소진 채택) - 다시 대상에 넣으면 회차마다 같은 재생성을 되풀이한다.
             var old = SkeletonWithSharedBlock(defineBlock: false);
+            var recorded = new Dictionary<string, StepDefect>
+            {
+                ["S02"] = new(StepDefectKind.QualityFloor, "S02 (" + MechanicalValidator.UndefinedSqlBlockError("S02", new[] { "SQL_MARK_OK" }) + ")"),
+            };
             var ai = await RunSkeletonChangeWithFrozenS02(
                 old, new SkeletonRevision("골격을 고쳐라", old), SkeletonWithSharedBlock(defineBlock: false),
-                SectionCallingSharedBlock("S02", "dbo.T2", "-2"));
+                SectionCallingSharedBlock("S02", "dbo.T2", "-2"), recorded);
 
             await S02Generation(ai.DidNotReceive());
+        }
+
+        [Fact]
+        public async Task GenerateBySplitAsync_ResumedWithANewerSkeletonThatLacksTheBlock_RegeneratesTheReusedSection()
+        {
+            // 최종 재리뷰 실측 모양: 새 골격이 저널에 남은 뒤 재대조가 S02 를 대상에 넣고 끝나기 전에 죽었다. 재개는 골격(재사용)과
+            // 결함 기록 없는 옛 S02 를 복원한다 - 골격을 재사용하는 회차도 동결 섹션을 다시 대야 한다.
+            var newer = SkeletonWithSharedBlock(defineBlock: false);
+            var ai = await RunSkeletonChangeWithFrozenS02(
+                previousSkeleton: newer, revision: null, newer, SectionCallingSharedBlock("S02", "dbo.T2", "-2"));
+
+            await ai.DidNotReceive().GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>());
+            await S02Generation(ai.Received(1));
         }
 
         [Fact]

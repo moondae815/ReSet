@@ -98,6 +98,24 @@ public sealed class NamedBlockSharedConventionsTests
         Assert.Equal(new[] { "SQL_CREATE_AND_CAPTURE_SHADOW", "SQL_DELETE_CHUNK", "SQL_INSERT_CHUNK" }, NamedInError(errors[0]));
     }
 
+    // N11(최종 재리뷰): 템플릿 블록 안의 다른 이름 언급(주석 · 변수)이 블록을 쪼개 자리표시자를 뒤 조각으로 보내면 안 된다.
+    [Fact]
+    public void AMentionInsideATemplateBlockDoesNotSplitIt()
+    {
+        var contract = Fixture("Batch1-01-step-contract.md");
+        var mentioned = Regex.Replace(
+            contract, @"^(-- SQL_DELETE_CHUNK[^\n]*\n)",
+            "$1-- 커밋 후 SQL_JOURNAL_START 를 다시 부르지 않는다\nDECLARE @SQL_TEXT NVARCHAR(10) = N'';\n", RegexOptions.Multiline);
+        Assert.NotEqual(contract, mentioned);
+        var section = Regex.Replace(
+            Fixture("Batch1-S05.md"), @"^-- (SQL_CREATE_AND_CAPTURE_SHADOW|SQL_DELETE_CHUNK|SQL_INSERT_CHUNK)\b[^\n]*\n", string.Empty, RegexOptions.Multiline);
+
+        var errors = NamedBlockErrors(section, B1S05, mentioned);
+
+        Assert.Single(errors);
+        Assert.Contains("SQL_DELETE_CHUNK", NamedInError(errors[0]));
+    }
+
     // N10(최종 리뷰 C1): 공통 규약의 이름은 토큰으로 맞춘다 - `SQL_MARK_STEP_FAILED_V2` 정의가 `SQL_MARK_STEP_FAILED` 호출을 덮지 않는다.
     [Fact]
     public void ALongerNameInSharedConventionsDoesNotDefineItsPrefix()
