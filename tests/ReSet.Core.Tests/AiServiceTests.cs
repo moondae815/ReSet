@@ -1694,6 +1694,29 @@ END",
             Assert.Contains("해당하지 않습니다", aggregateBullet);
         }
 
+        // [Critic 골격 지적 → 패치 - 2026-09-14] 수리 요청의 출처가 Critic 이면 「기계 검증 실패」 틀로 싣지 않는다 - Critic 지적문은
+        // 문서 전체를 다루고 단계 본문 결함도 섞여 있어, 골격이 고칠 몫(골격 수준 결함)만 고치라고 따로 말한다. L1 수리 프롬프트는 그대로다.
+        [Theory]
+        [InlineData(true, "[Critic Review", "[Machine Validation Failure")]
+        [InlineData(false, "[Machine Validation Failure", "[Critic Review")]
+        public async Task GenerateBatchPlanSkeletonAsync_RevisionPromptNamesItsSource(bool fromCritic, string expected, string absent)
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+
+            var result = await StepService().GenerateBatchPlanSkeletonAsync(
+                TwoSteps(), "## 목차 산문", specs, "C#", "Test_Job",
+                revision: new SkeletonRevision("V15 가 없는 컬럼을 조회합니다.", "## 직전 골격", fromCritic));
+
+            var userPrompt = result.UserPrompt!;
+            Assert.Contains(expected, userPrompt);
+            Assert.DoesNotContain(absent, userPrompt);
+            Assert.Contains("V15 가 없는 컬럼을 조회합니다.", userPrompt);
+            Assert.Contains("[Previous Skeleton]", userPrompt);
+        }
+
         [Fact]
         public async Task GenerateBatchPlanSkeletonAsync_RequestsPlaceholdersInsteadOfStepBodies()
         {

@@ -8979,6 +8979,134 @@ SELECT 1;
         }
 
         /// <summary>
+        /// [Critic 골격 지적 → 패치 - 2026-09-14 사람 결정] POQSettleBatch13: 1 차(94) Critic 이 골격 결함(V15 가 S18 정의에 없는 컬럼 조회)을
+        /// 짚자 2 차가 골격을 <b>백지부터</b> 다시 써 새 모순을 만들고 86 점으로 떨어졌다 - 채택 규칙이 1 차로 되돌려 수정이 버려졌다.
+        /// 이제 Critic 의 골격 지적도 L1 골격 수리와 같은 <b>패치</b>로 받는다: 직전 골격을 싣고 Critic 지적문으로 고치라고 한다.
+        /// 판독: docs/audit-reports/2026-09-14-L1-귀속실패-측정.md 의 방침 A 절.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_CriticSkeletonDefect_PatchesThePreviousSkeletonAndFreezesSteps()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+
+            var skeletonRevisions = new List<SkeletonRevision?>();
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    skeletonRevisions.Add(call.ArgAt<SkeletonRevision?>(8));
+                    return Task.FromResult(new AiResult { Content = SkeletonMarkdown });
+                });
+
+            var sectionCallsByStep = new Dictionary<string, int>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    lock (sectionCallsByStep)
+                    {
+                        sectionCallsByStep[step.Code] = sectionCallsByStep.TryGetValue(step.Code, out var n) ? n + 1 : 1;
+                    }
+                    return Task.FromResult(new AiResult
+                    {
+                        Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0])
+                    });
+                });
+
+            const string criticSkeletonComment = "골격 V15 가 S18 결과 표 정의에 없는 컬럼 CheckCode 를 조회합니다.";
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new ReviewResult { HasDefects = true, SkeletonDefective = true, FeedbackComment = criticSkeletonComment, ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
+                    new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var ui = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                ui, "1", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8,
+                stepConcurrency: 1, maxL1RepairAttempts: 2);
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                new List<(string, string)> { ("dbo.USP_Spec1", "content1") }, "C#", "Job_CriticSkeletonPatch", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+
+            // 골격이 두 번 만들어졌고, 두 번째가 패치다 - 직전 골격과 Critic 지적문을 싣는다(백지가 아니다).
+            Assert.Equal(2, skeletonRevisions.Count);
+            Assert.Null(skeletonRevisions[0]);
+            Assert.NotNull(skeletonRevisions[1]);
+            Assert.Equal(SkeletonMarkdown, skeletonRevisions[1]!.PreviousSkeleton);
+            Assert.Contains(criticSkeletonComment, skeletonRevisions[1]!.Feedback);
+            Assert.True(skeletonRevisions[1]!.FromCritic);
+
+            // 단계 섹션은 동결 - 각 1 회.
+            Assert.Equal(new Dictionary<string, int> { ["S01"] = 1, ["S02"] = 1 }, sectionCallsByStep);
+        }
+
+        /// <summary>[Critic 골격 지적 → 패치의 한계] 되돌린 회차의 지적문은 버려진 골격에 대한 것이다 - 되돌린 뒤에는 종전대로 백지.</summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_CriticSkeletonDefectAfterRollback_RewritesTheSkeletonBlank()
+        {
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "## 목차\n" + StepsJson });
+
+            var skeletonRevisions = new List<SkeletonRevision?>();
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    skeletonRevisions.Add(call.ArgAt<SkeletonRevision?>(8));
+                    return Task.FromResult(new AiResult { Content = SkeletonMarkdown });
+                });
+
+            var sectionCallsByStep = new Dictionary<string, int>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    lock (sectionCallsByStep)
+                    {
+                        sectionCallsByStep[step.Code] = sectionCallsByStep.TryGetValue(step.Code, out var n) ? n + 1 : 1;
+                    }
+                    return Task.FromResult(new AiResult
+                    {
+                        Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0])
+                    });
+                });
+
+            const string criticSkeletonComment = "골격 V15 가 S18 결과 표 정의에 없는 컬럼 CheckCode 를 조회합니다.";
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(
+                    new ReviewResult { HasDefects = true, SkeletonDefective = true, FeedbackComment = criticSkeletonComment, ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
+                    // 2 차: 패치한 골격이 점수를 못 올렸다 - 1 차로 되돌린다. 이 지적문은 버려진 골격에 대한 것이다.
+                    new ReviewResult { HasDefects = true, SkeletonDefective = true, FeedbackComment = "버려질 골격에 대한 지적", ScoreAccuracy = 6, ScoreCrud = 6, ScoreInterface = 6, ScoreException = 6, ScoreReadability = 6 },
+                    new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            var ui = Substitute.For<IVerificationUserInteraction>();
+            var orchestrator = new VerificationPipelineOrchestrator(
+                Substitute.For<IDbMetadataService>(), aiService, new MechanicalValidator(),
+                ui, "2", "gpt-4", null,
+                aiService, aiService, "high", "high", "default", 8,
+                stepConcurrency: 1, maxL1RepairAttempts: 2);
+
+            var result = await orchestrator.RunConsolidatedPipelineAsync(
+                new List<(string, string)> { ("dbo.USP_Spec1", "content1") }, "C#", "Job_CriticSkeletonRollback", "OpenAI", _consolidatedOutputRoot, isBatchMode: true);
+
+            Assert.Equal(VerificationOutcome.Passed, result.Outcome);
+
+            // 1 차 → 2 차는 패치, 2 차가 되돌려진 뒤의 3 차는 백지 - 버려진 골격에 대한 지적문을 되돌린 골격에 패치하지 않는다.
+            Assert.Equal(3, skeletonRevisions.Count);
+            Assert.Null(skeletonRevisions[0]);
+            Assert.NotNull(skeletonRevisions[1]);
+            Assert.Null(skeletonRevisions[2]);
+        }
+
+        /// <summary>
         /// 골격 패치의 에스컬레이션(§3-8의 골격판). 같은 자리가 연속으로 다시 지목되면
         /// 패치를 포기하고 백지로 올린다 - 「최소 변경만 하고 근본 결함을 안 고친다」가
         /// 패치 고유의 실패 모드이고, 그 상태로 수리 예산을 계속 태우면 안 되기 때문이다.
