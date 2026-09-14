@@ -460,7 +460,10 @@ namespace ReSet.Core.Services
             // 그 결정과 근거(명세서에 싣는 A안을 기각한 이유)는
             // docs/audit-reports/2026-09-05-축B-잔여결함-분류.md §10 에 있다.
             // 없으면(null) 조인 짝 대조를 하지 않는다 - 종전 동작 그대로다.
-            IReadOnlyDictionary<string, string>? ddlByProcedure = null)
+            IReadOnlyDictionary<string, string>? ddlByProcedure = null,
+            // [이름 블록 · 공통 규약] 골격 공통 규약(ExtractSharedConventions). 단계 생성 요청에 실린
+            // 그 텍스트다 - 거기서 정의된 블록은 부르기만 해도 구현할 수 있다. 없으면(null) 종전 동작.
+            string? sharedConventions = null)
         {
             var result = new StepValidationResult();
 
@@ -601,7 +604,7 @@ namespace ReSet.Core.Services
             // 이름 있는 SQL 블록을 호출해 놓고 정의하지 않았는가. 재료가 stepMarkdown
             // 하나뿐이므로 facts 블록 밖에 둔다 - 명세서 사실이 없는 신설 단계에서도
             // 돌아야 한다(실물 S15가 레거시 출신이 없는 단계다).
-            SafeCheck(() => CheckUndefinedSqlBlockReference(stepMarkdown, step, result));
+            SafeCheck(() => CheckUndefinedSqlBlockReference(stepMarkdown, step, result, sharedConventions));
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
@@ -11142,7 +11145,8 @@ namespace ReSet.Core.Services
         private static void CheckUndefinedSqlBlockReference(
             string stepMarkdown,
             BatchStepPlan step,
-            StepValidationResult result)
+            StepValidationResult result,
+            string? sharedConventions = null)
         {
             if (string.IsNullOrWhiteSpace(stepMarkdown)) return;
 
@@ -11157,9 +11161,22 @@ namespace ReSet.Core.Services
             if (used.Count == 0) return;
 
             // 정의는 SQL 펜스 안에만 산다. 배너·산문·의사코드는 그 이름을 말할 뿐이다.
-            var sqlFenceText = string.Join("\n", Regex.Matches(
-                    stepMarkdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline)
-                .Select(fence => fence.Groups["sql"].Value));
+            //
+            // [공통 규약도 정의의 자리다 - 2026-09-14] 골격 공통 규약이 저널·RunId 블록을 한 번 정의하고
+            // 모든 단계가 부르는 것이 설계다. 공통 규약은 단계 생성 요청에 그대로 실리고 배송 번들의
+            // common/01-step-contract.md 가 되므로, 거기 정의된 블록은 부르기만 해도 구현할 수 있다.
+            // 절 안만 보던 때 POQSettleBatch16 하한 재생성 16 이 전부 이 사유였고, 재생성은 공통 블록을
+            // 절마다 베껴(사본 45, 전부 공통 정의와 동일) 닫혔다. 호출은 단계 절에서만 모은다 - 공통
+            // 규약이 부르는 이름은 이 단계의 책임이 아니다. 정의 규칙(펜스 · 호출부 줄 제외 · 별표
+            // 접두사)은 두 텍스트에 똑같이 적용한다.
+            // 판독: docs/audit-reports/2026-09-14-이름블록-공통규약-사전선언.md
+            // 펜스는 텍스트마다 따로 찾는다 - 이어 붙이면 절 끝의 닫히지 않은 펜스가 공통 규약의 펜스와 짝지어진다.
+            var definitionSources = string.IsNullOrWhiteSpace(sharedConventions)
+                ? new[] { stepMarkdown }
+                : new[] { stepMarkdown, sharedConventions };
+            var sqlFenceText = string.Join("\n", definitionSources.SelectMany(source => Regex.Matches(
+                    source, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline)
+                .Select(fence => fence.Groups["sql"].Value)));
 
             var wildcardPrefixes = new HashSet<string>(StringComparer.Ordinal);
             foreach (Match wild in SqlBlockWildcardRegex.Matches(sqlFenceText))

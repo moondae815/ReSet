@@ -4582,7 +4582,10 @@ namespace ReSet.Core.Services
                     // 회수한다.
                     codesByProcedure: codesByProcedure,
                     tablesByProcedure: tablesByProcedure,
-                    ddlByProcedure: ddlByProcedure);
+                    ddlByProcedure: ddlByProcedure,
+                    // [이름 블록 · 공통 규약] 이 단계를 생성할 때 요청에 실은 그 공통 규약이다 -
+                    // 거기 정의된 블록을 부르기만 한 단계를 재생성시키지 않는다.
+                    sharedConventions: conventions);
                 if (stepResult.IsValid)
                 {
                     return (content, null, false);

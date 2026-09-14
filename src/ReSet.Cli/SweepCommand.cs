@@ -129,7 +129,14 @@ namespace ReSet.Cli
                     dateParameters[name] = SpecExpectations.ResolveDateParameter(spDef.StaticAnalysis);
                 }
 
-                jobs.Add(new SweepJob(jobName, steps, markdownByCode, specs, ddl, dateParameters));
+                // 배송 단계 파일과 짝이 맞는 공통 규약은 배송 번들의 것이다. 디스크의 raw/attempts 골격은
+                // 마지막 시도의 것이라 배송본과 어긋날 수 있다(POQSettleBatch8 - 골격에 없는 SQL_CURRENT_RUN_ID
+                // 정의가 배송 공통 규약에는 있다).
+                var stepContractPath = Path.Combine(jobDir, "agent", "common", "01-step-contract.md");
+                jobs.Add(new SweepJob(jobName, steps, markdownByCode, specs, ddl, dateParameters)
+                {
+                    SharedConventions = File.Exists(stepContractPath) ? File.ReadAllText(stepContractPath) : null,
+                });
             }
 
             var report = StepSweepService.Sweep(
