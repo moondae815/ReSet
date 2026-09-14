@@ -4121,6 +4121,44 @@ namespace ReSet.Core.Services
                 ? steps.Where(step => defectiveSteps.Contains(step.Code, StringComparer.OrdinalIgnoreCase)).ToList()
                 : steps.ToList();
 
+            // [이름 블록 · 공통 규약 - 동결 섹션] 단계 하한 검사는 공통 규약에 정의된 블록을 부르기만 한 섹션을
+            // 통과시킨다(MechanicalValidator.UndefinedSqlBlockNames). 그런데 동결 섹션은 다시 검증되지 않는다 - 골격을
+            // 다시 만든 회차(골격 수리 · SkeletonDefective), 그리고 새 골격을 저널에 남긴 뒤 죽은 판을 재개한 회차에서
+            // 새 골격이 그 블록을 잃거나 개명했으면 호출이 어디에도 정의 없이 배송된다(SkeletonRevisionGuard 는 H2·단계
+            // 코드·오류 코드만 지킨다). 그래서 동결 섹션을 지금의 공통 규약으로 매 회차 다시 대고, 잃은 이름이 그 단계의
+            // 하한 기록에 <b>아직 없을 때만</b> 재생성 대상에 넣는다 - 기록에 있는 이름은 섹션이 이미 그 결함을 지고
+            // 있으니 다시 부르면 회차마다 같은 재생성을 되풀이한다. 재개가 재사용하는 섹션은 결함 기록이 없는 것뿐이라
+            // (PlanAttemptJournal.TryResume) 같은 규칙이 재개도 덮는다.
+            // 판독: docs/audit-reports/2026-09-14-이름블록-공통규약-사전선언.md §최종 리뷰 반영
+            var sharedBlockFeedback = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (canTargetSections)
+            {
+                foreach (var step in steps)
+                {
+                    if (pending.Any(p => p.Code.Equals(step.Code, StringComparison.OrdinalIgnoreCase))) continue;
+                    if (!sections.TryGetValue(step.Code, out var frozen)) continue;
+
+                    var lost = MechanicalValidator.UndefinedSqlBlockNames(frozen, conventions);
+                    if (lost.Count == 0) continue;
+
+                    var recorded = floorViolations.TryGetValue(step.Code, out var record) ? record.Reason : string.Empty;
+                    var unrecorded = lost.Where(name => !recorded.Contains("`" + name + "`", StringComparison.Ordinal)).ToList();
+                    if (unrecorded.Count == 0) continue;
+
+                    pending.Add(step);
+                    var feedback = new StepValidationResult { IsValid = false };
+                    feedback.Errors.Add(MechanicalValidator.UndefinedSqlBlockError(step.Code, unrecorded));
+                    sharedBlockFeedback[step.Code] = feedback.SuggestedPromptFix ?? feedback.Errors[0];
+
+                    _userInteraction.NotifyStatus(
+                        $"  [yellow]* {step.Code} 단계가 부르는 공통 SQL 블록이 지금 골격에 없어 다시 생성합니다: " +
+                        $"{string.Join(", ", unrecorded)}[/]");
+                    Log.Warning(
+                        "동결 섹션이 부르는 공통 SQL 블록이 지금 골격에 없습니다 - Step: {Step}, Names: {Names}",
+                        step.Code, string.Join(", ", unrecorded));
+                }
+            }
+
             foreach (var step in pending)
             {
                 floorViolations.Remove(step.Code);
@@ -4174,7 +4212,8 @@ namespace ReSet.Core.Services
                     var (markdown, violation, stepQuotaExhausted) = await GenerateStepSectionWithFloorRetryAsync(
                         step, steps, conventions, specs, targetLanguage, jobName,
                         knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, callGraph,
-                        ddlByProcedure, journal, attempt, cancellationToken, PreviousBodyFor(step.Code));
+                        ddlByProcedure, journal, attempt, cancellationToken, PreviousBodyFor(step.Code),
+                        initialFloorFeedback: sharedBlockFeedback.GetValueOrDefault(step.Code));
 
                     progressScope.CompleteTask(taskKey);
 
@@ -4480,7 +4519,10 @@ namespace ReSet.Core.Services
             // 새로 쓴다. 재시도(tries) 전체에 걸쳐 같은 값을 쓴다 - floorFeedback은
             // 이번 회차 안에서 시도마다 갱신되지만, previousBody는 "패치의 대상"
             // 자체라 회차 안에서 바뀌면 안 된다.
-            string? previousBody = null)
+            string? previousBody = null,
+            // 동결 섹션 재대조(GenerateBySplitAsync)가 이 단계를 대상에 넣은 이유. 첫 시도의 하한 피드백으로 싣는다 -
+            // 없으면 직전 본문만 받은 모델이 그대로 돌려주고 호출 1 회가 헛돈다.
+            string? initialFloorFeedback = null)
         {
             // 이번 회차 안에서 어느 시도든 Exhausted를 던졌는지. adopted == null로
             // 끝났을 때만 반환값의 QuotaExhausted에 실린다.
@@ -4510,7 +4552,7 @@ namespace ReSet.Core.Services
             BatchControlContract.ResolveRowCreators(steps).TryGetValue(step.Code, out var runRowOwnedTables);
 
             string? adopted = null;
-            string? floorFeedback = null;
+            string? floorFeedback = initialFloorFeedback;
             // 채택한 본문이 하한을 못 넘긴 **실제** 사유. adopted와 같은 자리에서만
             // 갱신해 둘이 항상 같은 시도를 가리키게 한다 - 뒤이은 시도가 빈 응답이면
             // adopted는 그대로 남으므로, 사유만 따로 갱신하면 다른 본문의 사유가 붙는다.
@@ -4582,7 +4624,10 @@ namespace ReSet.Core.Services
                     // 회수한다.
                     codesByProcedure: codesByProcedure,
                     tablesByProcedure: tablesByProcedure,
-                    ddlByProcedure: ddlByProcedure);
+                    ddlByProcedure: ddlByProcedure,
+                    // [이름 블록 · 공통 규약] 이 단계를 생성할 때 요청에 실은 그 공통 규약이다 -
+                    // 거기 정의된 블록을 부르기만 한 단계를 재생성시키지 않는다.
+                    sharedConventions: conventions);
                 if (stepResult.IsValid)
                 {
                     return (content, null, false);

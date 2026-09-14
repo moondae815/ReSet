@@ -460,7 +460,10 @@ namespace ReSet.Core.Services
             // 그 결정과 근거(명세서에 싣는 A안을 기각한 이유)는
             // docs/audit-reports/2026-09-05-축B-잔여결함-분류.md §10 에 있다.
             // 없으면(null) 조인 짝 대조를 하지 않는다 - 종전 동작 그대로다.
-            IReadOnlyDictionary<string, string>? ddlByProcedure = null)
+            IReadOnlyDictionary<string, string>? ddlByProcedure = null,
+            // [이름 블록 · 공통 규약] 골격 공통 규약(ExtractSharedConventions). 단계 생성 요청에 실린
+            // 그 텍스트다 - 거기서 정의된 블록은 부르기만 해도 구현할 수 있다. 없으면(null) 종전 동작.
+            string? sharedConventions = null)
         {
             var result = new StepValidationResult();
 
@@ -601,7 +604,7 @@ namespace ReSet.Core.Services
             // 이름 있는 SQL 블록을 호출해 놓고 정의하지 않았는가. 재료가 stepMarkdown
             // 하나뿐이므로 facts 블록 밖에 둔다 - 명세서 사실이 없는 신설 단계에서도
             // 돌아야 한다(실물 S15가 레거시 출신이 없는 단계다).
-            SafeCheck(() => CheckUndefinedSqlBlockReference(stepMarkdown, step, result));
+            SafeCheck(() => CheckUndefinedSqlBlockReference(stepMarkdown, step, result, sharedConventions));
 
             // 명세서의 기계 확정 표를 문장 단위로 대조한다. 재료가 없거나 레거시 출신이
             // 없는 단계는 조용히 지나간다 - 물려받을 원본이 없다.
@@ -11142,9 +11145,57 @@ namespace ReSet.Core.Services
         private static void CheckUndefinedSqlBlockReference(
             string stepMarkdown,
             BatchStepPlan step,
-            StepValidationResult result)
+            StepValidationResult result,
+            string? sharedConventions = null)
         {
-            if (string.IsNullOrWhiteSpace(stepMarkdown)) return;
+            var undefined = UndefinedSqlBlockNames(stepMarkdown, sharedConventions);
+            if (undefined.Count == 0) return;
+
+            result.Errors.Add(UndefinedSqlBlockError(step.Code, undefined));
+        }
+
+        /// <summary>
+        /// <see cref="CheckUndefinedSqlBlockReference"/> 의 오류문. 골격을 다시 만든 회차의 동결 섹션 재대조가 첫 재생성 피드백으로
+        /// 같은 문장을 싣는다 - 판 안 검사와 다른 말로 지시하면 모델이 두 지시를 따로 맞추려 한다.
+        /// </summary>
+        public static string UndefinedSqlBlockError(string stepCode, IEnumerable<string> undefinedNames)
+        {
+            // 백틱 토큰은 실제로 지목한 식별자다 - 작성 계약 9의 기본 경로(메시지의 백틱
+            // 스캔)가 그대로 옳게 동작한다. 처방 문구에는 백틱을 쓰지 않는다.
+            var named = string.Join(", ", undefinedNames.Select(n => "`" + n + "`"));
+            return
+                $"{stepCode} 섹션이 이름 있는 SQL 블록을 호출하는데 그 블록이 이 절에 " +
+                $"정의돼 있지 않습니다: {named}. 호출한 이름마다 두 붙임표로 시작하는 주석 " +
+                "줄로 블록을 열어 같은 절에 실으십시오. 한 줄에 여러 이름을 묶어 적은 표기와 " +
+                "별표를 붙인 접두사 표기도 정의로 인정합니다.";
+        }
+
+        /// <summary>
+        /// 단계 절이 부르는데 절 안에도 공통 규약에도 정의가 없는 이름 있는 SQL 블록(호출 순서).
+        /// <see cref="CheckUndefinedSqlBlockReference"/> 와 골격을 다시 만든 회차의 동결 섹션 재대조
+        /// (<c>VerificationPipelineOrchestrator.GenerateBySplitAsync</c>)가 같은 판정을 쓴다.
+        ///
+        /// [공통 규약도 정의의 자리다 - 2026-09-14] 골격 공통 규약이 저널·RunId 블록을 한 번 정의하고
+        /// 모든 단계가 부르는 것이 설계다. 공통 규약은 단계 생성 요청에 그대로 실리고 배송 번들의
+        /// common/01-step-contract.md 가 되므로, 거기 정의된 블록은 부르기만 해도 구현할 수 있다.
+        /// 절 안만 보던 때 POQSettleBatch16 하한 재생성 16 이 전부 이 사유였고, 재생성은 공통 블록을
+        /// 절마다 베껴(사본 45, 전부 공통 정의와 동일) 닫혔다. 호출은 단계 절에서만 모은다 - 공통
+        /// 규약이 부르는 이름은 이 단계의 책임이 아니다.
+        ///
+        /// [공통 규약은 구체 블록만, 이름은 토큰으로 - 같은 날 최종 리뷰 C1] 공통 규약에는 단계가 구체 블록에
+        /// 쓰는 이름과 같은 이름의 <b>템플릿</b>이 있다(POQSettleBatch1 `SQL_DELETE_CHUNK` →
+        /// `DELETE FROM &lt;TargetTable&gt; WHERE &lt;원본 필터 조건&gt;` 등 넷 · Batch10 하나 · Batch16 은
+        /// `SourceTable`·`TargetTable`·`SXX` 모양 일곱). 템플릿을 정의로 치면 테이블·필터가 빠진 모양만 받은
+        /// 구현자에게 「구현 가능」이라고 거짓말한다. 그래서 공통 규약에서는 블록 머리 줄부터 다음 머리 줄(또는
+        /// 펜스 끝)까지를 한 블록으로 보고, 자리표시자가 있는 블록의 이름은 정의로 치지 않는다. 자리표시자
+        /// 모양은 코퍼스에서 뽑았다 - 배송 단계 SQL 펜스 전체에서 꺾쇠 모양이 걸린 7 곳은 전부 진짜 자리표시자였다.
+        /// 이름은 토큰으로 맞춘다 - `SQL_CREATE_AND_CAPTURE_SHADOW_TEMPLATE` 가 `SQL_CREATE_AND_CAPTURE_SHADOW` 를
+        /// 덮으면 안 된다. 단계 절 안의 정의 규칙(부분 문자열)은 종전 그대로다.
+        /// 판독: docs/audit-reports/2026-09-14-이름블록-공통규약-사전선언.md
+        /// </summary>
+        public static IReadOnlyList<string> UndefinedSqlBlockNames(string? stepMarkdown, string? sharedConventions)
+        {
+            if (string.IsNullOrWhiteSpace(stepMarkdown)) return Array.Empty<string>();
 
             var used = new List<string>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -11154,12 +11205,10 @@ namespace ReSet.Core.Services
                 if (seen.Add(name)) used.Add(name);
             }
 
-            if (used.Count == 0) return;
+            if (used.Count == 0) return Array.Empty<string>();
 
             // 정의는 SQL 펜스 안에만 산다. 배너·산문·의사코드는 그 이름을 말할 뿐이다.
-            var sqlFenceText = string.Join("\n", Regex.Matches(
-                    stepMarkdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline)
-                .Select(fence => fence.Groups["sql"].Value));
+            var sqlFenceText = string.Join("\n", SqlFenceBodies(stepMarkdown));
 
             var wildcardPrefixes = new HashSet<string>(StringComparer.Ordinal);
             foreach (Match wild in SqlBlockWildcardRegex.Matches(sqlFenceText))
@@ -11167,11 +11216,19 @@ namespace ReSet.Core.Services
                 wildcardPrefixes.Add("SQL_" + wild.Groups["prefix"].Value + "_");
             }
 
+            var (sharedNames, sharedPrefixes) = ConcreteSharedSqlBlockDefinitions(sharedConventions);
+
             var lines = sqlFenceText.Split('\n');
             var undefined = new List<string>();
             foreach (var name in used)
             {
                 if (wildcardPrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                if (sharedNames.Contains(name) ||
+                    sharedPrefixes.Any(prefix => name.StartsWith(prefix, StringComparison.Ordinal)))
                 {
                     continue;
                 }
@@ -11194,16 +11251,75 @@ namespace ReSet.Core.Services
                 if (!defined) undefined.Add(name);
             }
 
-            if (undefined.Count == 0) return;
+            return undefined;
+        }
 
-            // 백틱 토큰은 실제로 지목한 식별자다 - 작성 계약 9의 기본 경로(메시지의 백틱
-            // 스캔)가 그대로 옳게 동작한다. 처방 문구에는 백틱을 쓰지 않는다.
-            var named = string.Join(", ", undefined.Select(n => "`" + n + "`"));
-            result.Errors.Add(
-                $"{step.Code} 섹션이 이름 있는 SQL 블록을 호출하는데 그 블록이 이 절에 " +
-                $"정의돼 있지 않습니다: {named}. 호출한 이름마다 두 붙임표로 시작하는 주석 " +
-                "줄로 블록을 열어 같은 절에 실으십시오. 한 줄에 여러 이름을 묶어 적은 표기와 " +
-                "별표를 붙인 접두사 표기도 정의로 인정합니다.");
+        private static IEnumerable<string> SqlFenceBodies(string markdown) =>
+            Regex.Matches(markdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline)
+                .Select(fence => fence.Groups["sql"].Value);
+
+        /// <summary>
+        /// 공통 규약 블록의 머리 줄 - 주석 표지 바로 뒤에 이름이 온다(`-- SQL_X` · `-- SQL_A / SQL_B / SQL_C_*` · `/* SQL_X — … */`).
+        /// 「이름이 나오는 줄이면 머리」로 두면 템플릿 블록 안의 `-- 커밋 후 SQL_JOURNAL_START 를 다시 부르지 않는다` 같은
+        /// 언급이 블록을 쪼개 자리표시자가 뒤 조각으로 가고 템플릿 이름이 정의로 인정된다(최종 재리뷰 실측). 코퍼스 공통
+        /// 규약 21 개에서 두 규칙의 판정은 같다(템플릿 블록 22).
+        /// </summary>
+        private static readonly Regex SqlBlockHeaderRegex = new(
+            @"^\s*(?:--|/\*)\s*SQL_",
+            RegexOptions.Compiled);
+
+        /// <summary>블록 머리 줄의 이름 토큰(별표 접두사 포함). `@SQL_TEXT` 같은 변수·긴 식별자의 꼬리는 이름이 아니다.</summary>
+        private static readonly Regex SqlBlockNameTokenRegex = new(
+            @"(?<![A-Za-z0-9_@])(?:SQL_[A-Za-z0-9_]*?[A-Za-z0-9]_\*|SQL_[A-Za-z0-9_]+)",
+            RegexOptions.Compiled);
+
+        /// <summary>
+        /// 템플릿 블록의 자리표시자. 꺾쇠(`&lt;TargetTable&gt;`·`&lt;원본 필터 조건&gt;`)는 POQSettleBatch1·10, 맨 이름
+        /// `SourceTable`·`TargetTable`·`SXX` 는 POQSettleBatch16 공통 규약에서 뽑았다. 꺾쇠 뒤 첫 글자를 문자로 묶어
+        /// SQL 비교 연산자(`&lt;&gt;`·`&lt; @p`)에 걸리지 않게 한다.
+        /// </summary>
+        private static readonly Regex SqlTemplatePlaceholderRegex = new(
+            @"<[A-Za-z가-힣_][^<>\n]*>|\b(?:TargetTable|SourceTable)\b|\bS[Xx]{2}\b",
+            RegexOptions.Compiled);
+
+        private static (HashSet<string> Names, HashSet<string> Prefixes) ConcreteSharedSqlBlockDefinitions(string? sharedConventions)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            var prefixes = new HashSet<string>(StringComparer.Ordinal);
+            if (string.IsNullOrWhiteSpace(sharedConventions)) return (names, prefixes);
+
+            foreach (var fence in SqlFenceBodies(sharedConventions))
+            {
+                List<string>? blockNames = null;
+                var block = new System.Text.StringBuilder();
+
+                void Commit()
+                {
+                    if (blockNames == null || SqlTemplatePlaceholderRegex.IsMatch(block.ToString())) return;
+                    foreach (var token in blockNames)
+                    {
+                        if (token.EndsWith("_*", StringComparison.Ordinal)) prefixes.Add(token[..^1]);
+                        else names.Add(token);
+                    }
+                }
+
+                foreach (var line in fence.Split('\n'))
+                {
+                    var withoutCalls = SqlBlockCallRegex.Replace(line, string.Empty);
+                    if (SqlBlockHeaderRegex.IsMatch(withoutCalls))
+                    {
+                        Commit();
+                        blockNames = SqlBlockNameTokenRegex.Matches(withoutCalls).Select(match => match.Value).ToList();
+                        block.Clear();
+                    }
+
+                    if (blockNames != null) block.AppendLine(line);
+                }
+
+                Commit();
+            }
+
+            return (names, prefixes);
         }
 
         /// <summary>

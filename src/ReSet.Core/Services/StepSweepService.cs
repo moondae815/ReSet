@@ -199,7 +199,10 @@ namespace ReSet.Core.Services
                                 // StepInterfaceFacts.CollectDdl 로 만드는 것과 같은 재료를
                                 // 스윕은 SweepJob.DdlByProcedure 로 받는다 - 키잉만
                                 // 맨이름으로 맞춘다(ToBareNameKeyed 가 이 파일의 규약).
-                                ddlByProcedure: ddlByBareName);
+                                ddlByProcedure: ddlByBareName,
+                                // [이름 블록 · 공통 규약] 오케스트레이터는 단계 생성에 쓴 공통 규약을
+                                // 넘긴다 - 스윕은 배송 번들의 것을 SweepJob 으로 받는다.
+                                sharedConventions: job.SharedConventions);
 
                             foreach (var message in result.Errors)
                             {

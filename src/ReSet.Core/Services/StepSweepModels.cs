@@ -38,7 +38,11 @@ namespace ReSet.Core.Services
         IReadOnlyDictionary<string, string> StepMarkdownByCode,
         IReadOnlyList<(string FileName, string Content)> Specs,
         IReadOnlyDictionary<string, string> DdlByProcedure,
-        IReadOnlyDictionary<string, string> DateParameterByProcedure);
+        IReadOnlyDictionary<string, string> DateParameterByProcedure)
+    {
+        /// <summary>배송 번들의 공통 규약(<c>agent/common/01-step-contract.md</c>). 이름 블록 검사가 정의로 인정한다 - 없으면 종전 동작.</summary>
+        public string? SharedConventions { get; init; }
+    }
 
     /// <param name="PlanParseFailedJobs">PlanStructure.md에서 단계 목록을 못 읽은 Job.</param>
     /// <param name="MissingStepFiles">목차가 선언했으나 agent/steps/에 실물이 없는 단계 수.</param>
