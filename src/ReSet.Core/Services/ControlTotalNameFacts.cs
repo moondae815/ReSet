@@ -129,7 +129,7 @@ namespace ReSet.Core.Services
             /// <summary>
             /// [조인으로 끌어온 이름 - POQSettleBatch13 V04, 2026-09-14] 제어 표 읽기 문장에 <c>ControlName</c> 리터럴이 없고, 이름은
             /// 조인 조건 <c>X.ControlName = Y.ControlName</c> 로 붙는 다른 출처(같은 문장의 CTE·인라인 <c>VALUES</c>)에 리터럴로만 있는 모양.
-            /// X 는 몫(<c>StepCode</c> 리터럴)이 있고 이름 리터럴이 없는 제어 표 읽기(같은 문장 CTE 또는 제어 표 자신), Y 는 ControlName 출력이
+            /// X 는 몫(<c>StepCode</c> 리터럴)이 있는 제어 표 읽기(같은 문장 CTE 또는 제어 표 자신), Y 는 ControlName 출력이
             /// <b>전부</b> 문자열 리터럴인 출처여야 한다. 하나라도 어긋나면 더하지 않는다(덜 보고한다).
             /// </summary>
             private void CollectJoinedNameReads(QuerySpecification node)
@@ -217,8 +217,11 @@ namespace ReSet.Core.Services
                 });
 
             /// <summary>
-            /// 이 출처가 몫 리터럴이 있고 이름 리터럴이 없는 제어 표 읽기면 그 몫. 같은 문장 CTE 는 본문의 모든 가지가 그래야 하고,
-            /// 제어 표 자신이면 바깥 문장의 WHERE 에서 그 한정자의 조건을 본다. 아니면 null.
+            /// 이 출처가 몫 리터럴이 있는 제어 표 읽기면 그 몫. 같은 문장 CTE 는 본문의 모든 가지가 그래야 하고, 제어 표 자신이면
+            /// 바깥 문장의 WHERE 에서 그 한정자의 조건을 본다. 아니면 null.
+            ///
+            /// 읽기 쪽이 이름 리터럴을 따로 걸고 있어도 몫으로 인정한다 - 조인한 이름 출처와 안 겹치면 그 조인은 어떤 행도 짝짓지
+            /// 못하므로 그 자체로 결함이다(처음엔 「이름 리터럴이 없을 때만」으로 좁혔으나 되돌림에서 지키는 것이 없었다).
             /// </summary>
             private IReadOnlyCollection<string>? ReaderOwners(QuerySpecification outer, TableReference source)
             {
@@ -226,7 +229,7 @@ namespace ReSet.Core.Services
                 {
                     var qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { named.SchemaObject.BaseIdentifier.Value };
                     if (named.Alias != null) qualifiers.Add(named.Alias.Value);
-                    return OwnersWithoutNames(outer.WhereClause?.SearchCondition, qualifiers);
+                    return Owners(outer.WhereClause?.SearchCondition, qualifiers);
                 }
 
                 if (CteBody(source) is not { } body) return null;
@@ -236,20 +239,19 @@ namespace ReSet.Core.Services
                 {
                     var qualifiers = ControlTableQualifiers(spec.FromClause);
                     if (qualifiers.Count == 0) return null;
-                    if (OwnersWithoutNames(spec.WhereClause?.SearchCondition, qualifiers) is not { } specOwners) return null;
+                    if (Owners(spec.WhereClause?.SearchCondition, qualifiers) is not { } specOwners) return null;
                     owners.UnionWith(specOwners);
                 }
 
                 return owners.Count > 0 ? owners : null;
             }
 
-            private static IReadOnlyCollection<string>? OwnersWithoutNames(BooleanExpression? where, HashSet<string> qualifiers)
+            private static IReadOnlyCollection<string>? Owners(BooleanExpression? where, HashSet<string> qualifiers)
             {
                 if (where == null) return null;
                 var owners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                CollectFilters(where, qualifiers, owners, names);
-                return owners.Count > 0 && names.Count == 0 ? owners : null;
+                CollectFilters(where, qualifiers, owners, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                return owners.Count > 0 ? owners : null;
             }
 
             /// <summary>이 출처의 <c>ControlName</c> 출력이 전부 문자열 리터럴이면 그 이름들. 하나라도 아니면 null.</summary>
