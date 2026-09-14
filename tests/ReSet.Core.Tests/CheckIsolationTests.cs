@@ -233,7 +233,8 @@ namespace ReSet.Core.Tests
 
             probe.ValidateConsolidated(ConsolidatedMissingHeaders);
 
-            Assert.Equal(9, probe.SeenCheckExpressions.Count);
+            // 2026-09-14 CheckGateRequiresStepsBeforeRunId 를 더해 9 → 10.
+            Assert.Equal(10, probe.SeenCheckExpressions.Count);
             Assert.All(probe.SeenCheckExpressions, e => Assert.StartsWith("() => ", e!, StringComparison.Ordinal));
         }
 
@@ -247,7 +248,7 @@ namespace ReSet.Core.Tests
 
             probe.ValidateConsolidated(ConsolidatedMissingHeaders);
 
-            Assert.Equal(9, probe.SeenCheckExpressions.Count);
+            Assert.Equal(10, probe.SeenCheckExpressions.Count);
         }
 
         // ─────────────────────────────────────────────────────────────────────

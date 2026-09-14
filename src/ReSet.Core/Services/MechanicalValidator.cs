@@ -106,6 +106,11 @@ namespace ReSet.Core.Services
         // 통합 검증 SQL 세트가 단계 몫의 통제 합계를 그 단계가 쓰지 않는 이름으로만 읽는다(K2 의 검증 세트판,
         // POQSettleBatch13 V04↔S11). 어휘가 검증 세트 원문 줄이라 골격으로 귀속된다.
         VerificationControlTotalNameMismatch,
+        // 생산자가 자기뿐인 표를 자기 제외로 읽는다(D1 CheckControlTotalProducer). OwnerStepCode 로 그 단계에 귀속된다
+        // - 2026-09-14 전에는 DetailedError 를 안 내 귀속되지 않고 늘 전량 재생성이었다.
+        ControlTotalWithoutOtherProducer,
+        // 체크포인트·저널 게이트가 RunId 발급 단계보다 먼저 도는 단계를 요구한다 - 그 단계에는 이 실행의 행이 생길 수 없어 게이트가 늘 실패한다.
+        GateRequiresStepBeforeRunId,
         General
     }
 
@@ -336,6 +341,7 @@ namespace ReSet.Core.Services
                 SafeCheck(() => CheckVerificationCartesianComparison(cleansed, result));
                 SafeCheck(() => CheckBatchRunRowCreation(cleansed, result));
                 SafeCheck(() => CheckControlTotalProducer(cleansed, result));
+                SafeCheck(() => CheckGateRequiresStepsBeforeRunId(cleansed, result));
                 SafeCheck(() => CheckLegacyReturnCodeBinding(cleansed, result));
                 // SQL 거처 축(규칙 3-1·10). 조사 §5의 A급 셋이다 - 그때까지 이 세
                 // 규칙은 기계 강제가 0건이었고, 프롬프트와 Critic 두 층만으로 서
@@ -11746,16 +11752,17 @@ namespace ReSet.Core.Services
                     // 를 죽여 놓은 것을 축 B 분류가 이미 짚었다(규약이 런타임 조립을 의무화하는데
                     // 인식 패턴은 리터럴만 안다). 여기서는 원문 펜스를 본다 — 표 참조와 제외
                     // 술어가 **같은 펜스** 안에 함께 있을 것을 요구해 주석 오탐을 좁힌다.
+                    //
+                    // [문장·파서로 좁혔다 - 2026-09-14 POQSettleBatch8 6 차 오탐] 펜스 단위로 「표 이름」과 「자기 제외」를 짝지으니
+                    // 한 펜스의 `SELECT … FROM batch.BatchStepJournal WHERE StepCode <> N'S22'` 와 `INSERT INTO batch.BatchControlTotal` 이
+                    // 짝이 되어 거짓 발화했다. 이제 **그 표를 FROM·JOIN 으로 읽는 질의**의 **그 표 조건**만 자기 제외로 인정한다.
                     var excludesItself = false;
                     foreach (Match fence in Regex.Matches(
                         body, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
                     {
                         var sql = fence.Groups["sql"].Value;
                         if (!Regex.IsMatch(sql, $@"\b{fragment}", RegexOptions.IgnoreCase)) continue;
-                        if (Regex.IsMatch(
-                                sql,
-                                $@"StepCode\s*(<>|!=)\s*N?'{Regex.Escape(code)}'",
-                                RegexOptions.IgnoreCase))
+                        if (ControlTotalNameFacts.SelfExcludedStepCodes(sql, bare).Contains(code))
                         {
                             excludesItself = true;
                             break;
@@ -11769,11 +11776,103 @@ namespace ReSet.Core.Services
                         .Any(s => CreatesRowIn(s.Body, bare));
                     if (otherProducer) continue;
 
-                    result.Report(
+                    var message =
                         $"{code} 섹션이 `{table.Name}`을 `StepCode <> N'{code}'` 로 읽어 다른 단계가 "
                         + $"적재한 제어합계를 기대값으로 삼는데, 그 표에 행을 만드는 단계가 {code} "
                         + "자신뿐입니다 — 기대값이 항상 공집합이라 대조가 무조건 통과합니다. "
-                        + $"기대값을 적재하는 단계를 두거나, `{code}` 자기 제외를 걷어내십시오.");
+                        + $"기대값을 적재하는 단계를 두거나, `{code}` 자기 제외를 걷어내십시오.";
+                    result.Report(message);
+                    // 귀속 재료. 2026-09-14 전에는 Report 만 해서 오케스트레이터 귀속(DetailedErrors 순회)에 안 잡혀 늘 전량 재생성이었다.
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.ControlTotalWithoutOtherProducer,
+                        Message = message,
+                        OwnerStepCode = code
+                    });
+                }
+            }
+        }
+
+        /// <summary>
+        /// [RunId 발급 전 단계를 요구하는 게이트] 체크포인트·저널을 <c>RunId = @…</c> 와 <c>Succeeded</c> 로 읽는 게이트가, RunId 를 발급하는 단계
+        /// (문서 순서로 처음 <c>batch.BatchRun</c> 에 행을 만드는 단계 절)보다 먼저 도는 단계를 요구하면 그 게이트는 늘 실패한다.
+        ///
+        /// 실측(2026-09-14): GPT Consolidator 세 판이 모두 S01 을 RunId 발급(S02) 앞에 두고 게이트가 S01 을 요구했다 - B11 S21 · B12 S17·S18·SQL-12 ·
+        /// B13 S19·V13. S01 은 스스로 「RunId 는 S02 가 발급」이라 적고 저널·체크포인트를 쓰지 않았다. B13 은 Critic 두 번이 모두 놓쳤다.
+        /// 판독: <c>docs/audit-reports/2026-09-14-RunId이전단계-게이트-사전선언.md</c>.
+        ///
+        /// [면제] 어느 단계 절이든 그 표에 그 코드 리터럴로 행을 쓰면(발급 단계가 앞 단계 행을 대신 기록하는 설계) 그 코드는 뺀다.
+        /// [귀속] 게이트가 단계 절 안이면 그 단계(<see cref="DetailedError.OwnerStepCode"/>), 밖(골격·검증 세트)이면 문제 코드가 있는 원문 줄을 어휘로 싣는다.
+        /// </summary>
+        private static void CheckGateRequiresStepsBeforeRunId(string markdown, ValidationResult result)
+        {
+            var sections = SplitStepSections(markdown);
+            if (sections.Count == 0) return;
+
+            var issuer = sections.Select((s, i) => (s.Code, s.Body, Index: i)).FirstOrDefault(s => CreatesRowIn(s.Body, "BatchRun"));
+            if (issuer.Code == null) return;
+
+            var codes = sections.Select(s => s.Code).ToList();
+            // 면제: StepCode 칸에 그 코드를 실제로 넣는 쓰기만(최종 리뷰 Important 1 - 참조만 한 리터럴을 줍지 않는다).
+            var exempt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (_, body) in sections)
+            {
+                foreach (Match fence in Regex.Matches(body, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+                    exempt.UnionWith(RunGateFacts.WrittenStepCodes(fence.Groups["sql"].Value));
+            }
+
+            var beforeIssuer = new HashSet<string>(codes.Take(issuer.Index).Where(c => !exempt.Contains(c)), StringComparer.OrdinalIgnoreCase);
+            if (beforeIssuer.Count == 0) return;
+
+            // 귀속은 자리(줄 번호)로 - 텍스트 포함으로 찾으면 바이트 같은 게이트를 가진 두 단계가 앞 단계 하나로 뭉친다(최종 리뷰 Important 4).
+            // 절 경계는 SplitStepSections 와 같은 규칙이다: `### Sxx` 가 열고 다음 `#`~`###` 헤딩이 닫는다.
+            var ranges = new List<(string Code, int Start, int End)>();
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                string? current = null;
+                var start = 0;
+                for (var i = 0; i <= lines.Count; i++)
+                {
+                    var isHeading = i < lines.Count && Regex.IsMatch(lines[i], @"^#{1,3}\s");
+                    if (i < lines.Count && !isHeading) continue;
+                    if (current != null) ranges.Add((current, start, i));
+                    current = null;
+                    if (i == lines.Count) break;
+                    var step = Regex.Match(lines[i], @"^###\s*(?<code>S\d{2})\b");
+                    if (step.Success) { current = step.Groups["code"].Value; start = i; }
+                }
+            }
+
+            foreach (Match fence in Regex.Matches(markdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                var sql = fence.Groups["sql"].Value;
+                var fenceLine = markdown.AsSpan(0, fence.Index).Count('\n');
+                foreach (var gate in RunGateFacts.Gates(sql, codes))
+                {
+                    var early = gate.RequiredStepCodes.Where(beforeIssuer.Contains).OrderBy(c => c, StringComparer.Ordinal).ToList();
+                    if (early.Count == 0) continue;
+
+                    var owner = ranges.FirstOrDefault(r => fenceLine > r.Start && fenceLine < r.End).Code;
+                    var earlyList = string.Join(", ", early.Select(c => "`" + c + "`"));
+                    var message =
+                        $"{(owner != null ? owner + " 섹션의" : "통합 문서의")} 실행 완료 게이트가 {earlyList}의 체크포인트·저널 `Succeeded` 를 요구하는데, " +
+                        $"{earlyList}은(는) RunId 를 발급하는 `{issuer.Code}` 보다 먼저 실행되어 이 실행의 체크포인트·저널 행이 생기지 않습니다 - 이 게이트는 " +
+                        "어떤 실행에서도 통과하지 못합니다. 이 게이트가 요구하는 단계 목록에서 빼십시오.";
+
+                    result.Report(message);
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.GateRequiresStepBeforeRunId,
+                        Message = message,
+                        OwnerStepCode = owner,
+                        Lexemes = owner != null
+                            ? null
+                            : MarkdownSectionLocator.SplitLines(gate.Statement)
+                                .Select(line => line.Trim())
+                                .Where(line => early.Any(c => Regex.IsMatch(line, $@"N?'{Regex.Escape(c)}'", RegexOptions.IgnoreCase)))
+                                .Distinct(StringComparer.Ordinal)
+                                .ToList()
+                    });
                 }
             }
         }

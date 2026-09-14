@@ -69,6 +69,103 @@ namespace ReSet.Core.Services
             return (writes, reads);
         }
 
+        /// <summary>
+        /// [D1 자기 제외] 이 SQL 에서 표 <paramref name="tableBareName"/> 을 <b>FROM·JOIN 으로 읽는 질의</b>가 그 표에 한정된(또는 한정자 없는)
+        /// <c>StepCode &lt;&gt; / != '코드'</c> 로 제외하는 단계 코드들. 표가 INSERT 대상으로만 나오거나, 조건이 조인한 다른 표의 것이면 세지 않는다.
+        /// 조각이 파싱되지 않으면 그 조각은 건너뛴다(덜 보고한다). 판독: <c>docs/audit-reports/2026-09-14-L1-귀속실패-측정.md</c>.
+        /// </summary>
+        internal static IReadOnlySet<string> SelfExcludedStepCodes(string sql, string tableBareName)
+        {
+            var codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(sql)) return codes;
+
+            var tokens = new TSql160Parser(initialQuotedIdentifiers: true).GetTokenStream(new StringReader(sql), out var tokenErrors);
+            if (tokens == null || tokenErrors is { Count: > 0 }) return codes;
+
+            foreach (var (start, end, _) in StepSqlStatementReader.SplitAtTopLevelSemicolons(sql, tokens))
+            {
+                var chunk = sql.Substring(start, end - start);
+                if (string.IsNullOrWhiteSpace(chunk)) continue;
+
+                var fragment = new TSql160Parser(initialQuotedIdentifiers: true).Parse(new StringReader(chunk), out var errors);
+                if (fragment == null || errors is { Count: > 0 }) continue;
+
+                var visitor = new SelfExclusionVisitor(tableBareName);
+                fragment.Accept(visitor);
+                codes.UnionWith(visitor.Codes);
+            }
+
+            return codes;
+        }
+
+        private sealed class SelfExclusionVisitor : TSqlFragmentVisitor
+        {
+            private readonly string _table;
+
+            internal SelfExclusionVisitor(string table) => _table = table;
+
+            internal HashSet<string> Codes { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+            public override void ExplicitVisit(QuerySpecification node)
+            {
+                var qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var reference in node.FromClause?.TableReferences ?? (IList<TableReference>)Array.Empty<TableReference>())
+                    AddQualifiers(reference, qualifiers);
+
+                if (qualifiers.Count > 0 && node.WhereClause?.SearchCondition != null)
+                    Collect(node.WhereClause.SearchCondition, qualifiers);
+
+                base.ExplicitVisit(node);
+            }
+
+            private void AddQualifiers(TableReference reference, HashSet<string> qualifiers)
+            {
+                switch (reference)
+                {
+                    case NamedTableReference named when named.SchemaObject?.BaseIdentifier?.Value is { } bare &&
+                                                        bare.Equals(_table, StringComparison.OrdinalIgnoreCase):
+                        qualifiers.Add(bare);
+                        if (named.Alias != null) qualifiers.Add(named.Alias.Value);
+                        break;
+                    case JoinTableReference join:
+                        AddQualifiers(join.FirstTableReference, qualifiers);
+                        AddQualifiers(join.SecondTableReference, qualifiers);
+                        break;
+                    case JoinParenthesisTableReference parenthesis:
+                        AddQualifiers(parenthesis.Join, qualifiers);
+                        break;
+                }
+            }
+
+            private void Collect(BooleanExpression expression, HashSet<string> qualifiers)
+            {
+                switch (expression)
+                {
+                    case BooleanBinaryExpression binary:
+                        Collect(binary.FirstExpression, qualifiers);
+                        Collect(binary.SecondExpression, qualifiers);
+                        break;
+                    case BooleanParenthesisExpression parenthesis:
+                        Collect(parenthesis.Expression, qualifiers);
+                        break;
+                    case BooleanComparisonExpression
+                    {
+                        ComparisonType: BooleanComparisonType.NotEqualToBrackets or BooleanComparisonType.NotEqualToExclamation
+                    } comparison:
+                        var (column, literal) = comparison.FirstExpression is ColumnReferenceExpression c1 && comparison.SecondExpression is StringLiteral l1
+                            ? (c1, l1)
+                            : comparison.SecondExpression is ColumnReferenceExpression c2 && comparison.FirstExpression is StringLiteral l2
+                                ? (c2, l2)
+                                : ((ColumnReferenceExpression?)null, (StringLiteral?)null);
+                        if (column?.MultiPartIdentifier?.Identifiers is not { Count: > 0 } ids || literal == null) break;
+                        if (!ids[^1].Value.Equals("StepCode", StringComparison.OrdinalIgnoreCase)) break;
+                        if (ids.Count > 1 && !qualifiers.Contains(ids[^2].Value)) break;
+                        Codes.Add(literal.Value);
+                        break;
+                }
+            }
+        }
+
         private sealed class Visitor : TSqlFragmentVisitor
         {
             private readonly HashSet<string> _tables;

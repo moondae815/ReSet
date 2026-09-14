@@ -4632,14 +4632,19 @@ Consolidate the provided specifications into a single unified batch job named '{
                     userPrompt.AppendLine(revision.PreviousSkeleton);
                     userPrompt.AppendLine();
                     userPrompt.AppendLine("[Revision Contract]");
-                    userPrompt.AppendLine("- Output the FULL skeleton again, but change ONLY what the machine validation failure below identifies.");
+                    userPrompt.AppendLine(revision.FromCritic
+                        ? "- Output the FULL skeleton again, but change ONLY the skeleton-level defects the Critic review below identifies (shared conventions, flowchart, verification SQL, step roster and error-code tables). Defects it attributes to step bodies are fixed separately - do NOT act on them here."
+                        : "- Output the FULL skeleton again, but change ONLY what the machine validation failure below identifies.");
                     userPrompt.AppendLine("- Every other line MUST be reproduced byte-for-byte — including the step roster table, the per-step error-code table, and the four mandatory H2 headings.");
                     userPrompt.AppendLine("- The step bodies have ALREADY been written against this skeleton and are frozen; do NOT change any contract they depend on beyond the fix.");
                     userPrompt.AppendLine("- Do NOT rewrite, reorder, or \"improve\" untouched parts.");
                     userPrompt.AppendLine();
                 }
 
-                userPrompt.AppendLine("[Machine Validation Failure — fix exactly this]");
+                // Critic 지적은 기계 검증 실패가 아니다 - 같은 틀로 실으면 모델이 단계 본문 결함까지 골격에서 고치려 든다(2026-09-14).
+                userPrompt.AppendLine(revision.FromCritic
+                    ? "[Critic Review — fix only the skeleton-level defects it identifies]"
+                    : "[Machine Validation Failure — fix exactly this]");
                 userPrompt.AppendLine(revision.Feedback);
             }
 

@@ -2434,6 +2434,14 @@ namespace ReSet.Core.Services
 
                     foreach (var detail in l1Result.DetailedErrors)
                     {
+                        if (detail.OwnerStepCode is { } ownerStepCode)
+                        {
+                            // 검사가 고칠 단계를 이미 안다 - 유형과 무관하게 그 단계를 연다. 어휘 검색은 단계 안의 코드 없는 하위
+                            // 헤딩 아래를 판정하지 못하고(DetailedError.OwnerStepCode 참고), 「없는 것」이 위반인 검사는 어휘가 없다.
+                            AddOwner(ownerStepCode);
+                            continue;
+                        }
+
                         switch (detail.Type)
                         {
                             case ErrorType.BatchRunRowNeverCreated:
@@ -2454,13 +2462,6 @@ namespace ReSet.Core.Services
                                 // "Write ALL four mandatory H2 sections in full"). 단계
                                 // 섹션을 다시 만들어서는 절대 고쳐지지 않는 위반이다.
                                 AddSkeletonOwner(detail);
-                                break;
-
-                            case ErrorType.VerificationControlTotalNameMismatch when detail.OwnerStepCode is { } ownerStepCode:
-                                // [K2 검증 세트판 · 공통 규약 동률] 어긴 것이 쓰는 단계라고 검사가 이미 안다. 그 단계의 쓰기 SQL 은 대개
-                                // 코드 없는 하위 헤딩 아래라 어휘 검색이 어느 자리에도 안 붙는다(DetailedError.OwnerStepCode 참고).
-                                // 읽는 쪽(골격) 귀속은 OwnerStepCode 가 없어 아래 어휘 검색으로 간다.
-                                AddOwner(ownerStepCode);
                                 break;
 
                             case ErrorType.MermaidCliError:
@@ -2958,20 +2959,39 @@ namespace ReSet.Core.Services
 
                         if (l2Result.SkeletonDefective)
                         {
-                            // 골격만 버린다. 섹션은 동결 상태로 남겨 다음 회차가
-                            // 새 골격 아래에 그대로 조립한다. 성립하지 않으면
-                            // 회귀 롤백이 그 회차를 되감는다.
+                            // [패치 - 2026-09-14 사람 결정] Critic 이 리뷰한 골격이 지금 최고 후보(이번 회차가 갱신했다)라면
+                            // L1 골격 수리와 같은 패치로 받는다 - 직전 골격을 싣고 Critic 지적문으로 그 자리만 고친다.
+                            // POQSettleBatch13 에서 백지 재작성이 1 차의 E 결함 둘을 고치면서 새 모순을 만들어 86 점으로 떨어졌고,
+                            // 채택 규칙이 1 차로 되돌려 수정이 버려졌다(판독 docs/audit-reports/2026-09-14-L1-귀속실패-측정.md).
+                            // 패치 생성은 SkeletonRevisionGuard 가 필수 H2·단계 코드·오류 코드 앵커를 지킨다.
                             //
-                            // 골격만 지운다 - lastStepSections는 그대로 둔다.
-                            // GenerateBySplitAsync는 "골격 재사용"과 "지목 단계만
-                            // 재생성"을 독립으로 판정하므로(§3-6), 골격이 없어도
-                            // 섹션 캐시가 살아 있으면 다음 회차는 pendingDefectiveSteps로
-                            // 지목된 단계만 다시 만들고 나머지는 캐시된 바이트를
-                            // 그대로 쓴다.
-                            lastSkeleton = null;
-                            lastSkeletonResult = null;
-                            _userInteraction.NotifyStatus(
-                                $"[yellow]{jobName}[/] - 공통 규약과 단계 본문의 모순이 지적되어 골격만 다시 만듭니다.");
+                            // [백지로 남는 경우] 이번 회차가 최고 후보를 못 넘어 되돌렸으면 lastSkeleton 은 이미 **다른 회차**의 골격이고,
+                            // Critic 지적문은 버려진 골격에 대한 것이라 패치 재료가 아니다 - 종전대로 골격만 버린다. 그래서 패치가
+                            // 점수를 못 올리면 다음 지적은 자연히 백지로 올라간다(L1 골격 수리의 연속 2 회 백지와 같은 방향).
+                            // 지적문이 비면 패치할 내용이 없다 - 백지로 둔다(최종 리뷰 Minor).
+                            if (improvedThisAttempt && lastSkeleton != null && !string.IsNullOrWhiteSpace(l2Result.FeedbackComment))
+                            {
+                                pendingSkeletonRevision = new SkeletonRevision(l2Result.FeedbackComment!, lastSkeleton, FromCritic: true);
+                                _userInteraction.NotifyStatus(
+                                    $"[yellow]{jobName}[/] - 공통 규약과 단계 본문의 모순이 지적되어 직전 골격 위에서 그 자리만 고칩니다(골격 패치).");
+                            }
+                            else
+                            {
+                                // 골격만 버린다. 섹션은 동결 상태로 남겨 다음 회차가
+                                // 새 골격 아래에 그대로 조립한다. 성립하지 않으면
+                                // 회귀 롤백이 그 회차를 되감는다.
+                                //
+                                // 골격만 지운다 - lastStepSections는 그대로 둔다.
+                                // GenerateBySplitAsync는 "골격 재사용"과 "지목 단계만
+                                // 재생성"을 독립으로 판정하므로(§3-6), 골격이 없어도
+                                // 섹션 캐시가 살아 있으면 다음 회차는 pendingDefectiveSteps로
+                                // 지목된 단계만 다시 만들고 나머지는 캐시된 바이트를
+                                // 그대로 쓴다.
+                                lastSkeleton = null;
+                                lastSkeletonResult = null;
+                                _userInteraction.NotifyStatus(
+                                    $"[yellow]{jobName}[/] - 공통 규약과 단계 본문의 모순이 지적되어 골격만 다시 만듭니다.");
+                            }
                         }
                         else if (pendingDefectiveSteps.Count == 0)
                         {

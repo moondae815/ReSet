@@ -15,7 +15,11 @@ namespace ReSet.Core.Services
     /// 「최소 변경만 하고 근본 결함을 안 고친다」가 패치 고유의 실패 모드이고, 그
     /// 상태로 수리 예산을 계속 태우면 안 되기 때문이다.
     /// </summary>
-    public sealed record SkeletonRevision(string Feedback, string? PreviousSkeleton);
+    /// <param name="FromCritic">
+    /// 수리 요청이 Critic 의 골격 결함 지적에서 왔는가(2026-09-14). 거짓이면 L1 기계 검증 위반이다 - 프롬프트가 두 출처를 다른 틀로
+    /// 싣는다. Critic 지적문은 문서 전체를 다루고 단계 본문 결함이 섞여 있어, 골격이 고칠 몫만 고치라고 따로 말해야 한다.
+    /// </param>
+    public sealed record SkeletonRevision(string Feedback, string? PreviousSkeleton, bool FromCritic = false);
 
     /// <summary>
     /// 골격 패치 재생성이 「지적된 자리만 고치고 나머지는 바이트 그대로」를 지켰는지
