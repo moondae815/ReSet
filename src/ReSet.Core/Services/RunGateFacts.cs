@@ -134,8 +134,6 @@ namespace ReSet.Core.Services
 
             public override void ExplicitVisit(BooleanComparisonExpression node)
             {
-                if (node.ComparisonType is BooleanComparisonType.NotEqualToBrackets or BooleanComparisonType.NotEqualToExclamation) return;
-
                 if (node.ComparisonType == BooleanComparisonType.Equals)
                 {
                     if (IsColumn(node.FirstExpression, "StepCode")) AddLiteral(node.SecondExpression);

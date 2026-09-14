@@ -11810,7 +11810,7 @@ namespace ReSet.Core.Services
             if (sections.Count == 0) return;
 
             var issuer = sections.Select((s, i) => (s.Code, s.Body, Index: i)).FirstOrDefault(s => CreatesRowIn(s.Body, "BatchRun"));
-            if (issuer.Code == null || issuer.Index == 0) return;
+            if (issuer.Code == null) return;
 
             var codes = sections.Select(s => s.Code).ToList();
             var exempt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
