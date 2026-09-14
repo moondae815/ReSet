@@ -104,6 +104,29 @@ namespace ReSet.Core.Tests
             Assert.True(ReportsRunning(defects));
         }
 
+        // [표를 가린다 - 최종 리뷰 Important] 계약 표가 아닌 표의 같은 이름 컬럼에 넣은 값은 그 상태 칸의 쓰기가 아니다.
+        // ① 감사 표 `dbo.BatchRunAudit(RunStatus)` 에 Failed 를 넣어도 BatchRun 의 Failed 누락은 그대로 발화한다(거짓 음성 방지).
+        [Fact]
+        public void APositionalWriteIntoAnUnrelatedTableWithTheSameColumnName_DoesNotSilenceTheDefect()
+        {
+            var defects = new MechanicalValidator().ValidateControlStatusTerminalWrites(
+                Sections(OpensAndSucceeds + "\nINSERT INTO dbo.BatchRunAudit (RunId, RunStatus, ChangedAtUtc) VALUES (@r, N'Failed', SYSUTCDATETIME());", JournalsAFailure),
+                Steps);
+
+            Assert.Contains("Failed", Assert.Contains("S01", defects).Reason);
+        }
+
+        // ② 무관한 표의 `StepStatus` 에 Restarting 을 넣어도 「다른 상태 컬럼엔 쓴다」가 되지 않는다(거짓 양성 방지).
+        [Fact]
+        public void APositionalWriteIntoAnUnrelatedTable_DoesNotCountAsAnotherStatusColumnWrite()
+        {
+            var defects = new MechanicalValidator().ValidateControlStatusTerminalWrites(
+                Sections(OpensAndSucceeds + "\n" + RunEndsBothWays, JournalsRunning + "\nINSERT INTO dbo.StageLog (StepStatus) VALUES (N'Restarting');"),
+                Steps);
+
+            Assert.DoesNotContain(defects.Values, d => d.Reason.Contains("`Restarting`"));
+        }
+
         [Fact]
         public void ReportsAStatusValueThatIsNeverWrittenToItsOwnColumnButIsWrittenElsewhere()
         {
