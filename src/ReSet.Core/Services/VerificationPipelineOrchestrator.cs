@@ -2434,6 +2434,14 @@ namespace ReSet.Core.Services
 
                     foreach (var detail in l1Result.DetailedErrors)
                     {
+                        if (detail.OwnerStepCode is { } ownerStepCode)
+                        {
+                            // 검사가 고칠 단계를 이미 안다 - 유형과 무관하게 그 단계를 연다. 어휘 검색은 단계 안의 코드 없는 하위
+                            // 헤딩 아래를 판정하지 못하고(DetailedError.OwnerStepCode 참고), 「없는 것」이 위반인 검사는 어휘가 없다.
+                            AddOwner(ownerStepCode);
+                            continue;
+                        }
+
                         switch (detail.Type)
                         {
                             case ErrorType.BatchRunRowNeverCreated:
@@ -2454,13 +2462,6 @@ namespace ReSet.Core.Services
                                 // "Write ALL four mandatory H2 sections in full"). 단계
                                 // 섹션을 다시 만들어서는 절대 고쳐지지 않는 위반이다.
                                 AddSkeletonOwner(detail);
-                                break;
-
-                            case ErrorType.VerificationControlTotalNameMismatch when detail.OwnerStepCode is { } ownerStepCode:
-                                // [K2 검증 세트판 · 공통 규약 동률] 어긴 것이 쓰는 단계라고 검사가 이미 안다. 그 단계의 쓰기 SQL 은 대개
-                                // 코드 없는 하위 헤딩 아래라 어휘 검색이 어느 자리에도 안 붙는다(DetailedError.OwnerStepCode 참고).
-                                // 읽는 쪽(골격) 귀속은 OwnerStepCode 가 없어 아래 어휘 검색으로 간다.
-                                AddOwner(ownerStepCode);
                                 break;
 
                             case ErrorType.MermaidCliError:

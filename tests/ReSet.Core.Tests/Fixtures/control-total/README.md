@@ -27,3 +27,9 @@
 | `Batch12-S12.md` · `Batch12-S17.md` | `output/Jobs/POQSettleBatch12/agent/steps/` | 위 세트가 가리키는 단계 |
 | `Batch1-verification.md` | `output/Jobs/POQSettleBatch1/docs/BatchMigrationPlan.md` 4434~4654 행 | S02~S07 몫을 리터럴로 읽지만 그 단계들이 이름을 리터럴로 안 쓴다 — 음성(쓰는 이름 모름) |
 | `Batch1-S02.md` ~ `Batch1-S07.md` | `output/Jobs/POQSettleBatch1/agent/steps/` | 위 세트가 가리키는 단계 |
+
+## 생산자 검사(D1) 오탐(2026-09-14)
+
+| 파일 | 원본 | 역할 |
+| :--- | :--- | :--- |
+| `Batch8-S22-attempt6.md` | `output/Jobs/POQSettleBatch8/raw/attempts/run-001/steps/S22.md`(manifest 상 6 차본 — L1 이 발화한 판) | 한 펜스에 `BatchStepJournal` 자기 제외 읽기와 `BatchControlTotal` INSERT 가 함께 있다 — 생산자 검사 음성(펜스 단위로 짝지어 거짓 발화했던 입력). 배송본 `Batch8-S22.md`(2 차본)와 다른 파일이다. 판독 `docs/audit-reports/2026-09-14-L1-귀속실패-측정.md` |

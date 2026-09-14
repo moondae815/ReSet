@@ -238,7 +238,8 @@ public sealed class VerificationControlTotalNamesTests
             source);
     }
 
-    // [배선 - 쓰는 단계 직접 귀속] 공통 규약 동률 분기는 어휘로 단계에 안 붙는다(하위 헤딩). 귀속 스위치가 OwnerStepCode 로 그 단계를 연다.
+    // [배선 - 검사가 아는 단계로 직접 귀속] 공통 규약 동률 분기는 어휘로 단계에 안 붙는다(하위 헤딩). 귀속 루프가 유형과 무관하게
+    // OwnerStepCode 로 그 단계를 연다(2026-09-14 CheckControlTotalProducer 도 같은 규칙을 탄다).
     [Fact]
     public void OrchestratorOpensTheOwnerStepFromTheErrorItself()
     {
@@ -246,7 +247,7 @@ public sealed class VerificationControlTotalNamesTests
             RepoPaths.FindRepoRoot(), "src", "ReSet.Core", "Services", "VerificationPipelineOrchestrator.cs"));
 
         Assert.Matches(new Regex(
-            @"case\s+ErrorType\.VerificationControlTotalNameMismatch\s+when\s+detail\.OwnerStepCode\s+is\s*\{\s*\}\s*(\w+)\s*:\s*(?://[^\n]*\n\s*)*AddOwner\(\s*\1\s*\)\s*;\s*break\s*;"),
+            @"if\s*\(\s*detail\.OwnerStepCode\s+is\s*\{\s*\}\s*(\w+)\s*\)\s*\{\s*(?://[^\n]*\n\s*)*AddOwner\(\s*\1\s*\)\s*;\s*continue\s*;"),
             source);
     }
 }

@@ -106,6 +106,9 @@ namespace ReSet.Core.Services
         // 통합 검증 SQL 세트가 단계 몫의 통제 합계를 그 단계가 쓰지 않는 이름으로만 읽는다(K2 의 검증 세트판,
         // POQSettleBatch13 V04↔S11). 어휘가 검증 세트 원문 줄이라 골격으로 귀속된다.
         VerificationControlTotalNameMismatch,
+        // 생산자가 자기뿐인 표를 자기 제외로 읽는다(D1 CheckControlTotalProducer). OwnerStepCode 로 그 단계에 귀속된다
+        // - 2026-09-14 전에는 DetailedError 를 안 내 귀속되지 않고 늘 전량 재생성이었다.
+        ControlTotalWithoutOtherProducer,
         General
     }
 
@@ -11746,16 +11749,17 @@ namespace ReSet.Core.Services
                     // 를 죽여 놓은 것을 축 B 분류가 이미 짚었다(규약이 런타임 조립을 의무화하는데
                     // 인식 패턴은 리터럴만 안다). 여기서는 원문 펜스를 본다 — 표 참조와 제외
                     // 술어가 **같은 펜스** 안에 함께 있을 것을 요구해 주석 오탐을 좁힌다.
+                    //
+                    // [문장·파서로 좁혔다 - 2026-09-14 POQSettleBatch8 6 차 오탐] 펜스 단위로 「표 이름」과 「자기 제외」를 짝지으니
+                    // 한 펜스의 `SELECT … FROM batch.BatchStepJournal WHERE StepCode <> N'S22'` 와 `INSERT INTO batch.BatchControlTotal` 이
+                    // 짝이 되어 거짓 발화했다. 이제 **그 표를 FROM·JOIN 으로 읽는 질의**의 **그 표 조건**만 자기 제외로 인정한다.
                     var excludesItself = false;
                     foreach (Match fence in Regex.Matches(
                         body, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
                     {
                         var sql = fence.Groups["sql"].Value;
                         if (!Regex.IsMatch(sql, $@"\b{fragment}", RegexOptions.IgnoreCase)) continue;
-                        if (Regex.IsMatch(
-                                sql,
-                                $@"StepCode\s*(<>|!=)\s*N?'{Regex.Escape(code)}'",
-                                RegexOptions.IgnoreCase))
+                        if (ControlTotalNameFacts.SelfExcludedStepCodes(sql, bare).Contains(code))
                         {
                             excludesItself = true;
                             break;
@@ -11769,11 +11773,19 @@ namespace ReSet.Core.Services
                         .Any(s => CreatesRowIn(s.Body, bare));
                     if (otherProducer) continue;
 
-                    result.Report(
+                    var message =
                         $"{code} 섹션이 `{table.Name}`을 `StepCode <> N'{code}'` 로 읽어 다른 단계가 "
                         + $"적재한 제어합계를 기대값으로 삼는데, 그 표에 행을 만드는 단계가 {code} "
                         + "자신뿐입니다 — 기대값이 항상 공집합이라 대조가 무조건 통과합니다. "
-                        + $"기대값을 적재하는 단계를 두거나, `{code}` 자기 제외를 걷어내십시오.");
+                        + $"기대값을 적재하는 단계를 두거나, `{code}` 자기 제외를 걷어내십시오.";
+                    result.Report(message);
+                    // 귀속 재료. 2026-09-14 전에는 Report 만 해서 오케스트레이터 귀속(DetailedErrors 순회)에 안 잡혀 늘 전량 재생성이었다.
+                    result.DetailedErrors.Add(new DetailedError
+                    {
+                        Type = ErrorType.ControlTotalWithoutOtherProducer,
+                        Message = message,
+                        OwnerStepCode = code
+                    });
                 }
             }
         }
