@@ -18,7 +18,8 @@ namespace ReSet.Core.Services
     /// 원본 가드 한 줄. <paramref name="Where"/> 는 WHERE 최상위 항의 원문을 AND 로 이은 것(공백 접힘),
     /// <paramref name="SelectColumns"/> 는 EXISTS 가 투영하는 목록일 뿐 조건이 아니다.
     /// </summary>
-    public sealed record StepGuard(string Procedure, int Line, string Table, string Where, IReadOnlyList<string> SelectColumns);
+    /// <param name="Negated"><c>IF NOT EXISTS</c> 면 true - 같은 WHERE 라도 뜻이 반대라 표가 행마다 싣는다.</param>
+    public sealed record StepGuard(string Procedure, int Line, string Table, string Where, IReadOnlyList<string> SelectColumns, bool Negated = false);
 
     /// <summary>
     /// 단계별 원본 프로시저 인터페이스를 모은다.
@@ -269,7 +270,8 @@ namespace ReSet.Core.Services
                             guards.Add(new StepGuard(
                                 legacy, guard.Line, guard.Table,
                                 System.Text.RegularExpressions.Regex.Replace(string.Join(" AND ", guard.Terms.Select(t => t.Raw)), @"\s+", " ").Trim(),
-                                guard.SelectColumns));
+                                guard.SelectColumns,
+                                guard.Negated));
                         }
                     }
 
@@ -341,12 +343,12 @@ namespace ReSet.Core.Services
             if (rows.Count == 0) return string.Empty;
 
             var sb = new StringBuilder();
-            sb.AppendLine("| Step | Legacy procedure | DDL line | Table | WHERE conditions (exact) | SELECT list (not a condition) |");
-            sb.AppendLine("|---|---|---|---|---|---|");
+            sb.AppendLine("| Step | Legacy procedure | DDL line | Check | Table | WHERE conditions (exact) | SELECT list (not a condition) |");
+            sb.AppendLine("|---|---|---|---|---|---|---|");
             foreach (var (code, guard) in rows)
             {
                 sb.AppendLine(
-                    $"| {code} | {guard.Procedure} | {guard.Line} | {guard.Table} | `{guard.Where}` | " +
+                    $"| {code} | {guard.Procedure} | {guard.Line} | {(guard.Negated ? "IF NOT EXISTS" : "IF EXISTS")} | {guard.Table} | `{guard.Where}` | " +
                     $"{(guard.SelectColumns.Count > 0 ? string.Join(", ", guard.SelectColumns.Select(c => "`" + c + "`")) : "-")} |");
             }
 

@@ -48,6 +48,24 @@ public sealed class GuardConditionsPromptTests
         Assert.Equal(20, guard.Line);
     }
 
+    // [극성 - 최종 리뷰 Important] IF NOT EXISTS 가드는 IF EXISTS 와 같은 WHERE 를 내더라도 뜻이 반대다 - 행마다 극성을 싣는다.
+    [Fact]
+    public void Build_RecordsThePolarityOfEachGuard()
+    {
+        const string ddl = "CREATE PROCEDURE dbo.UP_X @pi_strYMD CHAR(8) AS\nBEGIN\n" +
+                           "IF NOT EXISTS (SELECT 1 FROM TSettleMst WHERE YMD = @pi_strYMD AND OutState = 1) RETURN\n" +
+                           "IF EXISTS (SELECT 1 FROM TSettleMst WHERE YMD = @pi_strYMD AND OutState = 2) RETURN\nEND";
+        var steps = new[] { new BatchStepPlan("S01", "x", new[] { "dbo.UP_X" }, new[] { "dbo.T" }, new[] { "-1" }, false, Array.Empty<string>()) };
+        var iface = Assert.Single(StepInterfaceFacts.Build(steps,
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase) { ["dbo.UP_X"] = new[] { "@pi_strYMD char(8)" } },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["UP_X"] = ddl }));
+
+        Assert.Equal(new[] { true, false }, iface.Guards!.Select(g => g.Negated).ToArray());
+        var table = StepInterfaceFacts.RenderGuardTable(new[] { iface });
+        Assert.Contains("| IF NOT EXISTS |", table);
+        Assert.Contains("| IF EXISTS |", table);
+    }
+
     private static IAiService Service()
     {
         var client = Substitute.For<IAiClient>();

@@ -42,6 +42,17 @@ public sealed class StepFileBannerStripTests
         Assert.Equal(section, InstructionBundleWriter.StripFloorBanner(section));
     }
 
+    // [여러 줄 사유 - 최종 리뷰 Important] 사유에 개행이 있으면 배너 중간에 `>` 없는 줄이 생긴다 - 배너 끝 문구까지 벗겨야 헤딩이 첫 줄이 된다.
+    [Theory]
+    [InlineData("> 섹션 내용이 부실하다는 뜻은 아닙니다. 목차가 대상 테이블이나 원본 오류코드를 선언하지 않아 기계 대조를 실행하지 못했습니다.")]
+    [InlineData("> 이 절만으로 구현이 불가능하면 추측하지 말고 원본 명세서(Spec.md)를 확인하십시오.")]
+    public void ABannerWhoseReasonSpansLines_IsStrippedThroughItsTail(string tail)
+    {
+        var banner = "> ⚠️ **이 단계는 품질 미달로 기록되었습니다.**\n> \n> S04 (첫 줄\n둘째 줄에는 인용 표시가 없다)\n> \n" + tail + "\n\n### S04 본문\n";
+
+        Assert.StartsWith("### S04", InstructionBundleWriter.StripFloorBanner(banner));
+    }
+
     // 벗긴 뒤 단계 검사가 헤딩을 본다 - 스윕이 판 안과 같은 입력을 받는다.
     [Fact]
     public void AfterStripping_TheHeadingCheckIsSilent()

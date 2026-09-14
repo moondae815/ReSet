@@ -338,13 +338,25 @@ namespace ReSet.Core.Services
             if (!text.StartsWith(FloorBannerHeadlinePrefix, StringComparison.Ordinal)) return stepFileMarkdown;
 
             var lines = text.Replace("\r\n", "\n").Split('\n');
-            var index = 0;
-            while (index < lines.Length && lines[index].StartsWith(">", StringComparison.Ordinal)) index++;
+
+            // 배너의 끝 문구까지 벗긴다 - 사유에 개행이 섞인 옛 배너는 중간에 `>` 없는 줄이 있어 「`>` 줄까지」로는 멈춘다(최종 리뷰 Important).
+            var tailIndex = Array.FindIndex(lines, l => l == UnverifiableBannerTail || l == QualityFloorBannerTail);
+            var index = tailIndex >= 0 ? tailIndex + 1 : 0;
+            if (tailIndex < 0)
+            {
+                while (index < lines.Length && lines[index].StartsWith(">", StringComparison.Ordinal)) index++;
+            }
             if (index < lines.Length && lines[index].Length == 0) index++;
             return string.Join("\n", lines.Skip(index));
         }
 
         private const string FloorBannerHeadlinePrefix = "> ⚠️ **이 단계는";
+
+        private const string UnverifiableBannerTail =
+            "> 섹션 내용이 부실하다는 뜻은 아닙니다. 목차가 대상 테이블이나 원본 오류코드를 선언하지 않아 기계 대조를 실행하지 못했습니다.";
+
+        private const string QualityFloorBannerTail =
+            "> 이 절만으로 구현이 불가능하면 추측하지 말고 원본 명세서(Spec.md)를 확인하십시오.";
 
         /// <summary>
         /// 하한 미달 기록이 있는 단계에만 배너를 붙인다. 이전에는 문서 전체 상단에
@@ -369,16 +381,17 @@ namespace ReSet.Core.Services
             {
                 StepDefectKind.Unverifiable => (
                     "> ⚠️ **이 단계는 대조할 재료가 없어 검증되지 못했습니다.**",
-                    "> 섹션 내용이 부실하다는 뜻은 아닙니다. 목차가 대상 테이블이나 원본 오류코드를 선언하지 않아 기계 대조를 실행하지 못했습니다."),
+                    UnverifiableBannerTail),
                 _ => (
                     "> ⚠️ **이 단계는 품질 미달로 기록되었습니다.**",
-                    "> 이 절만으로 구현이 불가능하면 추측하지 말고 원본 명세서(Spec.md)를 확인하십시오."),
+                    QualityFloorBannerTail),
             };
 
             var sb = new StringBuilder();
             sb.AppendLine(headline);
             sb.AppendLine("> ");
-            sb.AppendLine($"> {defect.Reason.Trim()}");
+            // 사유의 개행은 공백으로 접는다 - 개행이 남으면 `>` 없는 줄이 인용 블록을 끊는다(최종 리뷰 Important, StripFloorBanner 참고).
+            sb.AppendLine($"> {System.Text.RegularExpressions.Regex.Replace(defect.Reason.Trim(), @"\s*\r?\n\s*", " ")}");
             sb.AppendLine("> ");
             sb.AppendLine(tail);
             sb.AppendLine();
