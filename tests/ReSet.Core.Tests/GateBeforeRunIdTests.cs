@@ -107,6 +107,30 @@ public sealed class GateBeforeRunIdTests
         Assert.Empty(GateErrors(Document(Batch13Steps(s02: s02))));
     }
 
+    // [면제는 쓰는 칸만 - 최종 리뷰 Important 1] S01 을 NOT EXISTS 안에서 **참조만** 하는 저널 INSERT 는 S01 행을 쓰는 것이 아니다 - 면제하지 않는다.
+    [Fact]
+    public void AJournalInsertThatOnlyReferencesS01_DoesNotExemptIt()
+    {
+        var document = Document(new[]
+        {
+            Step("S01", SyntheticS01),
+            Step("S02", SyntheticS02 + "\n\nINSERT INTO batch.BatchStepJournal (RunId, StepCode, StepStatus)\nSELECT @p_runId, N'S02', N'Succeeded'\n WHERE NOT EXISTS (SELECT 1 FROM batch.BatchStepJournal WHERE RunId = @p_runId AND StepCode = N'S01');"),
+            Step("S03", "SELECT COUNT(*) FROM batch.BatchCheckpoint WHERE RunId = @p_runId AND CheckpointStatus = N'Succeeded' AND StepCode IN (N'S01', N'S02');"),
+        });
+
+        Assert.Equal("S03", Assert.Single(GateErrors(document)).OwnerStepCode);
+    }
+
+    // [귀속은 자리로 - 최종 리뷰 Important 4] 두 단계가 바이트 같은 게이트를 가지면 각자에게 귀속된다(텍스트 포함으로 찾으면 둘 다 앞 단계로 간다).
+    [Fact]
+    public void IdenticalGatesInTwoSteps_AreAttributedToEachStep()
+    {
+        const string gate = "SELECT COUNT(*) FROM batch.BatchCheckpoint WHERE RunId = @p_runId AND CheckpointStatus = N'Succeeded' AND StepCode IN (N'S01', N'S02');";
+        var document = Document(new[] { Step("S01", SyntheticS01), Step("S02", SyntheticS02), Step("S03", gate), Step("S04", gate) });
+
+        Assert.Equal(new[] { "S03", "S04" }, GateErrors(document).Select(e => e.OwnerStepCode).OrderBy(c => c).ToArray());
+    }
+
     // G4: 부정 자리의 리터럴은 요구가 아니다 / 긍정 자리 셋은 요구다.
     [Theory]
     [InlineData("AND StepCode <> N'S01'", false)]

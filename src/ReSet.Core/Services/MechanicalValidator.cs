@@ -11813,31 +11813,46 @@ namespace ReSet.Core.Services
             if (issuer.Code == null) return;
 
             var codes = sections.Select(s => s.Code).ToList();
+            // 면제: StepCode 칸에 그 코드를 실제로 넣는 쓰기만(최종 리뷰 Important 1 - 참조만 한 리터럴을 줍지 않는다).
             var exempt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var (_, body) in sections)
             {
                 foreach (Match fence in Regex.Matches(body, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
-                {
-                    foreach (var statement in fence.Groups["sql"].Value.Split(';'))
-                    {
-                        if (!Regex.IsMatch(statement, @"\b(?:INSERT\s+INTO|MERGE(?:\s+INTO)?)\s+(?:\[?\w+\]?\.)?\[?Batch(?:Checkpoint|StepJournal)\b", RegexOptions.IgnoreCase)) continue;
-                        foreach (Match literal in Regex.Matches(statement, @"N?'(?<code>S\d+)'", RegexOptions.IgnoreCase)) exempt.Add(literal.Groups["code"].Value);
-                    }
-                }
+                    exempt.UnionWith(RunGateFacts.WrittenStepCodes(fence.Groups["sql"].Value));
             }
 
             var beforeIssuer = new HashSet<string>(codes.Take(issuer.Index).Where(c => !exempt.Contains(c)), StringComparer.OrdinalIgnoreCase);
             if (beforeIssuer.Count == 0) return;
 
+            // 귀속은 자리(줄 번호)로 - 텍스트 포함으로 찾으면 바이트 같은 게이트를 가진 두 단계가 앞 단계 하나로 뭉친다(최종 리뷰 Important 4).
+            // 절 경계는 SplitStepSections 와 같은 규칙이다: `### Sxx` 가 열고 다음 `#`~`###` 헤딩이 닫는다.
+            var ranges = new List<(string Code, int Start, int End)>();
+            {
+                var lines = MarkdownSectionLocator.SplitLines(markdown);
+                string? current = null;
+                var start = 0;
+                for (var i = 0; i <= lines.Count; i++)
+                {
+                    var isHeading = i < lines.Count && Regex.IsMatch(lines[i], @"^#{1,3}\s");
+                    if (i < lines.Count && !isHeading) continue;
+                    if (current != null) ranges.Add((current, start, i));
+                    current = null;
+                    if (i == lines.Count) break;
+                    var step = Regex.Match(lines[i], @"^###\s*(?<code>S\d{2})\b");
+                    if (step.Success) { current = step.Groups["code"].Value; start = i; }
+                }
+            }
+
             foreach (Match fence in Regex.Matches(markdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
             {
                 var sql = fence.Groups["sql"].Value;
+                var fenceLine = markdown.AsSpan(0, fence.Index).Count('\n');
                 foreach (var gate in RunGateFacts.Gates(sql, codes))
                 {
                     var early = gate.RequiredStepCodes.Where(beforeIssuer.Contains).OrderBy(c => c, StringComparer.Ordinal).ToList();
                     if (early.Count == 0) continue;
 
-                    var owner = sections.FirstOrDefault(s => s.Body.Contains(fence.Value, StringComparison.Ordinal)).Code;
+                    var owner = ranges.FirstOrDefault(r => fenceLine > r.Start && fenceLine < r.End).Code;
                     var earlyList = string.Join(", ", early.Select(c => "`" + c + "`"));
                     var message =
                         $"{(owner != null ? owner + " 섹션의" : "통합 문서의")} 실행 완료 게이트가 {earlyList}의 체크포인트·저널 `Succeeded` 를 요구하는데, " +

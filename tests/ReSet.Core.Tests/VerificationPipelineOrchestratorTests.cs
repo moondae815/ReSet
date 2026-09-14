@@ -8984,8 +8984,11 @@ SELECT 1;
         /// 이제 Critic 의 골격 지적도 L1 골격 수리와 같은 <b>패치</b>로 받는다: 직전 골격을 싣고 Critic 지적문으로 고치라고 한다.
         /// 판독: docs/audit-reports/2026-09-14-L1-귀속실패-측정.md 의 방침 A 절.
         /// </summary>
-        [Fact]
-        public async Task RunConsolidatedPipeline_CriticSkeletonDefect_PatchesThePreviousSkeletonAndFreezesSteps()
+        [Theory]
+        [InlineData("골격 V15 가 S18 결과 표 정의에 없는 컬럼 CheckCode 를 조회합니다.", true)]
+        // 지적문이 비면 패치할 내용이 없다 - 종전대로 백지(최종 리뷰 Minor).
+        [InlineData("", false)]
+        public async Task RunConsolidatedPipeline_CriticSkeletonDefect_PatchesThePreviousSkeletonAndFreezesSteps(string criticSkeletonComment, bool expectPatch)
         {
             var aiService = Substitute.For<IAiService>();
             aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -9016,7 +9019,6 @@ SELECT 1;
                     });
                 });
 
-            const string criticSkeletonComment = "골격 V15 가 S18 결과 표 정의에 없는 컬럼 CheckCode 를 조회합니다.";
             aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(
                     new ReviewResult { HasDefects = true, SkeletonDefective = true, FeedbackComment = criticSkeletonComment, ScoreAccuracy = 9, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 },
@@ -9037,6 +9039,11 @@ SELECT 1;
             // 골격이 두 번 만들어졌고, 두 번째가 패치다 - 직전 골격과 Critic 지적문을 싣는다(백지가 아니다).
             Assert.Equal(2, skeletonRevisions.Count);
             Assert.Null(skeletonRevisions[0]);
+            if (!expectPatch)
+            {
+                Assert.Null(skeletonRevisions[1]);
+                return;
+            }
             Assert.NotNull(skeletonRevisions[1]);
             Assert.Equal(SkeletonMarkdown, skeletonRevisions[1]!.PreviousSkeleton);
             Assert.Contains(criticSkeletonComment, skeletonRevisions[1]!.Feedback);

@@ -2968,9 +2968,10 @@ namespace ReSet.Core.Services
                             // [백지로 남는 경우] 이번 회차가 최고 후보를 못 넘어 되돌렸으면 lastSkeleton 은 이미 **다른 회차**의 골격이고,
                             // Critic 지적문은 버려진 골격에 대한 것이라 패치 재료가 아니다 - 종전대로 골격만 버린다. 그래서 패치가
                             // 점수를 못 올리면 다음 지적은 자연히 백지로 올라간다(L1 골격 수리의 연속 2 회 백지와 같은 방향).
-                            if (improvedThisAttempt && lastSkeleton != null)
+                            // 지적문이 비면 패치할 내용이 없다 - 백지로 둔다(최종 리뷰 Minor).
+                            if (improvedThisAttempt && lastSkeleton != null && !string.IsNullOrWhiteSpace(l2Result.FeedbackComment))
                             {
-                                pendingSkeletonRevision = new SkeletonRevision(l2Result.FeedbackComment ?? string.Empty, lastSkeleton, FromCritic: true);
+                                pendingSkeletonRevision = new SkeletonRevision(l2Result.FeedbackComment!, lastSkeleton, FromCritic: true);
                                 _userInteraction.NotifyStatus(
                                     $"[yellow]{jobName}[/] - 공통 규약과 단계 본문의 모순이 지적되어 직전 골격 위에서 그 자리만 고칩니다(골격 패치).");
                             }
