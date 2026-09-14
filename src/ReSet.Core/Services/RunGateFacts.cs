@@ -63,86 +63,11 @@ namespace ReSet.Core.Services
         /// <c>INSERT … VALUES</c> · <c>INSERT … SELECT</c> 의 그 칸 위치와 <c>MERGE … WHEN NOT MATCHED THEN INSERT (…) VALUES (…)</c> 만 본다.
         /// 처음엔 쓰기 문장 안의 <c>N'S01'</c> 을 전부 주워, <c>WHERE NOT EXISTS (… StepCode = N'S01')</c> 로 참조만 한 것까지 면제했다.
         /// </summary>
-        internal static IReadOnlySet<string> WrittenStepCodes(string sql)
-        {
-            var codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (string.IsNullOrWhiteSpace(sql)) return codes;
-
-            var tokens = new TSql160Parser(initialQuotedIdentifiers: true).GetTokenStream(new StringReader(sql), out var tokenErrors);
-            if (tokens == null || tokenErrors is { Count: > 0 }) return codes;
-
-            foreach (var (start, end, _) in StepSqlStatementReader.SplitAtTopLevelSemicolons(sql, tokens))
-            {
-                var chunk = sql.Substring(start, end - start);
-                if (string.IsNullOrWhiteSpace(chunk)) continue;
-
-                var fragment = new TSql160Parser(initialQuotedIdentifiers: true).Parse(new StringReader(chunk), out var errors);
-                if (fragment == null || errors is { Count: > 0 }) continue;
-
-                var visitor = new WriteVisitor();
-                fragment.Accept(visitor);
-                codes.UnionWith(visitor.Codes);
-            }
-
-            return codes;
-        }
-
-        private sealed class WriteVisitor : TSqlFragmentVisitor
-        {
-            internal HashSet<string> Codes { get; } = new(StringComparer.OrdinalIgnoreCase);
-
-            public override void ExplicitVisit(InsertStatement node)
-            {
-                if (IsGateTable(node.InsertSpecification?.Target))
-                    Collect(node.InsertSpecification!.Columns, node.InsertSpecification.InsertSource);
-                base.ExplicitVisit(node);
-            }
-
-            public override void ExplicitVisit(MergeStatement node)
-            {
-                if (IsGateTable(node.MergeSpecification?.Target))
-                {
-                    foreach (var action in node.MergeSpecification!.ActionClauses.Select(c => c.Action).OfType<InsertMergeAction>())
-                        Collect(action.Columns, action.Source);
-                }
-                base.ExplicitVisit(node);
-            }
-
-            private static bool IsGateTable(TableReference? reference) =>
-                reference is NamedTableReference named && named.SchemaObject?.BaseIdentifier?.Value is { } bare &&
-                GateTables.Contains(bare, StringComparer.OrdinalIgnoreCase);
-
-            private void Collect(IList<ColumnReferenceExpression> columns, InsertSource? source)
-            {
-                var position = columns.ToList().FindIndex(c => LastIdentifier(c)?.Equals("StepCode", StringComparison.OrdinalIgnoreCase) == true);
-                if (position < 0) return;
-
-                switch (source)
-                {
-                    case ValuesInsertSource values:
-                        foreach (var row in values.RowValues)
-                            if (row.ColumnValues.Count > position) Add(row.ColumnValues[position]);
-                        break;
-                    case SelectInsertSource select:
-                        foreach (var spec in Flatten(select.Select))
-                            if (spec.SelectElements.Count > position && spec.SelectElements[position] is SelectScalarExpression scalar) Add(scalar.Expression);
-                        break;
-                }
-            }
-
-            private void Add(ScalarExpression expression)
-            {
-                if (expression is StringLiteral { Value: var value } && StepCodeLiteral.IsMatch(value)) Codes.Add(value.ToUpperInvariant());
-            }
-
-            private static IEnumerable<QuerySpecification> Flatten(QueryExpression expression) => expression switch
-            {
-                QuerySpecification spec => new[] { spec },
-                BinaryQueryExpression binary => Flatten(binary.FirstQueryExpression).Concat(Flatten(binary.SecondQueryExpression)),
-                QueryParenthesisExpression parenthesis => Flatten(parenthesis.QueryExpression),
-                _ => Array.Empty<QuerySpecification>()
-            };
-        }
+        internal static IReadOnlySet<string> WrittenStepCodes(string sql) =>
+            InsertedColumnLiterals.Collect(sql, "StepCode", table => GateTables.Contains(table, StringComparer.OrdinalIgnoreCase))
+                .Where(value => StepCodeLiteral.IsMatch(value))
+                .Select(value => value.ToUpperInvariant())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         private static string? LastIdentifier(ColumnReferenceExpression column) =>
             column.MultiPartIdentifier?.Identifiers is { Count: > 0 } ids ? ids[^1].Value : null;

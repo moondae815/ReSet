@@ -884,10 +884,35 @@ namespace ReSet.Core.Services
             if (sectionsByStepCode == null || sectionsByStepCode.Count == 0) return defects;
             if (allSteps == null || allSteps.Count == 0) return defects;
 
-            var body = string.Join("\n", sectionsByStepCode.Values
+            var fences = sectionsByStepCode.Values
                 .Where(s => !string.IsNullOrWhiteSpace(s))
-                .SelectMany(RawCodeFenceBodies));
+                .SelectMany(RawCodeFenceBodies)
+                .ToList();
+            var body = string.Join("\n", fences);
             if (body.Length == 0) return defects;
+
+            // 「씀」 = 대입(`컬럼 = N'값'`) 또는 INSERT·MERGE 가 그 컬럼 위치에 넣는 리터럴.
+            // [2026-09-14 POQSettleBatch14 오탐] 대입만 세서 `INSERT INTO batch.BatchRun (…, RunStatus, …) VALUES (…, N'Running', …)` 를 못 보고
+            // S01 에 거짓 「하한 미달」 배너를 배송했다. 판독 docs/audit-reports/2026-09-14-T25-INSERT위치값-사전선언.md
+            //
+            // [표를 가린다 - 최종 리뷰 Important] 위치 값은 **그 계약 표(와 별칭)** 에 넣은 것만 센다. 표를 안 가리면 감사 표
+            // `dbo.BatchRunAudit(RunStatus)` 에 넣은 값이 진짜 누락을 가리고, 무관한 표의 `StepStatus` 가 없는 결함을 만든다.
+            // 표마다 한 번만 읽는다 - (표 × 값) 조합마다 펜스를 다시 파싱하지 않는다.
+            var positionalByTable = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+            IReadOnlyList<string> PositionalLiterals(ControlTable table)
+            {
+                if (positionalByTable.TryGetValue(table.Name, out var cached)) return cached;
+                var names = new[] { table.Name }.Concat(table.Aliases ?? Array.Empty<string>())
+                    .Select(n => n[(n.LastIndexOf('.') + 1)..])
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var literals = fences.SelectMany(fence => InsertedColumnLiterals.Collect(fence, table.StatusColumn!, names.Contains)).ToList();
+                positionalByTable[table.Name] = literals;
+                return literals;
+            }
+
+            int Writes(ControlTable table, string value) =>
+                CountStatusAssignments(body, table.StatusColumn!, value) +
+                PositionalLiterals(table).Count(literal => literal.Equals(value, StringComparison.OrdinalIgnoreCase));
 
             // 담당 단계: 계약이 FirstStepInserts 로 정한 표의 행 생성 단계.
             var ownerByTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -910,14 +935,12 @@ namespace ReSet.Core.Services
 
                 foreach (var value in column.AllowedValues)
                 {
-                    if (CountStatusAssignments(body, column.Name, value) > 0) continue;
+                    if (Writes(table, value) > 0) continue;
 
                     // 같은 값을 쓰는 다른 상태 컬럼이 하나라도 있어야 발화한다.
                     var alsoWrittenAs = BatchControlContract.Tables
                         .Where(t => !ReferenceEquals(t, table) && !string.IsNullOrWhiteSpace(t.StatusColumn))
-                        .Select(t => t.StatusColumn!)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .FirstOrDefault(other => CountStatusAssignments(body, other, value) > 0);
+                        .FirstOrDefault(other => Writes(other, value) > 0)?.StatusColumn;
                     if (alsoWrittenAs == null) continue;
 
                     var reason =

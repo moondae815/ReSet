@@ -48,6 +48,85 @@ namespace ReSet.Core.Tests
         private const string JournalsAFailure =
             "UPDATE batch.BatchStepJournal SET StepStatus = N'Failed' WHERE RunId = @r AND StepCode = @c;";
 
+        // ─────────────────────────────────────────────────────────────────────
+        // [INSERT 위치 값 - 2026-09-14 POQSettleBatch14 오탐] 쓰기를 `RunStatus = N'값'` 대입으로만 세서
+        // `INSERT … (…, RunStatus, …) VALUES (…, N'Running', …)` 로 쓴 것을 못 봤다 - S01 에 거짓 「하한 미달」 배너가 배송됐다.
+        // 판독: docs/audit-reports/2026-09-14-T25-INSERT위치값-사전선언.md
+        // ─────────────────────────────────────────────────────────────────────
+
+        private const string RunEndsBothWays =
+            "UPDATE batch.BatchRun SET RunStatus = N'Succeeded' WHERE RunId = @r;\n" +
+            "UPDATE batch.BatchRun SET RunStatus = N'Failed' WHERE RunId = @r;";
+
+        private const string JournalsRunning =
+            "UPDATE batch.BatchStepJournal SET StepStatus = N'Running' WHERE RunId = @r AND StepCode = @c;";
+
+        private static bool ReportsRunning(IReadOnlyDictionary<string, StepDefect> defects) =>
+            defects.Values.Any(d => d.Reason.Contains("`Running`"));
+
+        // T1: 실물 - B14 S01 은 위치 INSERT 로만 Running 을 쓴다. S16 은 StepStatus 에 Running 을 쓴다(발화 조건의 짝).
+        [Fact]
+        public void RealStepWritingRunningOnlyThroughAPositionalInsert_IsNotReportedForRunning()
+        {
+            string Fixture(string name) => File.ReadAllText(Path.Combine(
+                RepoPaths.FindRepoRoot(), "tests", "ReSet.Core.Tests", "Fixtures", "t25", name));
+            var s16 = new BatchStepPlan("S16", "최종", new string[0], new[] { "batch.BatchStepJournal" }, new[] { "-9160" }, false, new string[0]);
+            var sections = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["S01"] = Fixture("Batch14-S01.md"),
+                ["S16"] = Fixture("Batch14-S16.md"),
+            };
+
+            Assert.False(ReportsRunning(new MechanicalValidator().ValidateControlStatusTerminalWrites(sections, new[] { S01, s16 })));
+        }
+
+        // T2: 위치 쓰기 셋은 모두 「씀」이다.
+        [Theory]
+        [InlineData("INSERT INTO batch.BatchRun (JobName, BatchYmd, RunStatus) VALUES (@j, @y, N'Running');")]
+        [InlineData("INSERT INTO batch.BatchRun (JobName, BatchYmd, RunStatus) SELECT @j, @y, N'Running';")]
+        [InlineData("MERGE INTO batch.BatchRun AS T USING (SELECT @j AS JobName) AS S ON T.JobName = S.JobName WHEN NOT MATCHED THEN INSERT (JobName, BatchYmd, RunStatus) VALUES (S.JobName, @y, N'Running');")]
+        public void PositionalWritesCountAsWritingTheStatus(string insert)
+        {
+            var defects = new MechanicalValidator().ValidateControlStatusTerminalWrites(
+                Sections(insert + "\n" + RunEndsBothWays, JournalsRunning), Steps);
+
+            Assert.False(ReportsRunning(defects));
+        }
+
+        // T3: 양성 대조 - 같은 리터럴이라도 RunStatus 칸이 아니면 쓰기가 아니다 - 발화한다.
+        [Fact]
+        public void ALiteralInAnotherColumnOfTheInsert_IsNotAStatusWrite()
+        {
+            var defects = new MechanicalValidator().ValidateControlStatusTerminalWrites(
+                Sections("INSERT INTO batch.BatchRun (JobName, BatchYmd, ResumeFromStepCode) VALUES (@j, @y, N'Running');\n" + RunEndsBothWays, JournalsRunning),
+                Steps);
+
+            Assert.True(ReportsRunning(defects));
+        }
+
+        // [표를 가린다 - 최종 리뷰 Important] 계약 표가 아닌 표의 같은 이름 컬럼에 넣은 값은 그 상태 칸의 쓰기가 아니다.
+        // ① 감사 표 `dbo.BatchRunAudit(RunStatus)` 에 Failed 를 넣어도 BatchRun 의 Failed 누락은 그대로 발화한다(거짓 음성 방지).
+        [Fact]
+        public void APositionalWriteIntoAnUnrelatedTableWithTheSameColumnName_DoesNotSilenceTheDefect()
+        {
+            var defects = new MechanicalValidator().ValidateControlStatusTerminalWrites(
+                Sections(OpensAndSucceeds + "\nINSERT INTO dbo.BatchRunAudit (RunId, RunStatus, ChangedAtUtc) VALUES (@r, N'Failed', SYSUTCDATETIME());", JournalsAFailure),
+                Steps);
+
+            Assert.Contains("Failed", Assert.Contains("S01", defects).Reason);
+        }
+
+        // ② 무관한 표의 `StepStatus` 에 Restarting 을 넣어도 「다른 상태 컬럼엔 쓴다」가 되지 않는다(거짓 양성 방지).
+        [Fact]
+        public void APositionalWriteIntoAnUnrelatedTable_DoesNotCountAsAnotherStatusColumnWrite()
+        {
+            var defects = new MechanicalValidator().ValidateControlStatusTerminalWrites(
+                Sections(OpensAndSucceeds + "\n" + RunEndsBothWays, JournalsRunning + "\nINSERT INTO dbo.StageLog (StepStatus) VALUES (N'Restarting');"),
+                Steps);
+
+            Assert.DoesNotContain(defects.Values, d => d.Reason.Contains("`Restarting`"));
+        }
+
         [Fact]
         public void ReportsAStatusValueThatIsNeverWrittenToItsOwnColumnButIsWrittenElsewhere()
         {
