@@ -10,12 +10,23 @@ namespace ReSet.Core.Services
     /// 이 컬럼이 값을 스스로 발급하는가. batch.BatchRun.RunId만 참이다 -
     /// 발급 지점이 하나여야 실행 단위가 갈라지지 않는다.
     /// </param>
+    /// <param name="ReferencesRunId">
+    /// 이 컬럼이 <b>발급된</b> run id 를 담는가. 담는다면 그 값은 batch.BatchRun 에 행이 생긴
+    /// 뒤에만 존재하므로, 발급 절보다 먼저 도는 절은 이 컬럼에 쓸 수 없다
+    /// (<c>MechanicalValidator.CheckPreRunIdRunIdWrites</c> 가 그것을 본다).
+    ///
+    /// [왜 이름으로 짐작하지 않는가 - 2026-09-16] 관측된 이름이 RunId·OwnerRunId 둘이고,
+    /// 이름만 보면 발급 자리(batch.BatchRun.RunId)와 참조 자리가 같은 이름이다. 이 저장소가
+    /// 이름으로 성격을 짐작해 두 번 실패한 축이라(BatchControlContract 클래스 주석) 계약이
+    /// 직접 말한다. <see cref="IsIdentity"/>가 발급을, 이 축이 참조를 정한다 - 둘은 배타적이다.
+    /// </param>
     public sealed record ControlColumn(
         string Name,
         string SqlType,
         bool Nullable,
         IReadOnlyList<string>? AllowedValues = null,
-        bool IsIdentity = false);
+        bool IsIdentity = false,
+        bool ReferencesRunId = false);
 
     /// <summary>
     /// 제어 행을 누가 만드는가.
@@ -140,7 +151,7 @@ namespace ReSet.Core.Services
                 "batch.BatchStepJournal",
                 new[]
                 {
-                    new ControlColumn("RunId", "bigint", false),
+                    new ControlColumn("RunId", "bigint", false, ReferencesRunId: true),
                     new ControlColumn("StepCode", "nvarchar(10)", false),
                     new ControlColumn("StepStatus", "nvarchar(20)", false, StepStates),
                     new ControlColumn("LegacyReturnCode", "int", true),
@@ -156,7 +167,7 @@ namespace ReSet.Core.Services
                 "batch.BatchCheckpoint",
                 new[]
                 {
-                    new ControlColumn("RunId", "bigint", false),
+                    new ControlColumn("RunId", "bigint", false, ReferencesRunId: true),
                     new ControlColumn("StepCode", "nvarchar(10)", false),
                     new ControlColumn("CheckpointStatus", "nvarchar(20)", false, CheckpointStates),
                     new ControlColumn("CompletedAtUtc", "datetime2(3)", true)
@@ -169,7 +180,7 @@ namespace ReSet.Core.Services
                 "batch.BatchValidationIssue",
                 new[]
                 {
-                    new ControlColumn("RunId", "bigint", false),
+                    new ControlColumn("RunId", "bigint", false, ReferencesRunId: true),
                     new ControlColumn("StepCode", "nvarchar(10)", false),
                     new ControlColumn("IssueCode", "nvarchar(64)", false),
                     new ControlColumn("Severity", "nvarchar(20)", false,
@@ -194,7 +205,7 @@ namespace ReSet.Core.Services
                 "batch.BatchControlTotal",
                 new[]
                 {
-                    new ControlColumn("RunId", "bigint", false),
+                    new ControlColumn("RunId", "bigint", false, ReferencesRunId: true),
                     new ControlColumn("StepCode", "nvarchar(10)", false),
                     new ControlColumn("ControlName", "nvarchar(64)", false),
                     new ControlColumn("ControlValue", "decimal(38,4)", false),
@@ -216,7 +227,7 @@ namespace ReSet.Core.Services
                 {
                     new ControlColumn("JobName", "nvarchar(128)", false),
                     new ControlColumn("BatchYmd", "varchar(8)", false),
-                    new ControlColumn("OwnerRunId", "bigint", false),
+                    new ControlColumn("OwnerRunId", "bigint", false, ReferencesRunId: true),
                     new ControlColumn("LockStatus", "nvarchar(20)", false, LockStates),
                     new ControlColumn("AcquiredAtUtc", "datetime2(3)", false),
                     new ControlColumn("HeartbeatAtUtc", "datetime2(3)", true),
@@ -444,6 +455,19 @@ namespace ReSet.Core.Services
                 "so it writes NO step journal or checkpoint row (batch.BatchStepJournal, batch.BatchCheckpoint). " +
                 "A completion gate that requires steps to be 'Succeeded' for a run - a `StepCode IN (...)` list, " +
                 "a `VALUES` list of step codes, or a `BETWEEN` range - MUST NOT list such a step: that gate could never pass.");
+
+            // [발급 전 잠금 - 2026-09-16] 배송본 13 편 중 둘이 잠금 단계를 발급 절 앞에 두었고, OwnerRunId 가 NOT NULL 이라
+            // 하나는 예약값 0 을 지어냈고(B16) 하나는 「선행 설계 차단 사항」을 선언한 채 S02 에서 항상 죽는 계획서를 배송했다(B17).
+            // 나머지 11 편은 발급 절이나 그 뒤에서 잠금을 잡는다 - 이 문장은 다수가 이미 하는 모양을 계약으로 못박는 것이다.
+            // 판독 docs/audit-reports/2026-09-16-발급전-잠금-계약-사전선언.md
+            sb.AppendLine();
+            sb.AppendLine(
+                // 표 이름에 백틱을 달지 않는다 - 표 행 잠금 시험들이 백틱 이름으로 행을 골라낸다(이 문단은 행이 아니다).
+                "Run lock ownership: the step that INSERTs the run row, or a step after it, INSERTs the run lock row " +
+                "(batch.BatchRunLock) - never a step before it. OwnerRunId holds the issued run id, so " +
+                "never invent a placeholder or reserved value (0, -1) for it and never read it back as one. " +
+                "Detect a duplicate run where you take the lock: if the lock is already held by another run, " +
+                "close the run row you just created as failed and stop there.");
 
             return sb.ToString();
         }

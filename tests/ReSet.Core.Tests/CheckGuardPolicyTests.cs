@@ -214,8 +214,9 @@ namespace ReSet.Core.Tests
 
             // 31: 2026-09-10 에 CheckDocumentInstructsItsAuthor 가 무조건 검사로 더해졌다.
             Assert.Equal(31, counts["Validate"]);
-            // 11: 2026-09-16 에 CheckControlTableColumnContract(계약 밖 batch 표의 컬럼 계약 분열)가 더해졌다.
-            Assert.Equal(11, counts["ValidateConsolidated"]);
+            // 12: 2026-09-16 에 CheckControlTableColumnContract(계약 밖 batch 표의 컬럼 계약 분열)와
+            //     CheckPreRunIdRunIdWrites(발급 전 절이 run id 자리에 쓴다)가 차례로 더해졌다.
+            Assert.Equal(12, counts["ValidateConsolidated"]);
             // 27: 2026-09-11 에 CheckAnchoredStatementPredicateTerms(앵커 DML 최상위 술어 대조)가 더해졌다.
             // 28: 2026-09-12 에 CheckStepParameterTypeStated(규칙 5-2)가 더해졌다.
             // 29: 2026-09-13 에 CheckBatchControlTableAlias(제어 계약 표 별칭, K1)가 더해졌다.
