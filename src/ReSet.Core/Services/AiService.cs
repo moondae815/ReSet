@@ -5055,6 +5055,23 @@ Consolidate the provided specifications into a single unified batch job named '{
                 builder.AppendLine();
                 builder.Append(guardTable);
             }
+
+            // [조인 짝] 명세서 「조인 키」 칸은 컬럼 이름만 담아 어느 테이블끼리의 짝인지를 말하지 않는다. 그래서 GPT 판 다섯이
+            // 같은 자리에서 짝을 지어냈다(EXPECT_PROC UPDATE 11 에 `A.ClientID = B.ClientID` 를 더함, 판마다 재생성 1 회).
+            // 짝이 없으면 싣지 않는다 - 그 Job 프롬프트는 바이트 그대로다.
+            // 판독 docs/audit-reports/2026-09-16-조인짝-프롬프트-사전선언.md
+            var joinPairTable = StepInterfaceFacts.RenderJoinPairTable(stepInterfaces ?? Array.Empty<StepInterface>());
+            if (joinPairTable.Length > 0)
+            {
+                builder.AppendLine();
+                builder.AppendLine("[Original Join Pairs]");
+                builder.AppendLine("These are the equalities that joined the source tables in the original statements, read from their DDL.");
+                builder.AppendLine("Translate each statement with EXACTLY these pairs - do not add a pair the original did not have (an extra");
+                builder.AppendLine("self-join equality changes which rows the statement updates) and do not drop one. Table aliases are yours to choose;");
+                builder.AppendLine("the pairs below name the tables, not your aliases.");
+                builder.AppendLine();
+                builder.Append(joinPairTable);
+            }
         }
 
         public async Task<ReviewResult> ReviewConsolidatedPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string planMarkdown, string jobName, string? effort = null, CancellationToken cancellationToken = default,
