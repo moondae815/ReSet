@@ -120,9 +120,13 @@ public sealed class VerificationControlTotalNamesTests
         Assert.NotEmpty(Validate(Fixture("Batch17-verification.md"), null, ("S12", Fixture("Batch17-S12.md"))));
     }
 
-    // 「모름」 쓰기가 있을 때는 읽는 이름이 문서 어디에도 쓰이지 않아야 발화한다 - S12 가 그 이름을 쓰면 그 이름은 빠진다.
+    // 소유 단계가 그 이름을 쓰면 읽는 목록에서 빠진다.
+    // [판별력 없음 - 2026-09-16 리뷰 Minor 1] 이 사례는 조건 (c)(`NameWrittenNowhere`)를 꺼도 바로 아래
+    // `names.Overlaps(ownerNames)` 가 같은 결과를 내므로, 조건 (c) 를 재는 시험이 아니다(되돌림 n2 에서 초록).
+    // 조건 (c) 만이 잡는 자리는 `WithAnUnknownWrite_ANameAnotherStepWrites_IsNotReported` 다.
+    // 남기는 이유는 회귀 방지 - 두 경로가 함께 무너지면 이 시험이 먼저 빨개진다.
     [Fact]
-    public void WithAnUnknownWrite_AReadNameTheOwnerActuallyWrites_DropsOutOfTheReadList()
+    public void AReadNameTheOwnerActuallyWrites_DropsOutOfTheReadList()
     {
         var owner = Fixture("Batch17-S12.md").Replace("N'LedgerRowCount'", "N'Ledger.RowCount'");
         Assert.NotEqual(Fixture("Batch17-S12.md"), owner);
