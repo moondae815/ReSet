@@ -111,6 +111,7 @@ namespace ReSet.Core.Services
         ControlTotalWithoutOtherProducer,
         // 체크포인트·저널 게이트가 RunId 발급 단계보다 먼저 도는 단계를 요구한다 - 그 단계에는 이 실행의 행이 생길 수 없어 게이트가 늘 실패한다.
         GateRequiresStepBeforeRunId,
+        ControlTableColumnContract,
         General
     }
 
@@ -342,6 +343,7 @@ namespace ReSet.Core.Services
                 SafeCheck(() => CheckBatchRunRowCreation(cleansed, result));
                 SafeCheck(() => CheckControlTotalProducer(cleansed, result));
                 SafeCheck(() => CheckGateRequiresStepsBeforeRunId(cleansed, result));
+                SafeCheck(() => CheckControlTableColumnContract(cleansed, result));
                 SafeCheck(() => CheckLegacyReturnCodeBinding(cleansed, result));
                 // SQL 거처 축(규칙 3-1·10). 조사 §5의 A급 셋이다 - 그때까지 이 세
                 // 규칙은 기계 강제가 0건이었고, 프롬프트와 Critic 두 층만으로 서
@@ -11855,6 +11857,141 @@ namespace ReSet.Core.Services
                     });
                 }
             }
+        }
+
+        /// <summary>
+        /// 계약 <b>밖</b> <c>batch</c> 표를 이 문서가 스스로 만들고 스스로 <b>다른 컬럼으로</b> 읽는 것을 본다.
+        ///
+        /// [실물 - POQSettleBatch13 배송본] S18 이 `batch.BatchReconciliation` 을 `ReconciliationName`·`ExpectedValue`·`IsMatched` 로
+        /// 만들고, 검증 SQL 세트 V15 가 `CheckCode`·`CheckName`·`ResultStatus`·`DifferenceCount`·`DetailMessage` 를 읽는다 —
+        /// 다섯 중 하나도 정의에 없어 배포하면 컬럼 없음 오류이고, S19 의 게시 전제(`FAIL 없음`)를 평가할 수 없다.
+        /// Critic 1 차가 잡았지만 2 차가 골격을 통째로 다시 써 점수가 떨어져 <b>채택이 그 수정을 버렸다</b>.
+        ///
+        /// [왜 문서 층인가] 정의는 단계 절(S18)에 살고 참조는 검증 SQL 세트에 산다 - 단계 검사는 한 절만 보므로 이 어긋남을 볼 수 없다.
+        ///
+        /// [오라클·침묵 범위] <see cref="ControlTableColumnFacts"/> 가 소유한다 - 계약 표 제외 · 정의 없으면 침묵 · 다중 테이블 질의의
+        /// 비한정 컬럼 제외 · 동적 SQL 제외. 정의는 <c>CREATE TABLE</c> 과 <c>ALTER TABLE … ADD</c> 의 합집합이다(보수적).
+        ///
+        /// [처방] 「정의를 고치거나 조회 컬럼을 정의에 맞추라」 - 둘 다 SQL 변경이라 산문으로 새지 않는다.
+        /// 판독: docs/audit-reports/2026-09-16-제어표-컬럼계약-검사-사전선언.md
+        /// </summary>
+        private static void CheckControlTableColumnContract(string markdown, ValidationResult result)
+        {
+            if (string.IsNullOrWhiteSpace(markdown)) return;
+
+            var defined = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            var references = new List<(string Table, string Column, string Statement, int FenceLine)>();
+
+            foreach (Match fence in Regex.Matches(markdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                var sql = fence.Groups["sql"].Value;
+                var fenceLine = markdown.AsSpan(0, fence.Index).Count('\n');
+                var (definitions, refs) = ControlTableColumnFacts.Read(sql);
+
+                foreach (var definition in definitions)
+                {
+                    if (!defined.TryGetValue(definition.Table, out var columns))
+                    {
+                        columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        defined[definition.Table] = columns;
+                    }
+
+                    foreach (var column in definition.Columns) columns.Add(column);
+                }
+
+                foreach (var reference in refs)
+                {
+                    references.Add((reference.Table, reference.Column, reference.Statement, fenceLine));
+                }
+            }
+
+            if (defined.Count == 0 || references.Count == 0) return;
+
+            var ranges = StepSectionLineRanges(markdown);
+
+            // [자리마다 따로 연다 - 2026-09-16 최종 리뷰 I2] 표 하나로 묶으면 오케스트레이터가 OwnerStepCode 가 있는 오류에서
+            // 그 단계만 다시 만들고(§L1 귀속 루프) 절 밖(검증 세트·골격) 자리는 영영 안 열린 채 같은 위반으로 재시도를 태운다.
+            foreach (var group in references
+                         .Where(r => defined.ContainsKey(r.Table))
+                         .Select(r => (r.Table, r.Column, r.Statement, r.FenceLine,
+                             Owner: ranges.FirstOrDefault(x => r.FenceLine > x.Start && r.FenceLine < x.End).Code))
+                         .GroupBy(r => (r.Table, r.Owner), TableOwnerComparer)
+                         .OrderBy(g => g.Key.Table, StringComparer.Ordinal)
+                         .ThenBy(g => g.Key.Owner ?? string.Empty, StringComparer.Ordinal))
+            {
+                var columns = defined[group.Key.Table];
+                var unknown = group
+                    .Where(r => !columns.Contains(r.Column))
+                    .ToList();
+                if (unknown.Count == 0) continue;
+
+                var names = unknown.Select(u => u.Column).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(c => c, StringComparer.Ordinal).ToList();
+                var owner = group.Key.Owner;
+                var message =
+                    $"{(owner != null ? owner + " 섹션의" : "통합 문서의")} 문장이 `batch.{group.Key.Table}` 의 표 정의에 없는 컬럼 " +
+                    $"{string.Join(", ", names.Select(n => "`" + n + "`"))} 을(를) 씁니다. 이 문서가 정의한 컬럼은 " +
+                    $"{string.Join(", ", columns.OrderBy(c => c, StringComparer.Ordinal).Select(c => "`" + c + "`"))} 뿐입니다 - " +
+                    "배포하면 컬럼 없음 오류입니다. 표 정의를 고치거나 문장의 컬럼을 정의에 맞추십시오.";
+
+                result.Report(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.ControlTableColumnContract,
+                    Message = message,
+                    OwnerStepCode = owner,
+                    // owner 가 있어도 어휘를 싣는다 - 메시지 백틱만 남기면 귀속 기본 경로가 「문서가 정의한 컬럼」 목록까지
+                    // 어휘로 삼아 그 컬럼을 언급한 멀쩡한 단계를 연다(작성 계약 9).
+                    Lexemes = unknown
+                        .SelectMany(u => MarkdownSectionLocator.SplitLines(u.Statement))
+                        .Select(line => line.Trim())
+                        .Where(line => names.Any(n => line.Contains(n, StringComparison.OrdinalIgnoreCase)))
+                        .Distinct(StringComparer.Ordinal)
+                        .ToList()
+                });
+            }
+        }
+
+        private static readonly IEqualityComparer<(string Table, string? Owner)> TableOwnerComparer = new TableOwnerKeyComparer();
+
+        private sealed class TableOwnerKeyComparer : IEqualityComparer<(string Table, string? Owner)>
+        {
+            public bool Equals((string Table, string? Owner) x, (string Table, string? Owner) y) =>
+                string.Equals(x.Table, y.Table, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(x.Owner, y.Owner, StringComparison.OrdinalIgnoreCase);
+
+            public int GetHashCode((string Table, string? Owner) obj) =>
+                HashCode.Combine(obj.Table?.ToLowerInvariant(), obj.Owner?.ToLowerInvariant());
+        }
+
+        /// <summary>단계 절의 줄 범위. 문서 층 검사가 참조 자리를 단계에 귀속할 때 쓴다.</summary>
+        private static List<(string Code, int Start, int End)> StepSectionLineRanges(string markdown)
+        {
+            var ranges = new List<(string Code, int Start, int End)>();
+            var lines = MarkdownSectionLocator.SplitLines(markdown);
+            string? code = null;
+            var start = 0;
+
+            for (var i = 0; i <= lines.Count; i++)
+            {
+                var isHeading = i < lines.Count && Regex.IsMatch(lines[i], @"^#{1,3}\s");
+                if (i == lines.Count || isHeading)
+                {
+                    if (code != null) ranges.Add((code, start, i));
+                    code = null;
+                }
+
+                if (i >= lines.Count) break;
+
+                var step = Regex.Match(lines[i], @"^###\s*(?<code>S\d{2})\b");
+                if (step.Success)
+                {
+                    code = step.Groups["code"].Value;
+                    start = i;
+                }
+            }
+
+            return ranges;
         }
 
         /// <summary>
