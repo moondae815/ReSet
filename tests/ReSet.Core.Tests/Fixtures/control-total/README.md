@@ -33,3 +33,15 @@
 | 파일 | 원본 | 역할 |
 | :--- | :--- | :--- |
 | `Batch8-S22-attempt6.md` | `output/Jobs/POQSettleBatch8/raw/attempts/run-001/steps/S22.md`(manifest 상 6 차본 — L1 이 발화한 판) | 한 펜스에 `BatchStepJournal` 자기 제외 읽기와 `BatchControlTotal` INSERT 가 함께 있다 — 생산자 검사 음성(펜스 단위로 짝지어 거짓 발화했던 입력). 배송본 `Batch8-S22.md`(2 차본)와 다른 파일이다. 판독 `docs/audit-reports/2026-09-14-L1-귀속실패-측정.md` |
+
+## 조기 반환 좁히기 회차(2026-09-16) 추가
+
+| 파일 | 출처 | 담은 모양 |
+| :-- | :-- | :-- |
+| `Batch17-verification.md` | `output/Jobs/POQSettleBatch17/docs/BatchMigrationPlan.md` 의 `## 통합 데이터 정합성 검증 SQL 세트` 절 전체 | V09-01 이 S12 몫을 `Ledger.RowCount`·`Ledger.TxAmount` 로 읽고, 같은 세트에 `ControlName` 이 매개변수인 범용 헬퍼(`SQL_CAPTURE_CONTROL_TOTAL`)가 있다 — 그 「모름」 쓰기가 종전에 검사 전체를 껐다 |
+| `Batch17-S12.md` | 같은 문서의 `### S12` 절 | 쓰는 이름이 `LedgerRowCount`·`TxAmt`… 다 |
+| `Batch16-verification.md` | `POQSettleBatch16` 의 같은 절 | 세트가 `LedgerRowCount`… 를 **스스로 리터럴로 쓰고** 같은 이름으로 S12 몫을 읽는다(정당한 침묵) |
+| `Batch16-S12.md` | 같은 문서의 `### S12` 절 | 위 침묵의 상대 |
+| `Batch16-runtime-name-fence.md` | `POQSettleBatch16` 의 `N'Rule_' + R.RuleCode + N'_Rows'` 펜스 하나 | **SQL 은 실물이고 자리만 옮겼다** — 런타임 이어 붙이기 안전판을 가르는 재료(코퍼스 전수에서 이 모양은 셋: B13 둘 · B16 하나) |
+
+줄바꿈만 LF 로 정규화했고 그 밖의 바이트는 원문과 같다.
