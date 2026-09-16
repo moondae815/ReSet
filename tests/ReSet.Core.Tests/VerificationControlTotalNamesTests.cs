@@ -75,6 +75,87 @@ public sealed class VerificationControlTotalNamesTests
         Assert.Contains("`POQIncome`", error.Message);
     }
 
+    // ── 조기 반환을 이름 단위로 좁힌 회차(2026-09-16) ─────────────────────────────
+    // 판독: docs/audit-reports/2026-09-16-K2-검증세트-조기반환-사전선언.md
+
+    // R1 실물: B17 의 V09-01 이 S12 몫을 `Ledger.RowCount`·`Ledger.TxAmount` 로 읽는데 S12 는 `LedgerRowCount`·`TxAmt` 로 쓴다.
+    // 종전에는 같은 세트 안의 범용 헬퍼(`SQL_CAPTURE_CONTROL_TOTAL`, ControlName 이 매개변수)가 「쓰기」로 세어져
+    // 검사 전체가 조기 반환했다 - 배송본에 Critical 두 건이 실린 채 아무도 못 봤다.
+    [Fact]
+    public void Batch17_AParameterizedHelperInTheSet_NoLongerSilencesEveryRead()
+    {
+        var errors = Validate(Fixture("Batch17-verification.md"), null, ("S12", Fixture("Batch17-S12.md")));
+
+        Assert.NotEmpty(errors);
+        Assert.All(errors, e => Assert.Equal(ErrorType.VerificationControlTotalNameMismatch, e.Type));
+        var text = string.Join("\n", errors.Select(e => e.Message));
+        Assert.Contains("`Ledger.RowCount`", text);
+        Assert.Contains("`Ledger.TxAmount`", text);
+        Assert.Contains("`LedgerRowCount`", text);   // S12 가 실제로 쓰는 이름
+    }
+
+    // R2 실물 음성: B16 의 검증 세트는 `LedgerRowCount`… 를 **스스로 리터럴로 쓰고** 같은 이름으로 S12 몫을 읽는다.
+    // 그 행은 세트가 만들므로 S12 가 다른 이름을 쓰더라도 정당하다 - 이름이 세트의 쓰기 집합에 있으면 침묵한다.
+    [Fact]
+    public void Batch16_ReadingNamesTheSetItselfWrites_IsSilent()
+    {
+        Assert.Empty(Validate(Fixture("Batch16-verification.md"), null, ("S12", Fixture("Batch16-S12.md"))));
+    }
+
+    // R3 안전판: 이름을 런타임에 이어 붙이는 문서(`N'Rule_' + R.RuleCode + N'_Rows'`)는 「어디에도 안 쓰인 이름」을
+    // 근거로 쓸 수 없다 - 「모름」 쓰기가 함께 있으면 종전처럼 통째로 침묵한다.
+    // 재료는 실물 둘을 합친 것이다: B17 의 세트(모름 쓰기 있음) + B16 의 조합 펜스(자리만 옮겼다).
+    [Fact]
+    public void ASetThatBuildsNamesAtRuntime_StaysSilent()
+    {
+        var plan = Fixture("Batch17-verification.md") + "\n" + Fixture("Batch16-runtime-name-fence.md");
+
+        Assert.Empty(Validate(plan, null, ("S12", Fixture("Batch17-S12.md"))));
+    }
+
+    // R3 짝: 조합 펜스를 빼면 같은 입력이 발화한다 - 위 침묵이 안전판 때문임을 보인다.
+    [Fact]
+    public void TheSameSetWithoutTheRuntimeNameFence_IsReported()
+    {
+        Assert.NotEmpty(Validate(Fixture("Batch17-verification.md"), null, ("S12", Fixture("Batch17-S12.md"))));
+    }
+
+    // 소유 단계가 그 이름을 쓰면 읽는 목록에서 빠진다.
+    // [판별력 없음 - 2026-09-16 리뷰 Minor 1] 이 사례는 조건 (c)(`NameWrittenNowhere`)를 꺼도 바로 아래
+    // `names.Overlaps(ownerNames)` 가 같은 결과를 내므로, 조건 (c) 를 재는 시험이 아니다(되돌림 n2 에서 초록).
+    // 조건 (c) 만이 잡는 자리는 `WithAnUnknownWrite_ANameAnotherStepWrites_IsNotReported` 다.
+    // 남기는 이유는 회귀 방지 - 두 경로가 함께 무너지면 이 시험이 먼저 빨개진다.
+    [Fact]
+    public void AReadNameTheOwnerActuallyWrites_DropsOutOfTheReadList()
+    {
+        var owner = Fixture("Batch17-S12.md").Replace("N'LedgerRowCount'", "N'Ledger.RowCount'");
+        Assert.NotEqual(Fixture("Batch17-S12.md"), owner);
+
+        var errors = Validate(Fixture("Batch17-verification.md"), null, ("S12", owner));
+
+        // 읽는 이름 목록(「ControlName … 으로 읽는데」 앞)에서 빠진다 - 남는 발화는 Ledger.TxAmount 뿐이다.
+        var readLists = errors.Select(e => e.Message[..e.Message.IndexOf("(으)로 읽는데", StringComparison.Ordinal)]).ToList();
+        Assert.All(readLists, list => Assert.DoesNotContain("`Ledger.RowCount`", list));
+        Assert.Contains(readLists, list => list.Contains("`Ledger.TxAmount`", StringComparison.Ordinal));
+    }
+
+    // 조건 (c): 「모름」 쓰기가 있으면 읽는 이름이 **문서 어디에서도** 쓰이지 않아야 발화한다.
+    // 다른 단계가 그 이름을 쓰면 그 행은 실행 때 생기므로 고발하지 않는다 - 재료는 실물 둘(B17 S12 · B16 S12)이고
+    // B16 쪽 리터럴 하나를 읽는 이름으로 맞췄다(이 스위트가 쓰는 통제된 치환 방식 그대로다).
+    [Fact]
+    public void WithAnUnknownWrite_ANameAnotherStepWrites_IsNotReported()
+    {
+        var otherStep = Fixture("Batch16-S12.md").Replace("N'LedgerRowCount'", "N'Ledger.RowCount'");
+        Assert.NotEqual(Fixture("Batch16-S12.md"), otherStep);
+
+        var errors = Validate(Fixture("Batch17-verification.md"), null,
+            ("S12", Fixture("Batch17-S12.md")), ("S13", otherStep));
+
+        var readLists = errors.Select(e => e.Message[..e.Message.IndexOf("(으)로 읽는데", StringComparison.Ordinal)]).ToList();
+        Assert.All(readLists, list => Assert.DoesNotContain("`Ledger.RowCount`", list));
+        Assert.Contains(readLists, list => list.Contains("`Ledger.TxAmount`", StringComparison.Ordinal));
+    }
+
     // 양성 대조 짝 ①: V04 가 S11 의 이름으로 읽으면 조용하다 - 위 발화가 이름 불일치 때문임을 보인다(조인 모양 그대로).
     [Fact]
     public void Batch13_V04AfterReadingTheWritersNames_IsSilent()
@@ -148,9 +229,12 @@ public sealed class VerificationControlTotalNamesTests
         Assert.Contains("`TSettleMst.RowCount`", Assert.Single(Validate(inserted, null, ("S11", Fixture("Batch13-S11.md")))).Message);
     }
 
-    // [검증 세트가 제어 표에 스스로 쓴다 - 최종 리뷰 Minor 3] 검증 SQL 이 단계 코드를 달고 직접 쓴 뒤 되읽으면 그 행이 누구 몫인지 모른다 - 침묵.
+    // [검증 세트가 제어 표에 스스로 쓴다 - 최종 리뷰 Minor 3, 2026-09-16 에 이름 단위로 좁혔다]
+    // 검증 SQL 이 단계 코드를 달고 **그 이름으로** 직접 쓴 뒤 되읽으면 그 행은 세트가 만든 것이라 침묵한다.
+    // 종전에는 그런 쓰기가 하나라도 있으면 **세트의 다른 읽기까지** 통째로 껐다 - 그 과잉이 B17 의 진짜를 가렸다.
+    // 그래서 이 시험은 「쓴 이름은 조용하고, 안 쓴 이름은 계속 발화한다」로 바뀐다.
     [Fact]
-    public void VerificationSetThatWritesTheControlTableItself_IsSilent()
+    public void VerificationSetWritingOneNameItself_SilencesOnlyThatName()
     {
         var original = Fixture("Batch13-verification.md");
         var selfWriting = original.Replace(
@@ -159,7 +243,12 @@ public sealed class VerificationControlTotalNamesTests
             "VALUES (@p_runId, N'S11', N'TSettleMst.RowCount', 0, SYSUTCDATETIME());\n```\n");
         Assert.NotEqual(original, selfWriting);
 
-        Assert.Empty(Validate(selfWriting, null, ("S11", Fixture("Batch13-S11.md"))));
+        var message = Assert.Single(Validate(selfWriting, null, ("S11", Fixture("Batch13-S11.md")))).Message;
+
+        Assert.DoesNotContain("`TSettleMst.RowCount`", message);   // 세트가 스스로 쓴 이름
+        Assert.Contains("`TSettleMst.TxAmt`", message);            // 아무도 안 쓰는 이름은 계속 발화
+        Assert.Contains("`TSettleMst.CLTotal`", message);
+        Assert.Contains("`TSettleMst.PGTotal`", message);
     }
 
     // [귀속] 어휘는 검증 세트의 원문 줄이다 - 조립 문서에서 골격만 열고 단계는 열지 않는다(골격 패치 수리로 간다).

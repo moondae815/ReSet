@@ -1090,11 +1090,43 @@ namespace ReSet.Core.Services
             if (facts == null) return;
 
             var (verificationWrites, verificationReads) = ControlTotalNameFacts.Collect(verification, facts.TableNames);
-            // 검증 세트가 제어 표에 스스로 쓰면 그 행이 누구 몫인지 모른다(단계 코드를 달고 쓴 뒤 되읽는 모양) - 침묵한다(최종 리뷰 Minor 3).
-            if (verificationWrites.Count > 0) return;
+
+            // [조기 반환을 이름 단위로 좁혔다 - 2026-09-16] 종전에는 검증 세트에 쓰기가 하나라도 있으면 검사 전체를 껐다
+            // (「그 행이 누구 몫인지 모른다」). 실측: POQSettleBatch17 의 세트에 `ControlName` 이 매개변수인 범용 헬퍼
+            // 펜스 하나가 있어 V09-01 의 진짜 불일치(S12 몫을 `Ledger.RowCount` 로 읽는데 S12 는 `LedgerRowCount` 로 쓴다)가
+            // 통째로 가려졌고 Critical 두 건이 배송됐다. 배송본 13 편 중 이 조기 반환이 진짜를 가린 자리는 그 하나다
+            // (B12·B14·B15 는 몫 있는 읽기가 0 이라 무해). 판독: docs/audit-reports/2026-09-16-K2-검증세트-조기반환-사전선언.md
+            //
+            // ① 세트가 **리터럴 이름으로** 쓰는 이름: 그 행은 세트가 만드므로 같은 이름을 읽는 것은 정당하다 - 계속 침묵(B16 실물).
+            var namesTheSetWrites = verificationWrites
+                .SelectMany(write => write.Names)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            // ② 이름을 **모르고** 쓰는 쓰기(매개변수)가 있으면 세트가 무엇이든 쓸 수 있다. 그때는 근거를 하나 더 요구한다 -
+            //    읽는 이름이 이 계획서 어디에서도 쓰이지 않아야 한다(아래 NameWrittenNowhere).
+            var hasUnknownWrite = verificationWrites.Any(write => write.Unknown);
+
+            // ③ 안전판: 이름을 런타임에 이어 붙이는 문서(`N'Rule_' + R.RuleCode + N'_Rows'` - 코퍼스에 셋)는 ② 의 근거가
+            //    거짓이 될 수 있다(리터럴로 안 나와도 실행 때 그 이름이 만들어진다). 그런 문서는 종전처럼 통째로 침묵한다.
+            if (hasUnknownWrite && ControlNameBuiltAtRuntimeRegex.IsMatch(planMarkdown)) return;
+
+            var namesWrittenAnywhere = facts.Written.Values
+                .SelectMany(set => set)
+                .Concat(namesTheSetWrites)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            bool NameWrittenNowhere(string name) =>
+                !namesWrittenAnywhere.Contains(name)
+                // 헬퍼 호출이 이름을 리터럴로 넘기는 자리는 SQL 밖(의사코드 펜스)에 있을 수 있다 - 거기 나오면 침묵한다.
+                && !MentionedInNonSqlFences(planMarkdown, name);
+
             foreach (var read in verificationReads)
             {
-                var names = new HashSet<string>(read.Names, StringComparer.OrdinalIgnoreCase);
+                var names = new HashSet<string>(
+                    read.Names.Where(name => !namesTheSetWrites.Contains(name)
+                                             && (!hasUnknownWrite || NameWrittenNowhere(name))),
+                    StringComparer.OrdinalIgnoreCase);
+                if (names.Count == 0) continue;
                 foreach (var owner in read.Owners.Where(o => StepCodeLiteralRegex.IsMatch(o)).OrderBy(o => o, StringComparer.Ordinal))
                 {
                     if (facts.OwnerNamesOrNull(owner) is not { } ownerNames) continue;
@@ -1136,6 +1168,7 @@ namespace ReSet.Core.Services
         }
 
         /// <summary>K2 두 판(단계·검증 세트)이 같이 쓰는 재료. 단계 섹션의 쓰기 이름·「모름」 단계·읽기. 재료가 없으면 null.</summary>
+
         private static ControlTotalFacts? CollectControlTotalFacts(
             IReadOnlyDictionary<string, string>? sectionsByStepCode, IReadOnlyList<BatchStepPlan>? allSteps)
         {
@@ -1190,6 +1223,43 @@ namespace ReSet.Core.Services
             /// <summary>이 단계가 쓰는 이름. 「모름」이거나 쓰는 이름이 없으면 null - 누구와 맞대야 할지 몰라 침묵한다.</summary>
             internal HashSet<string>? OwnerNamesOrNull(string owner) =>
                 !UnknownWriters.Contains(owner) && Written.TryGetValue(owner, out var names) && names.Count > 0 ? names : null;
+        }
+
+        /// <summary>
+        /// <c>ControlName</c> 자리에 <b>런타임 문자열 조합</b>이 들어가는가. 코퍼스 실측 셋 -
+        /// <c>ControlName = P.ReconciliationName + N'.Expected'</c>(B13 둘) · <c>N'Rule_' + R.RuleCode + N'_Rows'</c>(B16).
+        /// 이 모양이 있으면 「이 이름은 문서 어디에도 안 쓰인다」가 거짓이 될 수 있어 판정을 접는다.
+        /// </summary>
+        private static readonly Regex ControlNameBuiltAtRuntimeRegex = new(
+            @"ControlName[^\n;]{0,160}?(?:\+\s*N?'|N?'[^']*'\s*\+|CONCAT\s*\()",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static readonly Regex NonSqlFenceRegex = new(
+            @"```(?<lang>[^\n`]*)\n(?<body>.*?)```", RegexOptions.Singleline | RegexOptions.Compiled);
+
+        /// <summary>
+        /// SQL 이 아닌 펜스(의사코드·C#)가 이 이름을 인용 리터럴로 담고 있는가. 범용 헬퍼에 이름을 넘기는 호출이
+        /// 그 자리에 있으면, 리터럴 INSERT 가 없어도 실행 때 그 이름의 행이 생긴다 - 그때는 고발하지 않는다.
+        ///
+        /// [코퍼스 도달 0 · 시험 없음 - 2026-09-16 실측] 배송본 13 편의 비 SQL 펜스 전수에서 통제명을 리터럴로 넘기는
+        /// 호출 자리는 **0** 이다(`controlName:`·`p_controlName =` 모양 전수 검색). 그래서 이 가지를 걷어내도 빨개지는
+        /// 시험이 없다(되돌림 n4 생존). 남기는 이유는 방향이다 - 이 가지는 발화를 **줄이기만** 하고, 그 모양이 나오면
+        /// 막는 것이 오탐으로 재시도를 태우는 것보다 싸다. 실물이 생기면 그때 가르는 시험을 붙여라.
+        /// </summary>
+        private static bool MentionedInNonSqlFences(string markdown, string name)
+        {
+            foreach (Match fence in NonSqlFenceRegex.Matches(markdown))
+            {
+                if (fence.Groups["lang"].Value.Trim().StartsWith("sql", StringComparison.OrdinalIgnoreCase)) continue;
+                var body = fence.Groups["body"].Value;
+                if (body.Contains("'" + name + "'", StringComparison.OrdinalIgnoreCase)
+                    || body.Contains("\"" + name + "\"", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>이름 중 하나를 문자열 리터럴(<c>'이름'</c>)로 담는 원문 줄(앞뒤 공백 제거·중복 제거). 귀속 어휘다(작성 계약 9).</summary>
