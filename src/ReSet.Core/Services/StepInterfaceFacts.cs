@@ -12,7 +12,14 @@ namespace ReSet.Core.Services
         string StepCode,
         IReadOnlyList<string> Procedures,
         IReadOnlyList<string> Parameters,
-        IReadOnlyList<StepGuard>? Guards = null);
+        IReadOnlyList<StepGuard>? Guards = null,
+        IReadOnlyList<StepJoinPairs>? JoinPairs = null);
+
+    /// <summary>
+    /// 원본 한 문장의 조인 짝. <paramref name="Pairs"/> 는 검사 N5 가 쓰는 정규형(<c>TableA.Col=TableB.Col</c>)이고,
+    /// 문장은 <c>(종류, 서수, 대상)</c> 으로 가리킨다 - 서수의 유일한 출처는 <c>DmlScopeExtractor.BuildStatementOrdinals</c> 다.
+    /// </summary>
+    public sealed record StepJoinPairs(string Kind, int Ordinal, string Target, IReadOnlyList<string> Pairs);
 
     /// <summary>
     /// 원본 가드 한 줄. <paramref name="Where"/> 는 WHERE 최상위 항의 원문을 AND 로 이은 것(공백 접힘),
@@ -250,6 +257,7 @@ namespace ReSet.Core.Services
                 var procedures = new List<string>();
                 var parameters = new List<string>();
                 var guards = new List<StepGuard>();
+                var joinPairs = new List<StepJoinPairs>();
 
                 foreach (var legacy in step.LegacyProcedures ?? (IReadOnlyList<string>)Array.Empty<string>())
                 {
@@ -284,9 +292,27 @@ namespace ReSet.Core.Services
                     }
                 }
 
+                // [조인 짝] 검사 N5 가 쓰는 재료를 그대로 읽는다 - 서수·대상 키 규약을 두 벌 두면 조용히 갈린다
+                // (BuildOriginalJoinPairs 주석). 명세서 「조인 키」 칸은 컬럼 이름만 담아 어느 테이블끼리의 짝인지를
+                // 말하지 않고, GPT 판 다섯이 그 자리에서 짝을 지어냈다(EXPECT_PROC UPDATE 11 에 A.ClientID = B.ClientID).
+                // 판독: docs/audit-reports/2026-09-16-조인짝-프롬프트-사전선언.md
+                if (ddlByProcedure is { Count: > 0 })
+                {
+                    foreach (var ((kind, ordinal, target), pairs) in MechanicalValidator.BuildOriginalJoinPairs(step, ddlByProcedure)
+                                 .OrderBy(e => e.Key.Kind, StringComparer.Ordinal)
+                                 .ThenBy(e => e.Key.Ordinal))
+                    {
+                        if (pairs.Count == 0) continue;
+                        joinPairs.Add(new StepJoinPairs(kind, ordinal, target, pairs));
+                    }
+                }
+
                 if (parameters.Count > 0)
                 {
-                    result.Add(new StepInterface(step.Code, procedures, parameters, guards.Count > 0 ? guards : null));
+                    result.Add(new StepInterface(
+                        step.Code, procedures, parameters,
+                        guards.Count > 0 ? guards : null,
+                        joinPairs.Count > 0 ? joinPairs : null));
                 }
             }
 
@@ -350,6 +376,33 @@ namespace ReSet.Core.Services
                 sb.AppendLine(
                     $"| {code} | {guard.Procedure} | {guard.Line} | {(guard.Negated ? "IF NOT EXISTS" : "IF EXISTS")} | {guard.Table} | `{guard.Where}` | " +
                     $"{(guard.SelectColumns.Count > 0 ? string.Join(", ", guard.SelectColumns.Select(c => "`" + c + "`")) : "-")} |");
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 원본 조인 짝 표. 가드 표와 같은 이유로 **전 단계** 것을 통째로 싣는다(공유 접두사 캐시 — 단계마다 갈리면 단계 수만큼
+        /// 캐시 미스가 난다). 짝이 없으면 빈 문자열 - 절을 싣지 않는다.
+        ///
+        /// [빈 짝은 행을 만들지 않는다] 짝이 0 인 문장에 빈 칸 행을 내면 그 행이 「이 문장에는 조인이 없다」는 <b>거짓 사실</b>이 된다 —
+        /// 추출기는 문장의 최상위 FROM/JOIN 만 읽어, 파생 테이블·UNION 갈래 안의 조인은 못 본다(코퍼스 실측: INSERT 21/21 ·
+        /// SELECT 10/10 이 짝 0). 그래서 <see cref="Build"/> 가 빈 짝을 아예 담지 않고, 프롬프트 머리글이 「표에 없는 문장이
+        /// 조인 없는 문장은 아니다」를 밝힌다.
+        /// </summary>
+        public static string RenderJoinPairTable(IReadOnlyList<StepInterface> interfaces)
+        {
+            var rows = (interfaces ?? Array.Empty<StepInterface>())
+                .SelectMany(i => (i.JoinPairs ?? Array.Empty<StepJoinPairs>()).Select(j => (i.StepCode, Join: j)))
+                .ToList();
+            if (rows.Count == 0) return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine("| Step | Statement | Target | Join pairs (exact) |");
+            sb.AppendLine("|---|---|---|---|");
+            foreach (var (code, join) in rows)
+            {
+                sb.AppendLine($"| {code} | {join.Kind} {join.Ordinal} | {join.Target} | `{string.Join(" AND ", join.Pairs)}` |");
             }
 
             return sb.ToString();
