@@ -317,6 +317,39 @@ namespace ReSet.Core.Services
 
             /// <summary>R2 - 변수 이름은 이행 자유도다(<c>@pi_strYMD</c> ↔ <c>@p_batchYmd</c>).</summary>
             public override void Visit(VariableReference node) => Replaced[node.FirstTokenIndex] = "@V";
+
+            /// <summary>
+            /// R8(2026-09-16) - <b>함수 인자를 감싼 괄호</b>는 대조 키에서 지운다. 인자는 쉼표로 이미 갈려 있어
+            /// 괄호가 우선순위를 바꾸지 않으므로 잃는 정보가 없다.
+            ///
+            /// [실물] 원본 <c>UP_UTIL_SETTLE_EXCEPTION_PROC</c> UPDATE 3 의 최상위 술어는
+            /// <c>dbo.UF_GET_CLIENTSECTIONRATE(A.CLIENTID,A.PGNAME,A.MALLID,(A.TXAMT-ISNULL(A.NonSettleAmt,0))) &lt;&gt; 0</c> 이고
+            /// GPT 판 여섯은 그 인자 괄호만 뺀 같은 식을 썼다. 토큰을 이어 붙이는 정규화(<see cref="RenderNormalizedTokens"/>)가
+            /// <c>(</c>·<c>)</c> 를 키에 담아 <b>여섯 판 전부</b>가 「원본에 없는 최상위 술어」로 재생성됐다(판 안 발화 7 중 6).
+            ///
+            /// [왜 모든 괄호가 아닌가] 모든 <see cref="ParenthesisExpression"/> 의 괄호를 지우면 <c>(A + B) * C</c> 와
+            /// <c>A + (B * C)</c> 가 같은 키가 된다 - 우선순위가 사라져 다른 식을 같다고 말한다. 그래서 코퍼스가 실제로 낸
+            /// 자리(함수 인자)만 좁혀 지운다.
+            /// 판독: docs/audit-reports/2026-09-16-술어항-괄호정규화-사전선언.md
+            /// </summary>
+            public override void Visit(FunctionCall node)
+            {
+                foreach (var parameter in node.Parameters ?? (IList<ScalarExpression>)Array.Empty<ScalarExpression>())
+                {
+                    DropArgumentParentheses(parameter);
+                }
+            }
+
+            /// <summary>인자가 괄호식이면 그 여는·닫는 괄호를 버리고, 중첩이면 안쪽까지 내려간다.</summary>
+            private void DropArgumentParentheses(ScalarExpression? parameter)
+            {
+                while (parameter is ParenthesisExpression parenthesis)
+                {
+                    if (parenthesis.FirstTokenIndex >= 0) Dropped.Add(parenthesis.FirstTokenIndex);
+                    if (parenthesis.LastTokenIndex >= 0) Dropped.Add(parenthesis.LastTokenIndex);
+                    parameter = parenthesis.Expression;
+                }
+            }
         }
 
         private sealed class PredicateVariableCollector : TSqlFragmentVisitor
