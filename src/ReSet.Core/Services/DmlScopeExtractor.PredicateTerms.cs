@@ -329,7 +329,13 @@ namespace ReSet.Core.Services
             ///
             /// [왜 모든 괄호가 아닌가] 모든 <see cref="ParenthesisExpression"/> 의 괄호를 지우면 <c>(A + B) * C</c> 와
             /// <c>A + (B * C)</c> 가 같은 키가 된다 - 우선순위가 사라져 다른 식을 같다고 말한다. 그래서 코퍼스가 실제로 낸
-            /// 자리(함수 인자)만 좁혀 지운다.
+            /// 자리(함수 인자)만 좁혀 지운다. 인자 <b>안</b>의 우선순위 괄호는 그대로다(<c>F((A+B)*C)</c> ≠ <c>F(A+(B*C))</c>).
+            ///
+            /// [도달 범위는 <see cref="FunctionCall"/> 뿐이다 - 2026-09-16 실측] ScriptDom 에서 <c>CAST</c>·<c>CONVERT</c>·
+            /// <c>IIF</c>·<c>COALESCE</c>·<c>NULLIF</c> 는 <see cref="FunctionCall"/> 이 아니라 별 노드다(<c>CastCall</c>·
+            /// <c>IIfCall</c>·<c>CoalesceExpression</c>…). 그래서 <c>CAST((A-B) AS INT)</c> ↔ <c>CAST(A-B AS INT)</c> 같은
+            /// 모양은 <b>여전히 다른 키</b>다. <c>ISNULL</c>·<c>SUM</c>·사용자 함수(중첩 포함)는 덮인다. 원본 DDL 31 편과
+            /// 배송 단계 SQL 펜스 1181 개에서 덮이지 않는 자리는 <b>0</b> 이라 좁은 규칙을 유지한다 - 코퍼스가 낼 때 넓힌다.
             /// 판독: docs/audit-reports/2026-09-16-술어항-괄호정규화-사전선언.md
             /// </summary>
             public override void Visit(FunctionCall node)
@@ -340,7 +346,12 @@ namespace ReSet.Core.Services
                 }
             }
 
-            /// <summary>인자가 괄호식이면 그 여는·닫는 괄호를 버리고, 중첩이면 안쪽까지 내려간다.</summary>
+            /// <summary>
+            /// 인자가 괄호식이면 그 여는·닫는 괄호를 버리고, 중첩이면 안쪽까지 내려간다.
+            /// 토큰 인덱스 음수 검사는 <b>방어</b>다 - 파싱된 <see cref="ParenthesisExpression"/> 으로는 도달할 수 없고
+            /// (그 가지만 침묵시킬 입력이 없어 시험도 없다), 음수여도 <see cref="RenderNormalizedTokens"/> 의 루프가
+            /// 조각의 첫 토큰부터 도므로 무해하다.
+            /// </summary>
             private void DropArgumentParentheses(ScalarExpression? parameter)
             {
                 while (parameter is ParenthesisExpression parenthesis)

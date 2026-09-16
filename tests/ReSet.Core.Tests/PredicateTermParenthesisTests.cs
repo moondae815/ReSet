@@ -74,6 +74,27 @@ public sealed class PredicateTermParenthesisTests
             Assert.Single(Keys("UPDATE T SET C = 1 WHERE dbo.F(A, ((B - C))) <> 0;")),
             Assert.Single(Keys("UPDATE T SET C = 1 WHERE dbo.F(A, B - C) <> 0;")));
 
+    // [알려진 한계 - 2026-09-16 최종 리뷰 Minor 3] 도달 범위는 ScriptDom 의 FunctionCall 뿐이다. CAST·COALESCE·IIF 는
+    // 별 노드라 같은 괄호 차이가 여전히 다른 키다 - 코퍼스(원본 DDL 31 편 · 배송 단계 펜스 1181 개) 도달 0 이라 좁게 뒀다.
+    // 이 시험은 그 경계를 못박는다. 넓히는 날 이 시험이 빨개지면 기대값을 Equal 로 바꾸고 이 주석을 지워라.
+    [Theory]
+    [InlineData("CAST((A - B) AS INT) = 1", "CAST(A - B AS INT) = 1")]
+    [InlineData("COALESCE(A, (B - C)) = 1", "COALESCE(A, B - C) = 1")]
+    [InlineData("IIF(A = 1, (B - C), 0) = 1", "IIF(A = 1, B - C, 0) = 1")]
+    public void NonFunctionCallNodesAreNotCoveredYet(string withParentheses, string without) =>
+        Assert.NotEqual(
+            Assert.Single(Keys($"UPDATE T SET X = 1 WHERE {withParentheses};")),
+            Assert.Single(Keys($"UPDATE T SET X = 1 WHERE {without};")));
+
+    // ISNULL·사용자 함수는 FunctionCall 이라 덮인다 - 위 한계와 경계를 갈라 못박는다.
+    [Theory]
+    [InlineData("ISNULL(A, (B - C)) = 1", "ISNULL(A, B - C) = 1")]
+    [InlineData("dbo.F(A, dbo.G((B - C))) = 1", "dbo.F(A, dbo.G(B - C)) = 1")]
+    public void FunctionCallNodesAreCovered(string withParentheses, string without) =>
+        Assert.Equal(
+            Assert.Single(Keys($"UPDATE T SET X = 1 WHERE {withParentheses};")),
+            Assert.Single(Keys($"UPDATE T SET X = 1 WHERE {without};")));
+
     // R3: 원본에 없는 항은 계속 다르다 - B11 S10 UPDATE 9 가 더한 실물 모양이다.
     [Fact]
     public void ATermTheOriginalDoesNotHave_StaysDifferent()
