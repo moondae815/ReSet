@@ -5068,7 +5068,11 @@ Consolidate the provided specifications into a single unified batch job named '{
                 builder.AppendLine("These are the equalities that joined the source tables in the original statements, read from their DDL.");
                 builder.AppendLine("Translate each statement with EXACTLY these pairs - do not add a pair the original did not have (an extra");
                 builder.AppendLine("self-join equality changes which rows the statement updates) and do not drop one. Table aliases are yours to choose;");
-                builder.AppendLine("the pairs below name the tables, not your aliases.");
+                builder.AppendLine("the pairs below name the tables, not your aliases. A pair naming the same table on both sides is a self-join:");
+                builder.AppendLine("keep the original's two instances and the direction the pair states.");
+                builder.AppendLine("A statement missing from this table is NOT a statement without joins - the reader only reaches the top-level");
+                builder.AppendLine("FROM/JOIN of a statement, so joins written inside a derived table or a UNION branch are absent here. Read the");
+                builder.AppendLine("specification for those.");
                 builder.AppendLine();
                 builder.Append(joinPairTable);
             }

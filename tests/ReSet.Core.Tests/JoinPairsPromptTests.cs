@@ -107,6 +107,58 @@ public sealed class JoinPairsPromptTests
         Assert.DoesNotContain("[Original Join Pairs]", result.UserPrompt + result.SystemPrompt);
     }
 
+    // [최종 리뷰 Important 3] 표는 **Job 전체** 것이어야 한다 - 단계마다 갈리면 단계 수만큼 프롬프트 접두사가 달라져 캐시가
+    // 전부 미스인데 산출물은 그대로다(되돌림으로 재 보니 「첫 단계 행만」으로 바꿔도 전 수트가 초록이었다).
+    [Fact]
+    public async Task TheTableIsJobWide_SoTheSharedPrefixIsTheSameForEveryStep()
+    {
+        var twoSteps = new[]
+        {
+            Steps[0],
+            new BatchStepPlan("S12", "요약", new[] { "dbo.UP_Util_Settle_Summary" }, new[] { "dbo.TSettleByTX" }, new[] { "-1" }, false, Array.Empty<string>()),
+        };
+        var interfaces = StepInterfaceFacts.Build(
+            twoSteps,
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                [Procedure] = new[] { "@pi_strYMD char(8)" },
+                ["dbo.UP_Util_Settle_Summary"] = new[] { "@pi_strYMD char(8)" },
+            },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_UTIL_SETTLE_EXPECT_PROC"] = Ddl(),
+                ["UP_Util_Settle_Summary"] = SummaryDdl,
+            });
+
+        // S12 를 만드는 요청도 S09 의 행을 싣는다 - 두 요청의 접두사가 같아야 캐시가 산다.
+        var forS12 = await Service().GenerateBatchStepSectionAsync(twoSteps[1], twoSteps, "공통 규약", Specs, interfaces, "C#", "Job_Test");
+        var prompt = forS12.UserPrompt + forS12.SystemPrompt;
+
+        Assert.Contains("| S09 | UPDATE 11 |", prompt);
+        Assert.Contains("| S12 | UPDATE 1 |", prompt);
+    }
+
+    private const string SummaryDdl = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary @pi_strYMD CHAR(8)
+AS
+BEGIN
+    UPDATE A SET A.Amt = B.Amt
+      FROM dbo.TSettleByTX A JOIN dbo.TSettleMst B ON A.PLTID = B.PLTID
+     WHERE A.YMD = @pi_strYMD;
+END";
+
+    // [최종 리뷰 Minor] 짝이 0 인 문장은 행을 만들지 않는다 - 빈 칸 행은 「조인 없음」이라는 거짓 사실이 된다.
+    [Fact]
+    public void StatementsWithoutJoins_GetNoRow()
+    {
+        var table = StepInterfaceFacts.RenderJoinPairTable(Interfaces());
+
+        // 실물 EXPECT_PROC 의 UPDATE 5·10 은 조인이 없다(명세서 「조인 키」 칸도 「(없음)」이다).
+        Assert.DoesNotContain("| S09 | UPDATE 5 |", table);
+        Assert.DoesNotContain("| S09 | UPDATE 10 |", table);
+        Assert.DoesNotContain("``", table);
+    }
+
     // J4: 재료는 검사와 같은 출처다 - 렌더가 자기 추출기를 새로 만들면 두 채번이 조용히 갈린다.
     [Fact]
     public void TheMaterialComesFromTheCheckSOwnBuilder()
