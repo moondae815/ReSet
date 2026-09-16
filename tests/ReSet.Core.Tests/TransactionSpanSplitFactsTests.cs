@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using NSubstitute;
 using ReSet.Core.Models;
 using ReSet.Core.Services;
 using ReSet.Core.Services.Clients;
@@ -167,6 +168,109 @@ END";
         Assert.Contains("S11", item);
         Assert.Contains("S12", item);
         Assert.Contains("do NOT report it", item);
+    }
+
+    // 최종 리뷰 Important 2: 같은 호출자 SP 를 여러 단계가 나눠 맡으면 같은 트랜잭션을 여러 번 묻지 않는다
+    // (실물 B8 은 S15~S18 이 같은 SP 를 물어 항목 8 개였다). 한 항목에 단계 코드를 나열한다.
+    [Fact]
+    public void SplitsOfTheSameProcedurePairBecomeOneConfirmationItem()
+    {
+        var splits = Find(
+            new[] { SummaryStep("S11"), SummaryStep("S13"), CalleeStep("S12") }, DdlMap());
+        Assert.Equal(2, splits.Count);
+
+        var item = Assert.Single(TransactionSpanSplitFacts.ConfirmationItems(splits));
+
+        Assert.Contains("S11, S13", item);
+        Assert.Contains("S12", item);
+    }
+
+    // 최종 리뷰 Minor 4 - 침묵 셋. 다만 되돌림으로 재 보니 <b>결과를 만드는 가지가 하나뿐</b>이다:
+    // DML 0 면제는 되돌리면 빨개지고(m7), 구간 유효성(spanTo <= spanFrom)과 자기호출 면제는 되돌려도 초록이다
+    // (m8·m9) — 구간 밖 호출 범위 검사와 「피호출자가 자기 트랜잭션을 가졌다」 면제가 먼저 거르기 때문이다.
+    // 그 둘은 main 에서 물려받은 방어 가지이고, 아래 두 시험은 가지가 아니라 <b>결과</b>(그 입력에서 침묵한다)를 못박는다.
+    [Fact]
+    public void ACalleeWithoutDml_IsNotFound()
+    {
+        // 쓰기가 없으면 잃을 원자성이 없다. `SELECT` 는 DmlScopeExtractor 가 세므로 쓰기 없는 실물 모양은
+        // 변수 대입뿐인 절차다(로그·반환만 하는 래퍼).
+        const string calleeWithoutDml = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary_AcqManual @p CHAR(8), @po_intRetVal INT OUTPUT
+AS
+BEGIN
+    SET @po_intRetVal = 0;
+END";
+
+        Assert.Empty(Find(new[] { SummaryStep("S11"), CalleeStep("S12") }, DdlMap(callee: calleeWithoutDml)));
+    }
+
+    [Fact]
+    public void ACommitBeforeTheBegin_IsNotFound()
+    {
+        // COMMIT 이 BEGIN 앞에 오면 구간이 성립하지 않는다 - 「그 안」을 말할 수 없다.
+        const string callerWithCommitFirst = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary @p CHAR(8)
+AS
+BEGIN
+    COMMIT TRAN
+    EXEC dbo.UP_Util_Settle_Summary_AcqManual @p;
+    BEGIN TRAN
+END";
+
+        Assert.Empty(Find(
+            new[] { SummaryStep("S11"), CalleeStep("S12") },
+            DdlMap(caller: callerWithCommitFirst)));
+    }
+
+    [Fact]
+    public void ARecursiveSelfCall_IsNotFound()
+    {
+        // 자기 자신을 부르는 것은 「다른 단계로 갈렸다」가 아니다.
+        const string selfCallingCaller = @"
+CREATE PROCEDURE dbo.UP_Util_Settle_Summary @p CHAR(8)
+AS
+BEGIN
+    BEGIN TRAN
+    DELETE FROM dbo.TSettleByTX WHERE YMD = @p;
+    EXEC dbo.UP_Util_Settle_Summary @p;
+    COMMIT TRAN
+END";
+
+        Assert.Empty(Find(
+            new[] { SummaryStep("S11"), SummaryStep("S12") },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["UP_Util_Settle_Summary"] = selfCallingCaller,
+            }));
+    }
+
+    // 최종 리뷰 Important 1: 확인 항목은 후치에만 실려야 한다 - 접두사로 올라가면 Critic 호출 전량이 캐시
+    // 미스인데 요청 본문만 보는 시험은 초록이다(합쳐 보내므로). 클라이언트 인자로 두 조각을 갈라 본다.
+    [Fact]
+    public async System.Threading.Tasks.Task TheConfirmationBlockNeverEntersTheCachePrefix()
+    {
+        var specs = new List<(string FileName, string Content)> { ("dbo.USP_Test1", "명세서 내용") };
+        var client = Substitute.For<IAiClient>();
+        client.ProviderName.Returns("OpenAI");
+        client.ModelName.Returns("gpt-4o");
+        client.ChatAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<float>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(new AiResult { Content = "{\"HasDefects\": false}" });
+        IAiService service = new AiService(client, 0.2f);
+        var items = TransactionSpanSplitFacts.ConfirmationItems(
+            Find(new[] { SummaryStep("S11"), CalleeStep("S12") }, DdlMap()));
+
+        await service.ReviewConsolidatedPlanAsync(specs, "## 통합 배치 아키텍처 개요", "Test_Job", confirmations: items);
+
+        await client.Received(1).ChatAsync(
+            Arg.Any<string>(),
+            Arg.Is<string>(stable => !stable.Contains("Confirm These")
+                                                 && !stable.Contains("UP_Util_Settle_Summary_AcqManual")),
+            Arg.Any<float>(),
+            Arg.Any<string?>(),
+            Arg.Is<string?>(suffix => suffix != null && suffix.Contains("Confirm These")),
+            Arg.Any<System.Threading.CancellationToken>());
     }
 
     // X3: 확인 요청 항목은 Critic 프롬프트 후치에만 실린다(없으면 절 자체가 없다).

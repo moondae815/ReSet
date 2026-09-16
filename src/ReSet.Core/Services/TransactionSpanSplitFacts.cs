@@ -130,18 +130,64 @@ namespace ReSet.Core.Services
         /// <summary>
         /// Critic 에게 넘길 확인 요청 문장. <b>결함 단정이 아니다</b> - 이 재료가 아는 것(목차가 갈랐다)과
         /// 모르는 것(섹션이 한 트랜잭션을 공유하는가)을 그대로 적는다.
+        ///
+        /// [왜 합치는가 - 2026-09-16 최종 리뷰 Important 2] 같은 호출자 프로시저를 여러 단계가 나눠 맡으면
+        /// <see cref="Find"/> 가 단계마다 한 줄을 낸다 — POQSettleBatch8 은 S15~S18 이 같은 SP 를 물어 같은
+        /// 트랜잭션을 네 번 묻는 항목 8 개(약 5.6KB)가 됐다. 배너 시절에는 무해했지만 지금은 <b>판정자의 입력</b>이라
+        /// 같은 말의 반복이 「확인하라」를 「결함이다」로 읽히게 부추긴다. 그래서 (호출자 프로시저 · 피호출자)로 합치고
+        /// 관련 단계 코드를 한 항목에 나열한다 — <b>실측(코퍼스 12 Job): 사실 28 → 항목 22, B8 8 → 2</b>.
+        /// 나머지 판이 2 → 2 인 것은 피호출자가 서로 다른 두 프로시저(AcqManual · SUMMARY_EXTRA)라 합칠 대상이
+        /// 아니기 때문이다(리뷰가 적은 「28 → 14」는 이 구분을 뺀 값이었다).
         /// </summary>
-        public static IReadOnlyList<string> ConfirmationItems(IReadOnlyList<TransactionSpanSplit> splits) =>
-            splits.Select(split =>
-                $"The original `{split.CallerProcedure}` ran `{split.CalleeProcedure}` inside ONE transaction " +
-                $"(source lines {split.SpanFrom}-{split.SpanTo}), and the callee has no transaction of its own, " +
-                $"so both used to commit or roll back together. The outline split them into steps " +
-                $"{split.CallerStepCode} and {split.CalleeStepCode}. CONFIRM in the step sections whether the two " +
-                $"steps share one business transaction (the earlier step opens it and does not commit, the later " +
-                $"step commits once) and whether a failure in {split.CalleeStepCode} rolls back what " +
-                $"{split.CallerStepCode} wrote. If each step commits on its own, that is a defect: report it. " +
-                "If they share one transaction, this is already correct - do NOT report it.")
-                .ToList();
+        public static IReadOnlyList<string> ConfirmationItems(IReadOnlyList<TransactionSpanSplit> splits)
+        {
+            var items = new List<string>();
+            if (splits == null || splits.Count == 0) return items;
+
+            foreach (var group in splits
+                .GroupBy(s => (s.CallerProcedure, s.CalleeProcedure), CallerCalleeComparer)
+                .Select(g => g.ToList()))
+            {
+                var first = group[0];
+                var callerSteps = group
+                    .Select(s => s.CallerStepCode)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(c => c, StringComparer.Ordinal)
+                    .ToList();
+                var calleeSteps = group
+                    .Select(s => s.CalleeStepCode)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(c => c, StringComparer.Ordinal)
+                    .ToList();
+
+                items.Add(
+                    $"The original `{first.CallerProcedure}` ran `{first.CalleeProcedure}` inside ONE transaction " +
+                    $"(source lines {first.SpanFrom}-{first.SpanTo}), and the callee has no transaction of its own, " +
+                    $"so both used to commit or roll back together. The outline split them: the caller's work is in " +
+                    $"step(s) {string.Join(", ", callerSteps)} and the callee's in step(s) {string.Join(", ", calleeSteps)}. " +
+                    "CONFIRM in the step sections whether those steps share ONE business transaction (an earlier step " +
+                    "opens it and does not commit, the last one commits once) and whether a failure in the later step " +
+                    "rolls back what the earlier ones wrote. If each step commits on its own, that is a defect: report it. " +
+                    "If they share one transaction, this is already correct - do NOT report it.");
+            }
+
+            return items;
+        }
+
+        private static readonly IEqualityComparer<(string Caller, string Callee)> CallerCalleeComparer =
+            new CallerCalleeKeyComparer();
+
+        private sealed class CallerCalleeKeyComparer : IEqualityComparer<(string Caller, string Callee)>
+        {
+            public bool Equals((string Caller, string Callee) x, (string Caller, string Callee) y) =>
+                string.Equals(x.Caller, y.Caller, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(x.Callee, y.Callee, StringComparison.OrdinalIgnoreCase);
+
+            public int GetHashCode((string Caller, string Callee) obj) =>
+                HashCode.Combine(
+                    obj.Caller?.ToLowerInvariant(),
+                    obj.Callee?.ToLowerInvariant());
+        }
 
         /// <param name="Line">원본 DDL에서의 줄 번호(1부터).</param>
         /// <param name="Name">호출 대상 프로시저 이름(원문 표기).</param>
