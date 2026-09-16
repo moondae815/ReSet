@@ -7956,6 +7956,78 @@ SELECT 1;
         }
 
         /// <summary>
+        /// [N6 확인 요청 배선 - 2026-09-16 최종 리뷰 Important 3] 소스 정규식 잠금만으로는 호출이 죽어도 초록이다.
+        /// 원본 DDL 을 파이프라인에 넣어 Critic 이 받은 인자를 직접 본다 - 확인 항목이 실제로 실려 오는가.
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipelineAsync_PassesTransactionSpanConfirmationsToTheCritic()
+        {
+            const string callerDdl = @"
+CREATE PROCEDURE dbo.USP_Caller @p CHAR(8)
+AS
+BEGIN
+    BEGIN TRAN
+    DELETE FROM dbo.TTarget WHERE YMD = @p;
+    EXEC dbo.USP_Callee @p;
+    COMMIT TRAN
+END";
+            const string calleeDdl = @"
+CREATE PROCEDURE dbo.USP_Callee @p CHAR(8)
+AS
+BEGIN
+    DELETE FROM dbo.TOther WHERE YMD = @p;
+END";
+            const string stepsJson = @"```json
+{
+  ""Steps"": [
+    { ""Code"": ""S01"", ""Name"": ""호출자"", ""LegacyProcedures"": [""dbo.USP_Caller""], ""TargetTables"": [""dbo.TTarget""], ""ErrorCodes"": [""-1""] },
+    { ""Code"": ""S02"", ""Name"": ""피호출자"", ""LegacyProcedures"": [""dbo.USP_Callee""], ""TargetTables"": [""dbo.TOther""], ""ErrorCodes"": [""-2""] }
+  ]
+}
+```";
+            var definitions = new List<SpDefinition>
+            {
+                new() { Schema = "dbo", Name = "USP_Caller", DdlText = callerDdl },
+                new() { Schema = "dbo", Name = "USP_Callee", DdlText = calleeDdl },
+            };
+            var specs = new List<(string, string)> { ("dbo.USP_Caller", "내용"), ("dbo.USP_Callee", "내용") };
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "1", "gpt-4");
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm Result" });
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = stepsJson });
+            _aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+            _aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.IReadOnlyList<string>>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            _aiService.ReviewConsolidatedPlanAsync(
+                    Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                    Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = false,
+                    ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+                }));
+
+            await orchestrator.RunConsolidatedPipelineAsync(
+                specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot, isBatchMode: true, definitions: definitions);
+
+            await _aiService.Received(1).ReviewConsolidatedPlanAsync(
+                Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Is<IReadOnlyList<string>?>(items => items != null && items.Count == 1
+                                                        && items[0].Contains("CONFIRM")
+                                                        && items[0].Contains("USP_Callee")));
+        }
+
+        /// <summary>
         /// 결함이 있다면서 자리를 못 대는 리뷰는 재생성의 근거가 될 수 없다.
         /// 종전에는 이 경우 골격까지 새로 만들어 전량 재생성을 불렀다.
         ///

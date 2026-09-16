@@ -5057,7 +5057,10 @@ Consolidate the provided specifications into a single unified batch job named '{
             }
         }
 
-        public async Task<ReviewResult> ReviewConsolidatedPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string planMarkdown, string jobName, string? effort = null, CancellationToken cancellationToken = default)
+        public async Task<ReviewResult> ReviewConsolidatedPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string planMarkdown, string jobName, string? effort = null, CancellationToken cancellationToken = default,
+            // 확인 요청 항목. 후치(volatile suffix)에만 싣는다 - 접두사 바이트를 건드리면 프롬프트 캐시가 깨진다.
+            // 인자 순서의 이유는 IAiService 주석에 있다.
+            System.Collections.Generic.IReadOnlyList<string>? confirmations = null)
         {
             var systemPrompt = @"You are a principal database architect and critic agent reviewing a Consolidated Batch Modernization Plan. Assess if the plan accurately reflects the requirements and logic of the individual stored procedure specifications and meets modern technical criteria.
 
@@ -5149,6 +5152,19 @@ Output ONLY the final JSON payload. Do not include markdown block markers (```js
             volatileSuffix.AppendLine("[Consolidated Batch Modernization Plan Markdown]");
             volatileSuffix.AppendLine(planMarkdown);
             volatileSuffix.AppendLine();
+            if (confirmations is { Count: > 0 })
+            {
+                // 파이프라인이 기계로 찾았지만 <b>스스로 판정할 수 없는</b> 모양이다. 「결함이다」가 아니라
+                // 「확인하라」로 싣는다 - 판정 재료가 섹션의 의사코드·산문이고 그 판독은 기계에서 오탐이
+                // 15 중 14 였다(2026-09-16 사람 결정, 트랜잭션 분할 판독).
+                volatileSuffix.AppendLine("[Confirm These — shapes the pipeline detected but cannot judge]");
+                foreach (var item in confirmations)
+                {
+                    volatileSuffix.AppendLine($"- {item}");
+                }
+                volatileSuffix.AppendLine();
+            }
+
             volatileSuffix.AppendLine("Please review the consolidated plan and output the JSON result.");
 
             Log.Information("AI 통합 배치 계획서 리뷰 요청 전송 - JobName: {JobName}, Effort: {Effort}", jobName, effort ?? "Default");
