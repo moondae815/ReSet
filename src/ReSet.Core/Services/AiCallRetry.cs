@@ -57,10 +57,33 @@ namespace ReSet.Core.Services
     /// </summary>
     public static class AiCallRetry
     {
-        public static async Task<T> ExecuteAsync<T>(
+        public static Task<T> ExecuteAsync<T>(
             Func<Task<T>> factory,
             CancellationToken cancellationToken,
-            RetryPlan? plan = null)
+            RetryPlan? plan = null) =>
+            ExecuteAsync(_ => factory(), cancellationToken, plan);
+
+        /// <summary>
+        /// 같은 재시도에 <b>호출 하나의 벽시계 상한</b>을 얹는다. 상한이 있으면 사용자 토큰과 연결한 토큰을
+        /// 팩토리에 넘기고 <paramref name="deadline"/> 뒤에 그것만 취소한다.
+        ///
+        /// [왜 이 자리인가 - 2026-09-16] 상한이 끊으면 <c>OperationCanceledException</c> 이 오는데
+        /// <b>사용자 토큰은 취소되지 않았다</b>. <see cref="AiRetryPolicy.Classify"/> 가 그 구분을 이미 토큰으로
+        /// 하므로(그 자리 주석: 「구분은 우리가 넘긴 토큰이다」) 판정이 <see cref="AiRetryVerdict.Transient"/> 가 되어
+        /// 계획대로 한 번 더 부르고, 다 쓰면 <see cref="AiCallFailedException"/>(비 OCE)으로 올라가 호출부 55 곳의
+        /// <c>when (ex is not OperationCanceledException)</c> 이 잡는다 - 판이 죽지 않고 배너로 산다.
+        ///
+        /// [실측이 정한 값 - 응답 574 건] 본문을 낸 최장 호출 24.9 분(명세서 생성) · 리뷰 중 최장 정상 11.8 분 ·
+        /// 10 분 초과 8/493. 통합 계획서 리뷰 한 건이 52.9 분을 태우고 본문 0 자를 냈다(B17).
+        /// 그래서 리뷰에만 20 분을 건다 - 이제까지 성공한 호출은 하나도 자르지 않는 값이다.
+        /// 판독: docs/audit-reports/2026-09-16-AI호출-벽시계-상한-사전선언.md
+        /// </summary>
+        /// <param name="deadline">호출 하나의 상한. null 이면 연결 토큰을 만들지 않고 종전 경로 그대로다.</param>
+        public static async Task<T> ExecuteAsync<T>(
+            Func<CancellationToken, Task<T>> factory,
+            CancellationToken cancellationToken,
+            RetryPlan? plan = null,
+            TimeSpan? deadline = null)
         {
             var effectivePlan = plan ?? RetryPlan.Default;
 
@@ -74,13 +97,29 @@ namespace ReSet.Core.Services
 
             for (var attempt = 1; attempt <= effectiveMaxTries; attempt++)
             {
+                // 상한이 없으면 링크를 만들지 않는다 - 넘어온 토큰이 그대로 팩토리에 간다.
+                using var deadlineScope = deadline is { } window
+                    ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                    : null;
+                deadlineScope?.CancelAfter(deadline!.Value);
+
                 try
                 {
-                    return await factory();
+                    return await factory(deadlineScope?.Token ?? cancellationToken);
                 }
                 catch (Exception ex)
                 {
                     var verdict = AiRetryPolicy.Classify(ex, cancellationToken);
+
+                    // 상한이 끊었다면 그 사실을 로그에 남긴다 - 「일시적 실패」로만 적으면 판독에서 원인을 못 찾는다.
+                    if (verdict == AiRetryVerdict.Transient
+                        && ex is OperationCanceledException
+                        && deadlineScope is { IsCancellationRequested: true })
+                    {
+                        Log.Warning(
+                            "[벽시계 상한] AI 호출이 {Minutes:F0}분을 넘겨 끊었습니다 - 시도 {Attempt}/{MaxTries}. 끊긴 호출도 생성 토큰만큼 청구됩니다.",
+                            deadline!.Value.TotalMinutes, attempt, effectiveMaxTries);
+                    }
 
                     // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.
                     if (verdict == AiRetryVerdict.Cancelled)

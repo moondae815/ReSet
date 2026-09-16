@@ -25,6 +25,9 @@ namespace ReSet.Core.Services
         private readonly IAiService _consolidatorService;
         private readonly string? _actorEffort;
         private readonly string? _criticEffort;
+
+        /// <summary>통합 계획서 리뷰 호출 하나의 벽시계 상한. null 이면 상한 없이 종전 경로다.</summary>
+        private readonly TimeSpan? _criticCallDeadline;
         private readonly string? _consolidatorEffort;
         private readonly int _criticScoreThreshold;
         private readonly int _stepConcurrency;
@@ -57,7 +60,15 @@ namespace ReSet.Core.Services
             string? consolidatorEffort = null,
             int criticScoreThreshold = 8,
             int stepConcurrency = 1,     // 기본값 1 = 종전 순차. 실사용 값은 appsettings.json이 4로 넘긴다.
-            int maxL1RepairAttempts = 2) // L1 위반 수리 전용 예산. 채점 예산과 분리한다.
+            int maxL1RepairAttempts = 2, // L1 위반 수리 전용 예산. 채점 예산과 분리한다.
+            // [벽시계 상한 - 2026-09-16] 통합 계획서 리뷰 호출 하나의 상한(분). 0·음수면 끈다.
+            // 실측(AI 응답 574 건): 리뷰 중 최장 정상 11.8 분 · 본문을 낸 최장 호출 24.9 분 ·
+            // 그런데 한 건이 52.9 분을 태우고 본문 0 자를 냈다(B17). 20 분은 성공한 호출을 하나도 자르지 않는 값이다.
+            //
+            // 기본값 0 = 종전(상한 없음). 실사용 값은 appsettings.json 이 20 으로 넘긴다 - _stepConcurrency 와 같은
+            // 관례다. 기본을 20 으로 두면 이 생성자를 쓰는 시험 아홉의 NSubstitute 매처가 위치로 굳은
+            // CancellationToken.None 을 못 맞춘다(연결 토큰이 가므로) - 계약이 아니라 배선 사고로 빨개진다.
+            int criticCallDeadlineMinutes = 0)
         {
             _dbService = dbService;
             _aiService = aiService;
@@ -74,6 +85,9 @@ namespace ReSet.Core.Services
             // 0·음수는 1로 절상한다. 상한은 두지 않는다 — 사용자가 12를 원하면 12를 쓴다.
             _stepConcurrency = Math.Max(1, stepConcurrency);
             _maxL1RepairAttempts = Math.Max(1, maxL1RepairAttempts);
+            _criticCallDeadline = criticCallDeadlineMinutes > 0
+                ? TimeSpan.FromMinutes(criticCallDeadlineMinutes)
+                : null;
 
             if (string.Equals(maxL2Attempts, "unlimited", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(maxL2Attempts, "검증 완료까지", StringComparison.OrdinalIgnoreCase) ||
@@ -2668,11 +2682,15 @@ namespace ReSet.Core.Services
                         progressScope.AddTask("batchreview", $"{_criticService.ModelName} 통합 계획 리뷰 중...");
                         l2Result = await WrapWithProgress(
                             AiCallRetry.ExecuteAsync(
-                                () => _criticService.ReviewConsolidatedPlanAsync(
-                                    specs, consolidatedPlan, jobName, _criticEffort, cancellationToken,
+                                // 상한을 건 토큰을 그대로 넘긴다 - 상한이 끊으면 사용자 토큰은 취소되지 않으므로
+                                // 기존 분류가 Transient 로 보고 한 번 더 부르고, 다 쓰면 비 OCE 예외로 아래 catch 에 온다.
+                                token => _criticService.ReviewConsolidatedPlanAsync(
+                                    specs, consolidatedPlan, jobName, _criticEffort, token,
                                     // 항목이 없으면 null 을 넘긴다 - 「없다」를 빈 목록과 null 두 모양으로 말하지 않는다.
                                     confirmations: transactionSpanConfirmations.Count > 0 ? transactionSpanConfirmations : null),
-                                cancellationToken),
+                                cancellationToken,
+                                plan: null,
+                                deadline: _criticCallDeadline),
                             progressScope, "batchreview");
                     }
                     reviewSuccess = true;

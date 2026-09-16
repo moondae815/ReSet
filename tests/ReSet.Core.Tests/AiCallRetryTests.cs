@@ -250,5 +250,109 @@ namespace ReSet.Core.Tests
 
             Assert.Equal(AiRetryVerdict.Transient, thrown.Verdict);
         }
+
+        // ── 벽시계 상한(2026-09-16) ────────────────────────────────────────────
+        // 실측: AI 응답 574 건 중 통합 계획서 리뷰 한 건이 52.9 분을 태우고 본문 0 자를 냈다.
+        // 본문을 낸 최장 호출은 24.9 분, 리뷰 중 최장 정상은 11.8 분이다.
+        // 판독: docs/audit-reports/2026-09-16-AI호출-벽시계-상한-사전선언.md
+
+        // R1: 상한이 끊고, 계획대로 한 번 더 부른다.
+        [Fact]
+        public async Task ExecuteAsync_WhenTheFirstCallOutlastsTheDeadline_CallsAgain()
+        {
+            var calls = 0;
+
+            var result = await AiCallRetry.ExecuteAsync(
+                async token =>
+                {
+                    calls++;
+                    if (calls == 1)
+                    {
+                        // [유한 대기인 이유] 무한 대기로 두면 「연결 토큰 제거」 되돌림에서 이 시험이 **멈춘다** -
+                        // 판정을 못 내리는 시험은 되돌림의 자가 아니다. 상한(80ms)이 정상 코드에선 먼저 끊고,
+                        // 상한이 안 걸리는 되돌림에선 이 대기가 끝나 결과가 달라져 빨개진다.
+                        await Task.Delay(TimeSpan.FromSeconds(3), token);
+                    }
+
+                    return "성공";
+                },
+                CancellationToken.None,
+                RetryPlan.NoDelay,
+                deadline: TimeSpan.FromMilliseconds(80));
+
+            Assert.Equal("성공", result);
+            Assert.Equal(2, calls);
+        }
+
+        // R2: 두 번 다 상한에 걸리면 비취소 예외로 오른다 - 호출부 55 곳의 catch 가 잡는 형식이다.
+        [Fact]
+        public async Task ExecuteAsync_WhenEveryCallOutlastsTheDeadline_ThrowsNonCancellation()
+        {
+            var calls = 0;
+
+            var ex = await Assert.ThrowsAsync<AiCallFailedException>(() =>
+                AiCallRetry.ExecuteAsync<string>(
+                    async token => { calls++; await Task.Delay(TimeSpan.FromSeconds(3), token); return "상한이 안 끊었다"; },
+                    CancellationToken.None,
+                    RetryPlan.NoDelay,
+                    deadline: TimeSpan.FromMilliseconds(80)));
+
+            Assert.IsNotType<OperationCanceledException>(ex);
+            Assert.Equal(AiRetryVerdict.Transient, ex.Verdict);
+            Assert.Equal(RetryPlan.NoDelay.MaxTries, calls);
+        }
+
+        // R3: 사용자 취소는 상한으로 둔갑하지 않는다 - 취소로 그대로 오른다.
+        [Fact]
+        public async Task ExecuteAsync_WithADeadline_UserCancellationStillSurfacesAsCancellation()
+        {
+            using var cts = new CancellationTokenSource();
+            var calls = 0;
+
+            var pending = AiCallRetry.ExecuteAsync<string>(
+                async token => { calls++; cts.Cancel(); await Task.Delay(TimeSpan.FromSeconds(3), token); return "취소가 안 걸렸다"; },
+                cts.Token,
+                RetryPlan.NoDelay,
+                deadline: TimeSpan.FromMinutes(20));
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+            Assert.Equal(1, calls);   // 취소는 재시도하지 않는다
+        }
+
+        // R4: 상한 안에 끝나면 무변화 - 상한을 건 토큰이 팩토리에 살아 있고 결과가 그대로 온다.
+        [Fact]
+        public async Task ExecuteAsync_WhenTheCallFinishesInsideTheDeadline_IsUnaffected()
+        {
+            var calls = 0;
+
+            var result = await AiCallRetry.ExecuteAsync(
+                token =>
+                {
+                    calls++;
+                    Assert.False(token.IsCancellationRequested);
+                    return Task.FromResult("성공");
+                },
+                CancellationToken.None,
+                RetryPlan.NoDelay,
+                deadline: TimeSpan.FromMinutes(20));
+
+            Assert.Equal("성공", result);
+            Assert.Equal(1, calls);
+        }
+
+        // R4 짝: 상한을 안 주면 연결 토큰을 만들지 않는다 - 넘어온 토큰 그대로다(종전 경로).
+        [Fact]
+        public async Task ExecuteAsync_WithoutADeadline_PassesTheCallersOwnToken()
+        {
+            using var cts = new CancellationTokenSource();
+            CancellationToken seen = default;
+
+            await AiCallRetry.ExecuteAsync(
+                token => { seen = token; return Task.FromResult("성공"); },
+                cts.Token,
+                RetryPlan.NoDelay);
+
+            Assert.Equal(cts.Token, seen);
+        }
     }
 }

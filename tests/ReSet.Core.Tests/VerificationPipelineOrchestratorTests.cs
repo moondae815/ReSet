@@ -1889,6 +1889,61 @@ namespace ReSet.Core.Tests
         await aiService.Received().GenerateSpecSectionAsync(spDef, "LogicAndVisualization", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>());
     }
 
+        // ── 리뷰 호출의 벽시계 상한 배선(2026-09-16) ───────────────────────────────
+        // 실측: 리뷰 호출 한 건이 52.9 분을 태우고 본문 0 자를 냈다(B17). 상한은 AiCallRetry 가 연결 토큰으로 건다 -
+        // 여기서 재는 것은 「리뷰 서비스가 받는 토큰이 그 연결 토큰인가」다(호출 문맥). 시간은 재지 않는다.
+        // 판독: docs/audit-reports/2026-09-16-AI호출-벽시계-상한-사전선언.md
+        private async Task<CancellationToken> CaptureCriticTokenAsync(int deadlineMinutes)
+        {
+            var specs = new List<(string, string)> { ("dbo.USP_Test1", "## 개요\n내용1") };
+            var consolidatedPlan = "## 통합 배치 아키텍처 개요\n## Mermaid 기반 통합 흐름도\n## 단계별 이행 상세 및 의사코드\n## 통합 데이터 정합성 검증 SQL 세트";
+
+            _aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "## 분석" }));
+            _aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = "## 목차" }));
+            _aiService.GenerateConsolidatedBatchPlanAsync(Arg.Any<string>(), Arg.Any<List<(string, string)>>(), "C#", "Job_Test", Arg.Any<string>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new AiResult { Content = consolidatedPlan }));
+
+            var captured = CancellationToken.None;
+            _aiService.ReviewConsolidatedPlanAsync(
+                    Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                    Arg.Do<CancellationToken>(token => captured = token), Arg.Any<IReadOnlyList<string>>())
+                .Returns(Task.FromResult(new ReviewResult
+                {
+                    HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10,
+                    ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10
+                }));
+
+            _userInteraction.RequestHumanReviewAsync("Job_Test", Arg.Any<string>(), Arg.Any<VerificationOutcome>(), Arg.Any<bool>(), Arg.Any<IReadOnlyList<BatchStepPlan>>())
+                .Returns(Task.FromResult(new HumanReviewResult { Decision = UserDecision.Approve }));
+
+            var orchestrator = new VerificationPipelineOrchestrator(
+                _dbService, _aiService, _validator, _userInteraction, "1", "gpt-4",
+                criticCallDeadlineMinutes: deadlineMinutes);
+
+            await orchestrator.RunConsolidatedPipelineAsync(specs, "C#", "Job_Test", "OpenAI", _consolidatedOutputRoot);
+            return captured;
+        }
+
+        // R5 배선: 상한이 켜져 있으면 리뷰 서비스가 **끊길 수 있는** 토큰을 받는다.
+        [Fact]
+        public async Task RunConsolidatedPipeline_WithADeadline_PassesACancellableTokenToTheCritic()
+        {
+            var token = await CaptureCriticTokenAsync(deadlineMinutes: 20);
+
+            Assert.True(token.CanBeCanceled, "상한이 켜졌는데 리뷰 호출이 끊길 수 없는 토큰을 받았다 - 연결 토큰이 안 걸린 것이다");
+        }
+
+        // R5 짝: 상한을 끄면(0) 종전 경로 그대로 - 호출자의 토큰이 그대로 간다(이 시험 문맥에선 끊을 수 없는 토큰).
+        [Fact]
+        public async Task RunConsolidatedPipeline_WithTheDeadlineOff_PassesTheCallersOwnToken()
+        {
+            var token = await CaptureCriticTokenAsync(deadlineMinutes: 0);
+
+            Assert.False(token.CanBeCanceled, "상한을 껐는데 연결 토큰이 걸렸다 - 끈 설정이 듣지 않는다");
+        }
+
         [Fact]
         public async Task RunConsolidatedPipelineAsync_SuccessOnFirstTry_ReturnsPlan()
         {
