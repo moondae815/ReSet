@@ -125,6 +125,13 @@ namespace ReSet.Core.Services
             /// <summary>
             /// 단일 테이블 <c>FROM</c> 질의만 비한정 컬럼을 그 표 것으로 읽는다. 조인이 있으면 <b>한정된</b> 참조만 본다 -
             /// 비한정 컬럼의 소속을 말할 수 없으면 보고하지 않는다(작성 계약 7).
+            ///
+            /// [자기 범위만 본다 - 2026-09-16 최종 리뷰 C1] 종전에는 이 절의 하위 전부를 훑어 <b>서브질의의 컬럼</b>과
+            /// <b>ORDER BY 의 SELECT 별칭</b>까지 이 표 것으로 읽었다. 실측 오탐 둘:
+            /// <c>SELECT RunId FROM batch.X WHERE NOT EXISTS (SELECT 1 FROM dbo.Log WHERE LogSeq = 1)</c> 가 `LogSeq` 를,
+            /// <c>SELECT IsMatched AS MatchFlag FROM batch.X ORDER BY MatchFlag</c> 가 `MatchFlag` 를 고발했다 - 둘 다 유효 SQL 이고
+            /// 처방(「컬럼을 정의에 맞추라」)을 <b>따를 수 없는</b> 고발이라 재시도를 태운다. 그래서 서브질의·파생 테이블로는
+            /// 내려가지 않고, ORDER BY 의 비한정 이름 중 SELECT 별칭인 것은 뺀다.
             /// </summary>
             public override void Visit(QuerySpecification node)
             {
@@ -152,7 +159,9 @@ namespace ReSet.Core.Services
                     foreach (var (column, qualifier) in collector.Columns)
                     {
                         var mine = qualifier != null ? aliases.Contains(qualifier) : single;
-                        if (mine) _references.Add(new Reference(bare, column, StatementText(node)));
+                        if (!mine) continue;
+                        if (qualifier == null && collector.SelectAliases.Contains(column)) continue;
+                        _references.Add(new Reference(bare, column, StatementText(node)));
                     }
                 }
             }
@@ -206,9 +215,39 @@ namespace ReSet.Core.Services
                 return text.ToString();
             }
 
+            /// <summary>
+            /// 한 <see cref="QuerySpecification"/> 의 <b>자기 범위</b> 컬럼 참조만 모은다 - 서브질의·파생 테이블로 내려가지 않는다
+            /// (그 컬럼은 남의 표 것이다). <see cref="SelectAliases"/> 는 ORDER BY 가 가리키는 SELECT 별칭을 가려내는 재료다.
+            /// </summary>
             private sealed class ColumnCollector : TSqlFragmentVisitor
             {
+                private int _depth;
+
                 public List<(string Column, string? Qualifier)> Columns { get; } = new();
+
+                public HashSet<string> SelectAliases { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+                public override void ExplicitVisit(QuerySpecification node)
+                {
+                    // 바깥 질의 하나만 자기 범위다. 안쪽 질의는 자기 FROM 을 가지므로 그쪽 Visit 이 따로 판정한다.
+                    if (_depth > 0) return;
+
+                    foreach (var element in node.SelectElements ?? new List<SelectElement>())
+                    {
+                        if (element is SelectScalarExpression { ColumnName.Value: { Length: > 0 } alias })
+                        {
+                            SelectAliases.Add(alias);
+                        }
+                    }
+
+                    _depth++;
+                    base.ExplicitVisit(node);
+                    _depth--;
+                }
+
+                // 서브질의·파생 테이블·EXISTS·IN 안쪽을 따로 막지 않는다 - 그 안에는 자기 FROM 을 가진
+                // QuerySpecification 이 있어 위 깊이 가드가 이미 막는다(되돌림 m7·m8 로 확인 — 그 재정의를 걷어내도
+                // 아무것도 빨개지지 않아 죽은 가지였다).
 
                 public override void Visit(ColumnReferenceExpression node)
                 {

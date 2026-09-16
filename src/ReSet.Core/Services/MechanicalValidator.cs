@@ -11909,12 +11909,17 @@ namespace ReSet.Core.Services
 
             var ranges = StepSectionLineRanges(markdown);
 
+            // [자리마다 따로 연다 - 2026-09-16 최종 리뷰 I2] 표 하나로 묶으면 오케스트레이터가 OwnerStepCode 가 있는 오류에서
+            // 그 단계만 다시 만들고(§L1 귀속 루프) 절 밖(검증 세트·골격) 자리는 영영 안 열린 채 같은 위반으로 재시도를 태운다.
             foreach (var group in references
                          .Where(r => defined.ContainsKey(r.Table))
-                         .GroupBy(r => r.Table, StringComparer.OrdinalIgnoreCase)
-                         .OrderBy(g => g.Key, StringComparer.Ordinal))
+                         .Select(r => (r.Table, r.Column, r.Statement, r.FenceLine,
+                             Owner: ranges.FirstOrDefault(x => r.FenceLine > x.Start && r.FenceLine < x.End).Code))
+                         .GroupBy(r => (r.Table, r.Owner), TableOwnerComparer)
+                         .OrderBy(g => g.Key.Table, StringComparer.Ordinal)
+                         .ThenBy(g => g.Key.Owner ?? string.Empty, StringComparer.Ordinal))
             {
-                var columns = defined[group.Key];
+                var columns = defined[group.Key.Table];
                 var unknown = group
                     .Where(r => !columns.Contains(r.Column))
                     .ToList();
@@ -11922,9 +11927,9 @@ namespace ReSet.Core.Services
 
                 var names = unknown.Select(u => u.Column).Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(c => c, StringComparer.Ordinal).ToList();
-                var owner = ranges.FirstOrDefault(r => unknown[0].FenceLine > r.Start && unknown[0].FenceLine < r.End).Code;
+                var owner = group.Key.Owner;
                 var message =
-                    $"{(owner != null ? owner + " 섹션의" : "통합 문서의")} 문장이 `batch.{group.Key}` 의 표 정의에 없는 컬럼 " +
+                    $"{(owner != null ? owner + " 섹션의" : "통합 문서의")} 문장이 `batch.{group.Key.Table}` 의 표 정의에 없는 컬럼 " +
                     $"{string.Join(", ", names.Select(n => "`" + n + "`"))} 을(를) 씁니다. 이 문서가 정의한 컬럼은 " +
                     $"{string.Join(", ", columns.OrderBy(c => c, StringComparer.Ordinal).Select(c => "`" + c + "`"))} 뿐입니다 - " +
                     "배포하면 컬럼 없음 오류입니다. 표 정의를 고치거나 문장의 컬럼을 정의에 맞추십시오.";
@@ -11935,16 +11940,28 @@ namespace ReSet.Core.Services
                     Type = ErrorType.ControlTableColumnContract,
                     Message = message,
                     OwnerStepCode = owner,
-                    Lexemes = owner != null
-                        ? null
-                        : unknown
-                            .SelectMany(u => MarkdownSectionLocator.SplitLines(u.Statement))
-                            .Select(line => line.Trim())
-                            .Where(line => names.Any(n => line.Contains(n, StringComparison.OrdinalIgnoreCase)))
-                            .Distinct(StringComparer.Ordinal)
-                            .ToList()
+                    // owner 가 있어도 어휘를 싣는다 - 메시지 백틱만 남기면 귀속 기본 경로가 「문서가 정의한 컬럼」 목록까지
+                    // 어휘로 삼아 그 컬럼을 언급한 멀쩡한 단계를 연다(작성 계약 9).
+                    Lexemes = unknown
+                        .SelectMany(u => MarkdownSectionLocator.SplitLines(u.Statement))
+                        .Select(line => line.Trim())
+                        .Where(line => names.Any(n => line.Contains(n, StringComparison.OrdinalIgnoreCase)))
+                        .Distinct(StringComparer.Ordinal)
+                        .ToList()
                 });
             }
+        }
+
+        private static readonly IEqualityComparer<(string Table, string? Owner)> TableOwnerComparer = new TableOwnerKeyComparer();
+
+        private sealed class TableOwnerKeyComparer : IEqualityComparer<(string Table, string? Owner)>
+        {
+            public bool Equals((string Table, string? Owner) x, (string Table, string? Owner) y) =>
+                string.Equals(x.Table, y.Table, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(x.Owner, y.Owner, StringComparison.OrdinalIgnoreCase);
+
+            public int GetHashCode((string Table, string? Owner) obj) =>
+                HashCode.Combine(obj.Table?.ToLowerInvariant(), obj.Owner?.ToLowerInvariant());
         }
 
         /// <summary>단계 절의 줄 범위. 문서 층 검사가 참조 자리를 단계에 귀속할 때 쓴다.</summary>

@@ -111,6 +111,42 @@ public sealed class ControlTableColumnContractTests
             "```sql\nCREATE TABLE batch.BatchReconciliation (RunId BIGINT NOT NULL);\nALTER TABLE batch.BatchReconciliation ADD ResultStatus NVARCHAR(20) NULL;\n```",
             "```sql\nSELECT RunId, ResultStatus FROM batch.BatchReconciliation WHERE RunId = @p_runId;\n```")));
 
+    // [최종 리뷰 C1] 서브질의의 컬럼은 남의 표 것이다 - 종전에는 이 절 하위 전부를 훑어 유효 SQL 을 고발했다.
+    [Theory]
+    [InlineData("SELECT RunId, IsMatched FROM batch.BatchReconciliation WHERE NOT EXISTS (SELECT 1 FROM dbo.SettleLog WHERE LogSeq = 1);")]
+    [InlineData("SELECT RunId FROM batch.BatchReconciliation WHERE RunId IN (SELECT ParentRunId FROM dbo.SettleLog);")]
+    [InlineData("SELECT RunId, (SELECT MAX(LogSeq) FROM dbo.SettleLog) AS LastSeq FROM batch.BatchReconciliation;")]
+    public void ColumnsInsideASubquery_AreNotThisTables(string query) =>
+        Assert.Empty(Errors(Document(
+            "```sql\nCREATE TABLE batch.BatchReconciliation (RunId BIGINT NOT NULL, IsMatched BIT NOT NULL);\n```",
+            "```sql\n" + query + "\n```")));
+
+    // [최종 리뷰 C1] ORDER BY 가 가리키는 SELECT 별칭은 컬럼이 아니다.
+    [Fact]
+    public void ASelectAliasUsedInOrderBy_IsNotAColumn() =>
+        Assert.Empty(Errors(Document(
+            "```sql\nCREATE TABLE batch.BatchReconciliation (RunId BIGINT NOT NULL, IsMatched BIT NOT NULL);\n```",
+            "```sql\nSELECT IsMatched AS MatchFlag FROM batch.BatchReconciliation ORDER BY MatchFlag;\n```")));
+
+    // [최종 리뷰 I3] 파생 테이블이 섞이면 비한정 컬럼의 소속을 말할 수 없다 - `unresolved` 가 그것을 막는 유일한 가지다.
+    [Fact]
+    public void AnUnqualifiedColumnBesideADerivedTable_StaysSilent() =>
+        Assert.Empty(Errors(Document(
+            "```sql\nCREATE TABLE batch.BatchReconciliation (RunId BIGINT NOT NULL, IsMatched BIT NOT NULL);\n```",
+            "```sql\nSELECT RunId, Total FROM batch.BatchReconciliation CROSS JOIN (SELECT SUM(1) AS Total FROM dbo.SettleLog) x;\n```")));
+
+    // [최종 리뷰 I3] 정의된 표와 정의 없는 표가 함께 있는 문서 - 정의 없는 쪽을 조회 대상에서 거르지 않으면 검사가 통째로 죽는다.
+    [Fact]
+    public void ADocumentMixingDefinedAndUndefinedTables_ReportsOnlyTheDefinedOne()
+    {
+        var result = new MechanicalValidator().ValidateConsolidated(Document(
+            "```sql\nCREATE TABLE batch.BatchReconciliation (RunId BIGINT NOT NULL, IsMatched BIT NOT NULL);\nINSERT INTO batch.BatchPublishLog (RunId, PublishedAtUtc) VALUES (@p_runId, SYSUTCDATETIME());\n```",
+            "```sql\nSELECT RunId, ResultStatus FROM batch.BatchReconciliation WHERE RunId = @p_runId;\n```"));
+
+        Assert.Contains("ResultStatus", Assert.Single(result.Errors, e => e.Contains(Marker)));
+        Assert.DoesNotContain(result.Errors, e => e.Contains("검증기 자체 오류"));
+    }
+
     // C6: 귀속 - 참조가 단계 절 안이면 그 단계, 밖이면 원문 줄을 싣는다.
     [Fact]
     public void AttributionNamesTheStepOrTheLine()
@@ -126,5 +162,23 @@ public sealed class ControlTableColumnContractTests
             "```sql\nSELECT 1;\n```"));
         var insideError = Assert.Single(inside.DetailedErrors, e => e.Message.Contains(Marker));
         Assert.Equal("S18", insideError.OwnerStepCode);
+        // [최종 리뷰 I2] owner 가 있어도 줄 어휘를 싣는다 - 메시지 백틱만 남기면 귀속 기본 경로가 「문서가 정의한 컬럼」 목록을
+        // 어휘로 삼아 멀쩡한 단계를 연다(작성 계약 9).
+        Assert.Contains(insideError.Lexemes ?? new List<string>(), line => line.Contains("ResultStatus"));
+    }
+
+    // [최종 리뷰 I2] 미정의 참조가 단계 절과 절 밖에 함께 있으면 자리마다 따로 열려야 한다 - 하나로 묶으면 오케스트레이터가
+    // OwnerStepCode 자리만 고치고 절 밖 자리는 영영 안 열린 채 재시도를 태운다.
+    [Fact]
+    public void ReferencesInAStepAndOutsideIt_AreReportedSeparately()
+    {
+        var result = new MechanicalValidator().ValidateConsolidated(Document(
+            "```sql\nCREATE TABLE batch.BatchReconciliation (RunId BIGINT NOT NULL, IsMatched BIT NOT NULL);\nINSERT INTO batch.BatchReconciliation (RunId, ResultStatus) VALUES (@p_runId, N'PASS');\n```",
+            "```sql\nSELECT RunId, DifferenceCount FROM batch.BatchReconciliation WHERE RunId = @p_runId;\n```"));
+
+        var errors = result.DetailedErrors.Where(e => e.Message.Contains(Marker)).ToList();
+        Assert.Equal(2, errors.Count);
+        Assert.Contains(errors, e => e.OwnerStepCode == "S18" && e.Message.Contains("ResultStatus"));
+        Assert.Contains(errors, e => e.OwnerStepCode == null && e.Message.Contains("DifferenceCount"));
     }
 }
