@@ -219,7 +219,9 @@ namespace ReSet.Core.Tests
             // 28: 2026-09-12 에 CheckStepParameterTypeStated(규칙 5-2)가 더해졌다.
             // 29: 2026-09-13 에 CheckBatchControlTableAlias(제어 계약 표 별칭, K1)가 더해졌다.
             // 30: 2026-09-13 에 CheckGuardPredicateTerms(원본 IF EXISTS 가드 술어 대조)가 더해졌다.
-            Assert.Equal(30, counts["ValidateBatchStep"]);
+            // 29: 2026-09-16 에 CheckTransactionSpanSplit 이 빠졌다 - 그 사실은 결함 판정이 아니라 Critic 확인
+            //     요청으로 옮겼다(TransactionSpanSplitFacts, 2026-09-16-트랜잭션분할-Critic확인항목-사전선언.md).
+            Assert.Equal(29, counts["ValidateBatchStep"]);
         }
 
         private static string ValidatorSourcePath() =>

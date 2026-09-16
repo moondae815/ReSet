@@ -2641,6 +2641,19 @@ namespace ReSet.Core.Services
                     }
                 }
 
+                // [N6 확인 요청] 원본의 한 트랜잭션이 여러 단계로 갈렸는지는 목차·원본 DDL 로 기계가 찾을 수 있지만,
+                // 원자성이 실제로 깨졌는지는 섹션이 단계를 넘어 한 트랜잭션을 공유하는가에 달려 있어 기계가 판정할 수
+                // 없다(배송 다섯 판 5/5 가 공유로 보존했고 종전 단계 배너는 5/5 거짓이었다). 그래서 사실만 Critic 에
+                // 넘긴다 - docs/audit-reports/2026-09-16-트랜잭션분할-Critic확인항목-사전선언.md
+                var transactionSpans = TransactionSpanSplitFacts.Find(currentSteps, ddlByProcedure);
+                var transactionSpanConfirmations = TransactionSpanSplitFacts.ConfirmationItems(transactionSpans);
+                foreach (var span in transactionSpans)
+                {
+                    Log.Information(
+                        "원본 단일 트랜잭션이 단계로 갈렸습니다(확인 요청) - Caller: {Caller}({CallerStep}) 라인 {From}~{To}, Callee: {Callee}({CalleeStep})",
+                        span.CallerProcedure, span.CallerStepCode, span.SpanFrom, span.SpanTo, span.CalleeProcedure, span.CalleeStepCode);
+                }
+
                 // L2: AI 교차 리뷰
                 ReviewResult? l2Result = null;
                 bool reviewSuccess = false;
@@ -2655,7 +2668,10 @@ namespace ReSet.Core.Services
                         progressScope.AddTask("batchreview", $"{_criticService.ModelName} 통합 계획 리뷰 중...");
                         l2Result = await WrapWithProgress(
                             AiCallRetry.ExecuteAsync(
-                                () => _criticService.ReviewConsolidatedPlanAsync(specs, consolidatedPlan, jobName, _criticEffort, cancellationToken),
+                                () => _criticService.ReviewConsolidatedPlanAsync(
+                                    specs, consolidatedPlan, jobName, _criticEffort, cancellationToken,
+                                    // 항목이 없으면 null 을 넘긴다 - 「없다」를 빈 목록과 null 두 모양으로 말하지 않는다.
+                                    confirmations: transactionSpanConfirmations.Count > 0 ? transactionSpanConfirmations : null),
                                 cancellationToken),
                             progressScope, "batchreview");
                     }
