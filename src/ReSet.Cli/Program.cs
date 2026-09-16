@@ -1009,6 +1009,11 @@ namespace ReSet.Cli
             // 하이브리드 아키텍처: Critic 서비스 구성
             IAiService criticService = aiService;
             var criticEffort = configuration["AiSettings:Critic:Effort"];
+            // [벽시계 상한] 통합 계획서 리뷰 호출 하나의 상한(분). 비우면 20, 0 이면 끈다.
+            var criticCallDeadlineMinutes =
+                int.TryParse(configuration["AiSettings:Critic:CallDeadlineMinutes"], out var parsedCriticDeadline)
+                    ? parsedCriticDeadline
+                    : 20;
             var criticProvider = configuration["AiSettings:Critic:Provider"] ?? provider;
             var criticModel = configuration["AiSettings:Critic:ModelName"] ?? modelName;
             if (configuration["AiSettings:Critic:Provider"] != null || configuration["AiSettings:Critic:ModelName"] != null)
@@ -1107,7 +1112,8 @@ namespace ReSet.Cli
                 consolidatorEffort,
                 criticThresholdScore,
                 stepConcurrency,
-                maxL1RepairAttempts
+                maxL1RepairAttempts,
+                criticCallDeadlineMinutes
             );
             var recursiveOrchestrator = new VerificationPipelineOrchestrator(
                 dbService,
@@ -1124,7 +1130,8 @@ namespace ReSet.Cli
                 consolidatorEffort,
                 criticThresholdScore,
                 stepConcurrency,
-                maxL1RepairAttempts
+                maxL1RepairAttempts,
+                criticCallDeadlineMinutes
             );
             IDependencyAnalysisOrchestrator dependencyAnalysisOrchestrator = new DependencyAnalysisOrchestrator(
                 dbService,

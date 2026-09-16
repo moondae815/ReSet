@@ -487,5 +487,27 @@ namespace ReSet.Core.Tests
             Assert.Equal(new[] { "digitalocean" }, routing!.Order);
             Assert.False(routing.AllowFallbacks);
         }
+
+        /// <summary>
+        /// [벽시계 상한이 실사용 설정에 있는가 - 2026-09-16] 20 은 실측이 정한 값이다(리뷰 중 본문을 낸
+        /// 최장 호출 11.8 분 · 전체 최장 24.9 분 · 병리 52.9 분 한 건).
+        ///
+        /// [정확히 무엇을 막는가 - 2026-09-16 리뷰 Minor 2] 설정에서 이 줄이 빠지면 상한이 꺼지는 것이
+        /// <b>아니다</b> - `Program.cs` 가 `TryParse ... : 20` 으로 20 을 쓴다(이중 기본값). 이 시험이 막는 것은
+        /// 「실사용 값이 코드 폴백에만 있는 상태」다 - 그러면 값을 바꾸려는 사람이 설정에서 찾지 못하고,
+        /// 생성자 기본값 0(끔, 시험 하네스용)과 헷갈린다. 폴백에 기대지 말고 설정에 명시해 둔다.
+        /// 판독: docs/audit-reports/2026-09-16-AI호출-벽시계-상한-사전선언.md
+        /// </summary>
+        [Fact]
+        public void CliSettings_CarryTheCriticCallDeadline()
+        {
+            var configuration = Load("src/ReSet.Cli/appsettings.json");
+
+            var raw = configuration["AiSettings:Critic:CallDeadlineMinutes"];
+            Assert.False(string.IsNullOrWhiteSpace(raw), "AiSettings:Critic:CallDeadlineMinutes 가 없으면 상한이 꺼진 채 돈다");
+            Assert.True(int.TryParse(raw, out var minutes), $"정수여야 한다: '{raw}'");
+            // 성공한 최장 호출(24.9 분)보다 작고, 리뷰 중 최장 정상(11.8 분)보다 넉넉해야 한다.
+            Assert.InRange(minutes, 12, 25);
+        }
     }
 }
