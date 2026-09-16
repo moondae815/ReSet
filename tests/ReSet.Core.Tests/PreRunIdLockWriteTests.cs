@@ -156,6 +156,19 @@ public sealed class PreRunIdLockWriteTests
         Assert.DoesNotContain(firing.Lexemes!, line => line.Contains("AND OwnerRunId", StringComparison.Ordinal));
     }
 
+    // 계약이 run id 자리로 정하지 않은 `NOT NULL` 컬럼(LockStatus)만 쓰는 절은 침묵한다.
+    // [이 시험이 있는 이유 - 2026-09-16 리뷰 Important 1] 축을 「NOT NULL·비-IDENTITY」 광의로 갈아도
+    // 기존 시험 열둘이 전부 초록이었다 - 계약이 축을 말한다는 이 설계의 핵심이 시험 없는 주장이었다.
+    [Fact]
+    public void AStepWritingOnlyNonRunIdColumnsBeforeIssuance_StaysSilent()
+    {
+        var markdown = Document(
+            Fixture("Batch17-release-moved-before-issue.md"),
+            Fixture("Batch17-S03-issuer.md"));
+
+        Assert.Empty(Firings(markdown));
+    }
+
     // 계약이 run id 자리를 스스로 말한다 - 이름으로 짐작하지 않는다(이 저장소가 두 번 실패한 축).
     [Fact]
     public void TheContractNamesItsRunIdColumns()

@@ -11974,8 +11974,10 @@ namespace ReSet.Core.Services
         /// 수리된다). 그래서 「뒤로 옮겨라」만 적으면 한 절을 다시 써도 따를 수 없는 처방이 되어 수리 예산만 태운다. 한 절 안에서
         /// 실제로 할 수 있는 수는 「이 단계가 실행 행을 먼저 만들어 발급 단계가 되는 것」이고, 계약 표가 면제라 그 쓰기는 목차 밖
         /// 쓰기로 걸리지 않는다(T36 면제, main d8d0eee9). 그래서 그 수를 먼저 적는다.
-        /// 또 「쓰기를 그냥 지우라」는 처방은 못 쓴다 - 목차가 행 생성 단계로 지정한 단계가 상태값을 쓰지 않으면
-        /// <see cref="ValidateControlStatusTerminalWrites"/>(계약이 행 생성 단계로 정한 단계가 상태 어휘 전부를 쓰는지 본다)가 그 단계를 고발해 두 검사가 서로 반대를 요구한다.
+        /// [정정 - 2026-09-16 리뷰] 처음에 「쓰기를 지우라는 처방은 <see cref="ValidateControlStatusTerminalWrites"/> 가 반대한다」고
+        /// 적었는데 틀렸다. 그 검사는 펜스를 <b>모든 단계에서 합쳐</b>(`body`) 「이 Job 어느 단계도 그 상태값을 쓰지 않는가」를 보고
+        /// 결함만 행 생성 단계에 귀속한다 - 다른 단계가 쓰면 조용하다. 그래서 「이 절에서 쓰기를 빼고 발급 뒤 절이 쓴다」도 합법이며,
+        /// 두 처방 모두 한 절씩 다시 쓰는 것으로 따를 수 있다.
         /// 판독: docs/audit-reports/2026-09-16-발급전-잠금-계약-사전선언.md
         /// </summary>
         private static void CheckPreRunIdRunIdWrites(string markdown, ValidationResult result)
@@ -11986,6 +11988,9 @@ namespace ReSet.Core.Services
             if (sections.Count == 0) return;
 
             var issuer = sections.Select((s, i) => (s.Code, s.Body, Index: i)).FirstOrDefault(s => CreatesRowIn(s.Body, "BatchRun"));
+            // [중복 가드임을 밝혀 둔다 - 2026-09-16 리뷰 Minor 1] 발급 절이 없으면 FirstOrDefault 의 기본값이 Index 0 이라
+            // 아래 before 가 비어 어차피 반환한다(이 줄을 지워도 빨개지는 시험이 없다). 그래도 남긴다 - 뒤 코드가
+            // issuer.Code 를 메시지에 쓰므로, null 이 그 자리까지 갈 수 없다는 사실을 여기서 국소적으로 보이는 값이 있다.
             if (issuer.Code == null) return;
 
             var before = new HashSet<string>(sections.Take(issuer.Index).Select(s => s.Code), StringComparer.OrdinalIgnoreCase);
