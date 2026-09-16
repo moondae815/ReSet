@@ -112,6 +112,8 @@ namespace ReSet.Core.Services
         // 체크포인트·저널 게이트가 RunId 발급 단계보다 먼저 도는 단계를 요구한다 - 그 단계에는 이 실행의 행이 생길 수 없어 게이트가 늘 실패한다.
         GateRequiresStepBeforeRunId,
         ControlTableColumnContract,
+        // RunId 발급 절보다 먼저 도는 절이 계약의 run id 자리(NOT NULL)에 쓴다 - 그 단계는 채울 값이 없어 항상 실패한다.
+        PreRunIdRunIdWrite,
         General
     }
 
@@ -344,6 +346,7 @@ namespace ReSet.Core.Services
                 SafeCheck(() => CheckControlTotalProducer(cleansed, result));
                 SafeCheck(() => CheckGateRequiresStepsBeforeRunId(cleansed, result));
                 SafeCheck(() => CheckControlTableColumnContract(cleansed, result));
+                SafeCheck(() => CheckPreRunIdRunIdWrites(cleansed, result));
                 SafeCheck(() => CheckLegacyReturnCodeBinding(cleansed, result));
                 // SQL 거처 축(규칙 3-1·10). 조사 §5의 A급 셋이다 - 그때까지 이 세
                 // 규칙은 기계 강제가 0건이었고, 프롬프트와 Critic 두 층만으로 서
@@ -11950,6 +11953,109 @@ namespace ReSet.Core.Services
                         .ToList()
                 });
             }
+        }
+
+        /// <summary>
+        /// RunId 발급 절보다 <b>먼저</b> 도는 절이 제어 계약의 run id 자리에 값을 쓰는 것을 본다.
+        ///
+        /// [실물 둘 - 배송본 13 편 중 둘] <c>POQSettleBatch17</c> 은 S02 가 <c>batch.BatchRunLock.OwnerRunId</c> 를 써야 하는데
+        /// 발급이 S03 이라 본문 첫 줄이 <c>if (RunId == null) throw -9020</c> 이 됐다 - 배송된 계획서가 S02 에서 항상 죽는다.
+        /// <c>POQSettleBatch16</c> 은 같은 자리에서 예약값 <c>CAST(0 AS BIGINT)</c> 를 지어냈고 Critic 이 S03 에 승계 UPDATE 를
+        /// 넣게 했다. 나머지 11 편은 발급 절이나 그 뒤에서 잠금을 잡는다.
+        ///
+        /// [오라클] 계약(<see cref="ControlColumn.ReferencesRunId"/>)이 run id 자리를 말하고, 발급 절은 문서 순서로
+        /// <c>batch.BatchRun</c> 에 처음 행을 만드는 절이다 - <see cref="CheckGateRequiresStepsBeforeRunId"/> 와 같은 축이라
+        /// 두 검사가 같은 문서에서 다른 답을 내지 않는다. 이름 추정이 아니므로 <c>LockOwnerRunId</c> 같은 변주에 눈이 멀지 않는다.
+        ///
+        /// [왜 게이트 검사로 안 되는가] 그 검사는 게이트가 <b>요구하는 단계 목록</b>만 본다. B17 은 게이트를 어기지 않았다 -
+        /// 저널·체크포인트도 쓰지 않았다. 막힌 통로는 「제어 표의 NOT NULL 컬럼이 run id 를 요구한다」였다.
+        ///
+        /// [처방이 둘인 이유 - 2026-09-16 실측] 순서는 <b>목차</b>가 정하고 목차는 판 안에서 다시 만들어지지 않는다(골격·단계만
+        /// 수리된다). 그래서 「뒤로 옮겨라」만 적으면 한 절을 다시 써도 따를 수 없는 처방이 되어 수리 예산만 태운다. 한 절 안에서
+        /// 실제로 할 수 있는 수는 「이 단계가 실행 행을 먼저 만들어 발급 단계가 되는 것」이고, 계약 표가 면제라 그 쓰기는 목차 밖
+        /// 쓰기로 걸리지 않는다(T36 면제, main d8d0eee9). 그래서 그 수를 먼저 적는다.
+        /// 또 「쓰기를 그냥 지우라」는 처방은 못 쓴다 - 목차가 행 생성 단계로 지정한 단계가 상태값을 쓰지 않으면
+        /// <see cref="ValidateControlStatusTerminalWrites"/>(계약이 행 생성 단계로 정한 단계가 상태 어휘 전부를 쓰는지 본다)가 그 단계를 고발해 두 검사가 서로 반대를 요구한다.
+        /// 판독: docs/audit-reports/2026-09-16-발급전-잠금-계약-사전선언.md
+        /// </summary>
+        private static void CheckPreRunIdRunIdWrites(string markdown, ValidationResult result)
+        {
+            if (string.IsNullOrWhiteSpace(markdown)) return;
+
+            var sections = SplitStepSections(markdown);
+            if (sections.Count == 0) return;
+
+            var issuer = sections.Select((s, i) => (s.Code, s.Body, Index: i)).FirstOrDefault(s => CreatesRowIn(s.Body, "BatchRun"));
+            if (issuer.Code == null) return;
+
+            var before = new HashSet<string>(sections.Take(issuer.Index).Select(s => s.Code), StringComparer.OrdinalIgnoreCase);
+            if (before.Count == 0) return;
+
+            var ranges = StepSectionLineRanges(markdown);
+            var writes = new List<(string Owner, string Table, string Column, string Statement)>();
+
+            foreach (Match fence in Regex.Matches(markdown, @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline))
+            {
+                var fenceLine = markdown.AsSpan(0, fence.Index).Count('\n');
+                var owner = ranges.FirstOrDefault(r => fenceLine > r.Start && fenceLine < r.End).Code;
+                if (owner == null || !before.Contains(owner)) continue;
+
+                foreach (var write in ControlRunIdWriteFacts.Read(fence.Groups["sql"].Value))
+                {
+                    writes.Add((owner, write.Table, write.Column, write.Statement));
+                }
+            }
+
+            foreach (var group in writes
+                         .GroupBy(w => (w.Owner, w.Table), OwnerTableComparer)
+                         .OrderBy(g => g.Key.Owner, StringComparer.Ordinal)
+                         .ThenBy(g => g.Key.Table, StringComparer.Ordinal))
+            {
+                var columns = group.Select(w => w.Column).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(c => c, StringComparer.Ordinal).ToList();
+                var message =
+                    $"{group.Key.Owner} 섹션은 RunId 를 발급하는 `{issuer.Code}` 보다 먼저 실행되는데 " +
+                    $"`{group.Key.Table}` 의 {string.Join(", ", columns.Select(c => "`" + c + "`"))} 에 값을 씁니다 - " +
+                    "그 컬럼은 발급된 RunId 를 담는 자리(계약이 `NOT NULL` 로 정했습니다)라서 이 시점에는 채울 값이 없고, " +
+                    "예약값이나 자리표시값을 만들어 넣어서도 안 됩니다. 고치는 수는 둘입니다 - " +
+                    $"이 단계가 실행 행(`batch.BatchRun`)을 먼저 만들어 발급 단계가 되게 하거나, 이 쓰기를 `{issuer.Code}` 뒤로 옮기십시오. " +
+                    "중복 실행 판정은 잠금을 잡는 그 자리에서 하고, 그때 이미 만들어진 실행 행은 실패로 닫습니다.";
+
+                result.Report(message);
+                result.DetailedErrors.Add(new DetailedError
+                {
+                    Type = ErrorType.PreRunIdRunIdWrite,
+                    Message = message,
+                    OwnerStepCode = group.Key.Owner,
+                    // 어휘는 쓰기 문장의 그 컬럼 줄만 - 메시지 백틱을 어휘로 삼으면 컬럼 이름을 언급만 한 멀쩡한 단계까지 연다(작성 계약 9).
+                    Lexemes = group
+                        .SelectMany(w => MarkdownSectionLocator.SplitLines(w.Statement)
+                            .Select(line => line.Trim())
+                            .Where(line => columns.Any(c => line.Contains(c, StringComparison.OrdinalIgnoreCase))
+                                           && !WhereOnlyRunIdLineRegex.IsMatch(line)))
+                        .Distinct(StringComparer.Ordinal)
+                        .ToList()
+                });
+            }
+        }
+
+        /// <summary>
+        /// 문장 원문에서 그 컬럼이 <b>읽기 자리</b>에 있는 줄. 어휘에 이 줄을 실으면 발급 뒤 하트비트 갱신처럼
+        /// 조건으로만 쓰는 멀쩡한 줄을 지목 재생성이 고치려 든다(실물 B17 S02 의 `SQL_REFRESH_OWN_LOCK`).
+        /// </summary>
+        private static readonly Regex WhereOnlyRunIdLineRegex = new(
+            @"^\s*(AND|OR|WHERE|ON)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static readonly IEqualityComparer<(string Owner, string Table)> OwnerTableComparer = new OwnerTableKeyComparer();
+
+        private sealed class OwnerTableKeyComparer : IEqualityComparer<(string Owner, string Table)>
+        {
+            public bool Equals((string Owner, string Table) x, (string Owner, string Table) y) =>
+                string.Equals(x.Owner, y.Owner, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(x.Table, y.Table, StringComparison.OrdinalIgnoreCase);
+
+            public int GetHashCode((string Owner, string Table) obj) =>
+                HashCode.Combine(obj.Owner?.ToLowerInvariant(), obj.Table?.ToLowerInvariant());
         }
 
         private static readonly IEqualityComparer<(string Table, string? Owner)> TableOwnerComparer = new TableOwnerKeyComparer();

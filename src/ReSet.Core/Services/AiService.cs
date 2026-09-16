@@ -4395,6 +4395,11 @@ Rules for the step list:
 - Never emit an empty `Steps` list and never omit the JSON block, however incomplete the supplied analysis feels. A step list with imperfect `LegacyProcedures`, `TargetTables`, or `ErrorCodes` is recoverable — every one of those three is corrected downstream from the source specifications. An absent step list is not recoverable: it discards every per-step section and every per-step check before any correction can happen.
 - `Chunkable` is false when the step is an aggregation or cross-DB join that cannot be chunked by a single key.
 - Emit the block once. Do not wrap the whole answer in a code block.
+- Step ORDER around the run id: the run row (`batch.BatchRun`) is INSERTed by one step, and its identity value is the
+  run id every later step writes. Any step that writes the run id - the execution lock row (`batch.BatchRunLock`,
+  whose `OwnerRunId` is NOT NULL), a step journal row, or a checkpoint row - MUST come at or after that step.
+  So put the lock acquisition in the run-row step itself, or after it. Never place it before: there is no run id to
+  own yet, and inventing a placeholder (0, -1) or declaring the conflict in prose both ship a plan that cannot run.
 
 " + BatchObjectSchemaRule;
 

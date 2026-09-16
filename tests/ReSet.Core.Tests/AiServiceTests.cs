@@ -405,6 +405,32 @@ END",
         }
 
         [Fact]
+        public async Task DraftBatchPlanStructureAsync_CarriesTheRunIdOrderingRule()
+        {
+            // 실측(POQSettleBatch16·B17, 배송본 13 편 중 둘): 목차가 잠금 단계를 발급 단계 앞에 두었고
+            // batch.BatchRunLock.OwnerRunId 가 NOT NULL 이라 한 판은 예약값 0 을 지어냈고 다른 판은
+            // 「선행 설계 차단 사항」을 선언한 채 S02 에서 항상 죽는 계획서를 배송했다.
+            //
+            // 이 자리가 유일한 방어선인 이유: 순서는 목차가 정하는데 제어 계약 표(BatchControlContract)는
+            // 단계·골격·폴백 프롬프트에만 실리고 목차 프롬프트에는 실리지 않는다. 그리고 목차는 판 안에서
+            // 다시 만들어지지 않아(골격·단계만 수리된다) L1 이 잡아도 그 자리를 고칠 수 없다.
+            var mockResponse = "{\"choices\":[{\"message\":{\"content\":\"## 목차\"}}]}";
+            var mockHandler = new MockHttpMessageHandler(mockResponse);
+            var httpClient = new HttpClient(mockHandler);
+            var client = new OpenAiClient(httpClient, "test_key", "https://api.openai.com/v1", "gpt-4o");
+            IAiService service = new AiService(client, 0.2f);
+
+            var result = await service.DraftBatchPlanStructureAsync(
+                "brainstorming", "C#", "Test_Job", new[] { "dbo.UP_UTIL_SETTLE_INS" });
+
+            Assert.Contains("Step ORDER around the run id", result.SystemPrompt);
+            Assert.Contains("batch.BatchRunLock", result.SystemPrompt);
+            Assert.Contains("MUST come at or after that step", result.SystemPrompt);
+            // 지어내기 금지까지 같은 문단에 있어야 한다 - B16 이 예약값 0 으로 빠져나간 자리다.
+            Assert.Contains("inventing a placeholder", result.SystemPrompt);
+        }
+
+        [Fact]
         public async Task DraftBatchPlanStructureAsync_TellsTheModelItsTargetTablesSurviveWhenAStepHasNoLegacyOrigin()
         {
             // 프롬프트는 TargetTables를 "나중에 교체되는 추정치"라고만 말해 왔다. 레거시
