@@ -300,6 +300,24 @@ public sealed class VerificationControlTotalNamesTests
         Assert.Single(Validate(Fixture("Batch20-verification.md"), null, ("S11", Fixture("Batch20-S11-attempt1.md")), ("S17", helper)));
     }
 
+    // [최종 리뷰에서 찾은 구멍] 세트 **자신의** 절 안에서 헬퍼에 빠진 이름을 넘기는 호출은 「기대 이름 나열」이 아니라 쓰기다 -
+    // 세트판 ⑤ 는 이미 문서 전체의 비 SQL 인용을 보는데 ⑥ 만 세트 절을 빼고 봐서 발화했다. 단계판의 「읽는 쪽 제외」는 B20 S18 이
+    // 자기 의사코드에 기대 이름을 나열한 실물 때문이고, 세트판에는 그런 실물이 없다. 입력: V25 + 실물 B17 헬퍼 펜스 + 호출 줄(B10 S17 모양)을 세트 절 안에.
+    [Fact]
+    public void Batch20_V25WithTheSetsOwnHelperCallsInsideTheSet_IsSilent()
+    {
+        var b17 = Fixture("Batch17-verification.md");
+        var start = b17.IndexOf("```sql\n-- SQL_CAPTURE_CONTROL_TOTAL\n", StringComparison.Ordinal);
+        var helperFence = b17[start..(b17.IndexOf("```", start + 3, StringComparison.Ordinal) + 3)];
+        var calls = "```pseudocode\n" + string.Concat(Batch20V25MissingNames.Select(n =>
+            $"repository.execute(SQL_CAPTURE_CONTROL_TOTAL, {{ p_runId: runId, p_stepCode: \"S11\", p_controlName: \"{n}\",  p_controlValue: value }})\n")) + "```\n";
+        var plan = Fixture("Batch20-verification.md") + "\n\n" + helperFence + "\n\n" + calls;
+        Assert.StartsWith("## 통합 데이터 정합성 검증 SQL 세트", plan);
+        Assert.DoesNotContain("\n## ", plan);   // 호출 줄이 세트 절 안에 있다
+
+        Assert.Empty(Validate(plan, null, ("S11", Fixture("Batch20-S11-attempt1.md"))));
+    }
+
     // ⑥ 세트판 공통 규약 동률: 규약이 세트의 빠진 이름만 담으면 S11 을 연다 - 어휘는 S11 의 원문 줄, OwnerStepCode 는 S11.
     [Fact]
     public void Batch20_V25_WhenOnlyTheSetFollowsTheSharedConventions_OpensTheWriter()

@@ -1129,6 +1129,9 @@ namespace ReSet.Core.Services
                 written.UnionWith(ownerNames);
             }
 
+            // [구조상 죽은 가드 - 2026-09-17 최종 리뷰] 두 호출부 모두 ⑤ 가 안 난 읽기에서만 부르므로 여기 오면 합집합과 늘 겹친다
+            // (세트판은 ⑤ 가 걸러 낸 이름이 전부 「어디엔가 쓰인」 이름이라 아래 missing 에서도 빠진다). 걷어내도 빨개지는 시험이 없다.
+            // 남기는 이유는 ⑥ 의 정의(겹칠 때만)를 호출부 순서에 기대지 않게 하는 것이다.
             if (!names.Any(written.Contains)) return null;
 
             var anyUnknownWrite = extraUnknownWrite || facts.UnknownWriters.Count > 0;
@@ -1228,7 +1231,6 @@ namespace ReSet.Core.Services
 
             // ⑥ 의 안전판 - 세트판 기존 ③ 은 「모름」 쓰기가 있을 때만 조합을 봤다. ⑥ 은 문서에 조합이 있으면 늘 침묵한다.
             var buildsNamesAtRuntime = ControlNameBuiltAtRuntimeRegex.IsMatch(planMarkdown);
-            var outsideVerification = string.Join("\n", lines.Take(header).Concat(lines.Skip(end)));
 
             foreach (var read in verificationReads)
             {
@@ -1282,8 +1284,10 @@ namespace ReSet.Core.Services
                 if (reportedEmptyOverlap || buildsNamesAtRuntime) continue;
                 var readNames = read.Names.ToHashSet(StringComparer.OrdinalIgnoreCase);
                 if (UnwrittenReadNames(facts, readOwners, readNames, namesWrittenAnywhere,
+                        // 세트판은 세트 절 자신도 본다 - 세트의 헬퍼 호출은 기대 이름 나열이 아니라 쓰기다(최종 리뷰에서 찾은 오탐:
+                        // 세트 절 안의 호출 줄을 빼고 봐서 발화했다). 세트판 ⑤ 의 NameWrittenNowhere 와 같은 범위다.
                         name => sectionsByStepCode.Values.Any(section => section != null && MentionedInNonSqlFences(section, name))
-                                || MentionedInNonSqlFences(outsideVerification, name),
+                                || MentionedInNonSqlFences(planMarkdown, name),
                         extraUnknownWrite: hasUnknownWrite) is not { } partial)
                     continue;
 
