@@ -1396,10 +1396,10 @@ namespace ReSet.Core.Services
         /// SQL 이 아닌 펜스(의사코드·C#)가 이 이름을 인용 리터럴로 담고 있는가. 범용 헬퍼에 이름을 넘기는 호출이
         /// 그 자리에 있으면, 리터럴 INSERT 가 없어도 실행 때 그 이름의 행이 생긴다 - 그때는 고발하지 않는다.
         ///
-        /// [코퍼스 도달 0 · 시험 없음 - 2026-09-16 실측] 배송본 13 편의 비 SQL 펜스 전수에서 통제명을 리터럴로 넘기는
-        /// 호출 자리는 **0** 이다(`controlName:`·`p_controlName =` 모양 전수 검색). 그래서 이 가지를 걷어내도 빨개지는
-        /// 시험이 없다(되돌림 n4 생존). 남기는 이유는 방향이다 - 이 가지는 발화를 **줄이기만** 하고, 그 모양이 나오면
-        /// 막는 것이 오탐으로 재시도를 태우는 것보다 싸다. 실물이 생기면 그때 가르는 시험을 붙여라.
+        /// [정정 - 2026-09-17] 2026-09-16 에 「배송본 비 SQL 펜스에서 통제명을 리터럴로 넘기는 호출 자리 0」이라 적었으나 틀렸다 -
+        /// 그때 찾은 모양(`controlName:`·`p_controlName =`)이 실물 모양(`p_controlName: "TSettleMst_CLTotal_TX"`)과 달랐다.
+        /// 배송본 `agent/steps`·`agent/verification` 에서 실물은 POQSettleBatch10 S17 의 8 줄이다. 이 가지는 이제 ⑥ 시험이 가른다
+        /// (`WithAnUnknownWriter_AHelperCallElsewherePassingTheMissingNames_IsSilent` · `Batch20_V25WithAHelperCallPassingTheMissingNames_IsSilent`).
         /// </summary>
         private static bool MentionedInNonSqlFences(string markdown, string name)
         {
