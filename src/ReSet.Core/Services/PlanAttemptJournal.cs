@@ -113,7 +113,7 @@ namespace ReSet.Core.Services
         /// 상수다</b> — 규약을 바꾸는 커밋에서 함께 올려라. 안 올리고 지나가도
         /// 재사용한 섹션은 문서 전체 L1 을 다시 통과해야 하므로 L1 이 그물이 된다.
         /// </summary>
-        public const int ContractVersion = 2;   // 2026-09-16: 계약에 「Run lock ownership」 문단이 들어와 옛 시도를 재사용하면 새 계약이 안 돈다
+        public const int ContractVersion = 3;   // 2026-09-17: 의사코드 리포지터리 API 어휘가 계약에 들어왔다(2026-09-16 의 Run lock ownership 에 이어) - 옛 시도를 재사용하면 새 계약이 안 돈다
 
         private readonly string _outputRoot;
         private readonly string _jobName;
