@@ -5031,6 +5031,27 @@ Consolidate the provided specifications into a single unified batch job named '{
             builder.AppendLine();
             builder.Append(BatchControlContract.RenderPromptTable());
 
+            // [의사코드 리포지터리 API - 2026-09-17] 이름을 규정하지 않으니 모델이 단계마다 새로 지었고
+            // (배송본 13 편 전수: execute 610 · queryScalar 71 · queryRows 37 · queryRow 33 · queryAll 6 ·
+            // queryOne 9 · query 4 · queryMany 3 · querySingle 1 · queryRowOrNone 1), 한 문서 안에서 같은
+            // 연산을 두 이름 이상으로 쓴 Job 이 13 편 중 4 였다. Critic 은 그 산포를 「한 문서 한 표기」
+            // 위반으로 감점했다(B18 2 차 예외 7 - 총점 92 에 배너가 남은 사유가 이것이다).
+            // 정본 넷은 관측 최다에서 골랐다 - 새 이름을 발명한 것이 아니다.
+            // 판독: docs/audit-reports/2026-09-17-의사코드-API-어휘-계약-사전선언.md
+            builder.AppendLine();
+            builder.AppendLine("[Pseudocode Repository API]");
+            builder.AppendLine("The pseudocode calls the database through exactly these four helpers. They are FIXED names:");
+            builder.AppendLine("- `repository.execute(conn, tx, SQL_NAME, parameters)` - runs a statement (INSERT/UPDATE/DELETE/MERGE/DDL).");
+            builder.AppendLine("- `repository.queryRows(conn, tx, SQL_NAME, parameters)` - reads many rows.");
+            builder.AppendLine("- `repository.queryRow(conn, tx, SQL_NAME, parameters)` - reads **one row or none** (no separate ...OrNone helper).");
+            builder.AppendLine("- `repository.queryScalar(conn, tx, SQL_NAME, parameters)` - reads a single value.");
+            builder.AppendLine("Do NOT use queryAll, queryMany, query, queryOne, querySingle, queryRowOrNone or any other spelling -");
+            builder.AppendLine("never invent a second name for the same operation. An implementation round that inherits three names");
+            builder.AppendLine("for one operation has to build three APIs.");
+            builder.AppendLine("Your own helpers (journal, checkpoint, failure recording) keep whatever name you choose, but use");
+            builder.AppendLine("one name per operation for the whole document - not writeFailureJournal in one step and");
+            builder.AppendLine("markStepFailedInSeparateControlTransaction in another.");
+
             // 재료가 비면 절 자체를 넣지 않는다. 빈 표를 실으면 모델이 "원본 파라미터가
             // 없다"로 읽어 있지도 않은 근거로 파라미터를 새로 지어낼 수 있다.
             var interfaceTable = StepInterfaceFacts.RenderPromptTable(stepInterfaces);
