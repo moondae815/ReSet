@@ -402,6 +402,21 @@ public sealed class ControlTotalNameConsistencyTests
         Assert.Empty(Validate(("S11", Fixture("Batch20-S11-attempt1.md")), ("S17", Batch10S17AsUnknownWriter(callsWithMissingNames: false)), ("S18", reader)));
     }
 
+    // ⑥ 의 공통 규약 동률: 규약이 빠진 이름을 담고 쓰는 쪽 이름을 하나도 안 담으면 어긴 것은 쓰는 단계(S11)다.
+    // 규약 문장은 합성이다(B20 실물 규약에는 통제명이 없다) - ⑤ 의 같은 규칙 시험과 같은 방식.
+    [Fact]
+    public void PartialOverlap_WhenOnlyTheReaderFollowsTheSharedConventions_TheWriterIsAttributed()
+    {
+        var conventions = "통제명은 " + string.Join(", ", Batch20S18MissingNames.Select(n => "N'" + n + "'")) + " 을 쓴다.";
+
+        var defect = Assert.Single(ValidateWith(conventions, Batch20Attempt1()));
+
+        Assert.Equal("S11", defect.Key);
+        Assert.Contains("공통 규약", defect.Value.Reason);
+        // 짝: 규약이 쓰는 쪽 이름(TxAmtSum)도 담으면 종전대로 읽는 단계다.
+        Assert.Equal("S18", Assert.Single(ValidateWith(conventions + " N'TxAmtSum'", Batch20Attempt1())).Key);
+    }
+
     // ⑤ 가 난 읽기에는 ⑥ 을 겹쳐 걸지 않는다 - 몫이 둘(S13·S20)인 실물 B11 S20 은 S13 몫으로 ⑤ 가 나는데, 읽기 목록에 아무도 안 쓰는
     // 이름 하나를 더하면 합집합(S20 이 LEDGER_* 를 쓴다)과는 겹쳐 ⑥ 조건도 참이 된다. 같은 읽기를 두 문구로 두 번 여는 것을 막는다.
     [Fact]

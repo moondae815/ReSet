@@ -300,6 +300,22 @@ public sealed class VerificationControlTotalNamesTests
         Assert.Single(Validate(Fixture("Batch20-verification.md"), null, ("S11", Fixture("Batch20-S11-attempt1.md")), ("S17", helper)));
     }
 
+    // ⑥ 세트판 공통 규약 동률: 규약이 세트의 빠진 이름만 담으면 S11 을 연다 - 어휘는 S11 의 원문 줄, OwnerStepCode 는 S11.
+    [Fact]
+    public void Batch20_V25_WhenOnlyTheSetFollowsTheSharedConventions_OpensTheWriter()
+    {
+        var conventions = "통제명은 " + string.Join(", ", Batch20V25MissingNames.Select(n => "N'" + n + "'")) + " 을 쓴다.";
+        var s11 = Fixture("Batch20-S11-attempt1.md");
+
+        var error = Assert.Single(Validate(Fixture("Batch20-verification.md"), conventions, ("S11", s11)));
+
+        Assert.Contains("공통 규약", error.Message);
+        Assert.Equal("S11", error.OwnerStepCode);
+        Assert.All(MechanicalValidator.ViolationLexemes(error), lexeme => Assert.Contains(lexeme, s11));
+        // 짝: 규약이 S11 이름도 담으면 종전대로 세트(골격)다.
+        Assert.Null(Assert.Single(Validate(Fixture("Batch20-verification.md"), conventions + " N'TxAmtSum'", ("S11", s11))).OwnerStepCode);
+    }
+
     // 세트 **자신의** 「모름」 쓰기(실물 B17 범용 헬퍼 펜스)도 헬퍼 호출 안전판을 켠다 - 단계에 「모름」 쓰기가 없어도.
     // 호출 줄은 세트 밖 절의 의사코드에 두었다(실물 B10 S17 호출 줄 모양). 이 입력에서 ⑤ 는 호출 줄 때문에 이름을 다 거르고 침묵한다.
     [Fact]
