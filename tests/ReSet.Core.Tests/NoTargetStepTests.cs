@@ -89,6 +89,37 @@ public sealed class NoTargetStepTests
         Assert.Single(PlanDefects(markdown));
     }
 
+    // [합성 픽스처임을 밝힌다 - 2026-09-17 리뷰 Important 2] 아래 셋은 실물이 없다. ScriptDom 으로 코퍼스
+    // SQL 펜스 **5,514 개**를 전수로 읽어 `SELECT … INTO`·`TRUNCATE`·`EXECUTE AS` 를 세니 **전부 0** 이었다
+    // (B11 의 `INTO batch.ReconciliationResult` 는 `INSERT … INTO` 다). 그래도 가지를 남기는 이유는 방향이다 -
+    // 없으면 그 모양의 단계가 조용히 통과해 **놓침**이 된다. 실물이 없으므로 최소 SQL 을 직접 썼고, 그 사실을
+    // 여기 적는다(리뷰가 세 갈래를 동시에 걷어내도 시험 여섯이 초록이던 것을 잡았다).
+    [Theory]
+    [InlineData("TRUNCATE TABLE batch.BatchStepJournal;", "TRUNCATE")]
+    [InlineData("SELECT RunId INTO batch.RunSnapshot FROM batch.BatchRun;", "SELECT … INTO")]
+    [InlineData("EXECUTE AS USER = 'batchWriter';", "EXECUTE AS")]
+    public void EachWriteShapeWithoutRealCorpusMaterial_IsStillAPlanDefect(string sql, string shape)
+    {
+        var markdown = Fixture("Batch18-S01-read-only.md") + "\n```sql\n" + sql + "\n```\n";
+
+        Assert.Single(PlanDefects(markdown));
+        Assert.False(string.IsNullOrEmpty(shape));   // 모양 이름은 실패 메시지에만 쓴다
+    }
+
+    // [알려진 한계를 못박는다 - 2026-09-17 리뷰 Important 1] 이 판정은 **SQL 펜스만** 본다.
+    // 의사코드 펜스 안에서 리포지터리 호출로만 쓰는 단계는 「쓸 수 없다」로 읽혀 조용해진다 - 놓침이다.
+    // 코퍼스 실측(리뷰): 펜스 태그는 ```sql 5,487 · ```pseudocode 671 · ```csharp 374 이고 일곱 자리는 전부
+    // SQL 펜스를 갖고 있어 이 한계에 걸리지 않았다. 이 시험은 그 한계가 **바뀌면 알려 주는** 자다 -
+    // 언젠가 의사코드까지 읽게 되면 이 시험이 빨개지고, 그때 기대를 바꾸는 것이 의도된 절차다.
+    [Fact]
+    public void KnownLimit_AWriteOnlyInAPseudocodeFence_IsNotSeen()
+    {
+        var markdown = Fixture("Batch18-S01-read-only.md")
+            + "\n```csharp\nrepository.execute(\"INSERT INTO batch.BatchStepJournal (RunId) VALUES (@runId)\");\n```\n";
+
+        Assert.Empty(PlanDefects(markdown));
+    }
+
     // 선언이 있는 단계는 이 축과 무관하다 - 종전과 같다.
     [Fact]
     public void AStepDeclaringTargets_IsUnaffected()

@@ -533,6 +533,9 @@ namespace ReSet.Core.Services
             //
             // TargetTables 축은 여기에 딸리지 않는다. 출신이 없다는 것과 쓰는 테이블이
             // 없다는 것은 다른 사실이고, 아무것도 쓰지 않는다는 선언은 그 자체로 확인이 필요하다.
+            // [2026-09-17] 그 「확인」은 위 TargetTables 분기가 본문으로 닫는다(StepWriteCapabilityFacts) -
+            // 사람 배너가 아니라 파서가 본다. 여기 ErrorCodes 축은 그 판정을 쓰지 않는다(원본 코드 보존은
+            // 쓰기 여부와 무관하다).
             if (step.LegacyProcedures.Count > 0 &&
                 !step.ErrorCodes.Any(code => !string.IsNullOrWhiteSpace(code)))
             {
