@@ -1334,12 +1334,7 @@ namespace ReSet.Core.Services
             if (sectionsByStepCode == null || sectionsByStepCode.Count == 0) return null;
             if (allSteps == null || allSteps.Count == 0) return null;
 
-            var tableNames = BatchControlContract.Tables
-                .Where(t => t.Columns.Any(c => string.Equals(c.Name, "ControlName", StringComparison.OrdinalIgnoreCase)))
-                .SelectMany(t => new[] { t.Name }.Concat(t.Aliases ?? Array.Empty<string>()))
-                .Select(n => n[(n.LastIndexOf('.') + 1)..])
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var tableNames = ControlTotalNameFacts.ControlTableBareNames();
             if (tableNames.Count == 0) return null;
 
             var planned = new HashSet<string>(allSteps.Select(s => s.Code), StringComparer.OrdinalIgnoreCase);
