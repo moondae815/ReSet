@@ -1277,9 +1277,10 @@ namespace ReSet.Core.Services
                     });
                 }
 
-                // ⑥ 일부 겹침 - 실물 POQSettleBatch20 V25. 세트가 스스로 쓰는 이름은 빼고 본다(규칙 ①, B16 실물).
+                // ⑥ 일부 겹침 - 실물 POQSettleBatch20 V25. 세트가 스스로 쓰는 이름(규칙 ①, B16 실물)은 namesWrittenAnywhere 에 들어 있어
+                // 「어디에서도 안 쓰인다」에서 빠진다 - 따로 거르지 않는다(따로 거르던 첫 구현은 되돌림에서 지키는 것이 없었다).
                 if (reportedEmptyOverlap || buildsNamesAtRuntime) continue;
-                var readNames = read.Names.Where(name => !namesTheSetWrites.Contains(name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var readNames = read.Names.ToHashSet(StringComparer.OrdinalIgnoreCase);
                 if (UnwrittenReadNames(facts, readOwners, readNames, namesWrittenAnywhere,
                         name => sectionsByStepCode.Values.Any(section => section != null && MentionedInNonSqlFences(section, name))
                                 || MentionedInNonSqlFences(outsideVerification, name),

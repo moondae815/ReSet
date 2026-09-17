@@ -402,6 +402,23 @@ public sealed class ControlTotalNameConsistencyTests
         Assert.Empty(Validate(("S11", Fixture("Batch20-S11-attempt1.md")), ("S17", Batch10S17AsUnknownWriter(callsWithMissingNames: false)), ("S18", reader)));
     }
 
+    // ⑤ 가 난 읽기에는 ⑥ 을 겹쳐 걸지 않는다 - 몫이 둘(S13·S20)인 실물 B11 S20 은 S13 몫으로 ⑤ 가 나는데, 읽기 목록에 아무도 안 쓰는
+    // 이름 하나를 더하면 합집합(S20 이 LEDGER_* 를 쓴다)과는 겹쳐 ⑥ 조건도 참이 된다. 같은 읽기를 두 문구로 두 번 여는 것을 막는다.
+    [Fact]
+    public void AReadAlreadyReportedForAnEmptyOverlap_GetsNoPartialOverlapReportToo()
+    {
+        var original = Fixture("Batch11-S20.md");
+        const string from = "               N'LEDGER_POQ_INCOME'\n           )";
+        Assert.Contains(from, original);
+        var reader = original.Replace(from, "               N'LEDGER_POQ_INCOME',\n               N'LEDGER_NOBODY_WRITES'\n           )");
+
+        var defect = Assert.Single(Validate(("S13", Fixture("Batch11-S13.md")), ("S20", reader)));
+
+        Assert.Equal("S20", defect.Key);
+        Assert.Contains("겹치는 이름이 하나도 없어", defect.Value.Reason);
+        Assert.DoesNotContain("그중 ", defect.Value.Reason);
+    }
+
     // [배선] 발화를 재는 시험은 이 검사가 파이프라인에서 아예 안 불려도 초록이다. 오케스트레이터가 결과를
     // floorViolations 에 합치는 자리를 소스에서 잠근다(T25 ValidateControlStatusTerminalWrites 와 같은 모양).
     [Fact]

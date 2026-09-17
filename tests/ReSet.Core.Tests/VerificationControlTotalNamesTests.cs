@@ -300,6 +300,21 @@ public sealed class VerificationControlTotalNamesTests
         Assert.Single(Validate(Fixture("Batch20-verification.md"), null, ("S11", Fixture("Batch20-S11-attempt1.md")), ("S17", helper)));
     }
 
+    // 세트 **자신의** 「모름」 쓰기(실물 B17 범용 헬퍼 펜스)도 헬퍼 호출 안전판을 켠다 - 단계에 「모름」 쓰기가 없어도.
+    // 호출 줄은 세트 밖 절의 의사코드에 두었다(실물 B10 S17 호출 줄 모양). 이 입력에서 ⑤ 는 호출 줄 때문에 이름을 다 거르고 침묵한다.
+    [Fact]
+    public void Batch20_V25WithTheSetsOwnHelperAndACallPassingTheMissingNames_IsSilent()
+    {
+        var b17 = Fixture("Batch17-verification.md");
+        var start = b17.IndexOf("```sql\n-- SQL_CAPTURE_CONTROL_TOTAL\n", StringComparison.Ordinal);
+        var helperFence = b17[start..(b17.IndexOf("```", start + 3, StringComparison.Ordinal) + 3)];
+        var calls = "\n\n## 배치 실행 오케스트레이션\n\n```pseudocode\n" + string.Concat(Batch20V25MissingNames.Select(n =>
+            $"repository.execute(SQL_CAPTURE_CONTROL_TOTAL, {{ p_runId: runId, p_stepCode: \"S11\", p_controlName: \"{n}\",  p_controlValue: value }})\n")) + "```\n";
+        var withHelper = Fixture("Batch20-verification.md") + "\n\n" + helperFence + "\n";
+
+        Assert.Empty(Validate(withHelper + calls, null, ("S11", Fixture("Batch20-S11-attempt1.md"))));
+    }
+
     // [귀속] 어휘는 검증 세트의 원문 줄이다 - 조립 문서에서 골격만 열고 단계는 열지 않는다(골격 패치 수리로 간다).
     [Fact]
     public void OnTheAssembledPlan_TheDefectOpensOnlyTheSkeleton()
