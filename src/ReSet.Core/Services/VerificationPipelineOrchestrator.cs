@@ -4235,6 +4235,21 @@ namespace ReSet.Core.Services
             // 필요하다는 인상만 남긴다.)
             var gate = new SemaphoreSlim(_stepConcurrency);
 
+            // [쓰는 쪽 먼저 - 2026-09-17] 대상 중 한 단계가 다른 대상의 제어 합계 몫을 읽으면 쓰는 쪽을 먼저 끝까지 만들고, 그 새 본문을
+            // 읽는 쪽 요청에 싣는다. 종전에는 첫 단계만 기다린 뒤 나머지를 동시에 띄워 서로의 새 본문을 못 봤다 - POQSettleBatch21 에서
+            // 읽는 쪽 S19 는 옛 S12 에, S12 는 새 이름으로 옮겨 L1·Critic 이 둘 다 잡은 결함이 뒤집힌 채 배송됐다.
+            // 판정 재료는 재생성 **전** 섹션이다. 간선이 없거나 순환이면 null - 종전 실행 그대로.
+            // 선언: docs/audit-reports/2026-09-17-지목재생성-쓰는쪽먼저-사전선언.md
+            var upstreamPlan = canTargetSections
+                ? UpstreamSectionOrder.For(pending.Select(p => p.Code).ToList(), sections)
+                : null;
+            var upstreamBodies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            IReadOnlyList<(string StepCode, string Body)>? UpstreamFor(string code) =>
+                upstreamPlan != null && upstreamPlan.UpstreamOf.TryGetValue(code, out var owners)
+                    ? owners.Where(upstreamBodies.ContainsKey).Select(owner => (owner, upstreamBodies[owner])).ToList()
+                    : null;
+
             async Task<StepSectionResult> RunStepAsync(BatchStepPlan step, int index)
             {
                 await gate.WaitAsync(cancellationToken);
@@ -4250,7 +4265,8 @@ namespace ReSet.Core.Services
                         step, steps, conventions, specs, targetLanguage, jobName,
                         knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, callGraph,
                         ddlByProcedure, journal, attempt, cancellationToken, PreviousBodyFor(step.Code),
-                        initialFloorFeedback: sharedBlockFeedback.GetValueOrDefault(step.Code));
+                        initialFloorFeedback: sharedBlockFeedback.GetValueOrDefault(step.Code),
+                        upstreamSections: UpstreamFor(step.Code));
 
                     progressScope.CompleteTask(taskKey);
 
@@ -4276,17 +4292,50 @@ namespace ReSet.Core.Services
             //
             // 이 await가 워밍의 유일한 보증이다. 세마포어가 아니다 — 슬롯이 여러
             // 개여도 두 번째 호출은 여기서 시작조차 하지 않는다. 지우지 말 것.
-            var stepResults = new List<StepSectionResult>(pending.Count);
-            if (pending.Count > 0)
+            async Task<List<(int Index, StepSectionResult Result)>> RunWaveAsync(IReadOnlyList<(BatchStepPlan Step, int Index)> wave)
             {
-                stepResults.Add(await RunStepAsync(pending[0], 0));
+                var results = new List<(int, StepSectionResult)>(wave.Count);
+                if (wave.Count == 0) return results;
+                results.Add((wave[0].Index, await RunStepAsync(wave[0].Step, wave[0].Index)));
+                if (wave.Count > 1)
+                {
+                    var rest = wave.Skip(1).Select(async item => (item.Index, await RunStepAsync(item.Step, item.Index))).ToList();
+                    results.AddRange(await Task.WhenAll(rest));
+                }
+
+                return results;
             }
 
-            if (pending.Count > 1)
+            var indexed = pending.Select((step, index) => (Step: step, Index: index)).ToList();
+            var waveResults = new List<(int Index, StepSectionResult Result)>(pending.Count);
+            if (upstreamPlan == null)
             {
-                var rest = pending.Skip(1).Select((step, offset) => RunStepAsync(step, offset + 1)).ToList();
-                stepResults.AddRange(await Task.WhenAll(rest));
+                waveResults.AddRange(await RunWaveAsync(indexed));
             }
+            else
+            {
+                var firstCodes = new HashSet<string>(upstreamPlan.First, StringComparer.OrdinalIgnoreCase);
+                _userInteraction.NotifyStatus(
+                    $"  [grey]* 제어 합계를 읽는 단계보다 쓰는 단계를 먼저 다시 만듭니다: {string.Join(", ", upstreamPlan.First)} → " +
+                    $"{string.Join(", ", upstreamPlan.UpstreamOf.Keys)}[/]");
+                Log.Information(
+                    "지목 재생성 순서 - 쓰는 쪽 먼저: {First} · 읽는 쪽: {Readers}",
+                    string.Join(", ", upstreamPlan.First), string.Join(", ", upstreamPlan.UpstreamOf.Keys));
+
+                var writerResults = await RunWaveAsync(indexed.Where(item => firstCodes.Contains(item.Step.Code)).ToList());
+                foreach (var (_, result) in writerResults)
+                {
+                    // 생성 실패 스텁은 싣지 않는다 - 읽는 쪽이 경고 문구에 맞출 이름은 없다.
+                    if (result.FloorViolation?.Kind == StepDefectKind.GenerationFailed || string.IsNullOrWhiteSpace(result.Markdown)) continue;
+                    upstreamBodies[result.Code] = result.Markdown;
+                }
+
+                waveResults.AddRange(writerResults);
+                waveResults.AddRange(await RunWaveAsync(indexed.Where(item => !firstCodes.Contains(item.Step.Code)).ToList()));
+            }
+
+            // 병합 순서를 종전(목차 순서)과 같게 둔다.
+            var stepResults = waveResults.OrderBy(item => item.Index).Select(item => item.Result).ToList();
 
             // 병합은 단일 스레드에서 목록 순서대로. Task.WhenAll은 완료 순서가 아니라
             // 넘긴 순서로 결과를 돌려주므로, 사전에 들어가는 순서가 결정적이다.
@@ -4559,7 +4608,9 @@ namespace ReSet.Core.Services
             string? previousBody = null,
             // 동결 섹션 재대조(GenerateBySplitAsync)가 이 단계를 대상에 넣은 이유. 첫 시도의 하한 피드백으로 싣는다 -
             // 없으면 직전 본문만 받은 모델이 그대로 돌려주고 호출 1 회가 헛돈다.
-            string? initialFloorFeedback = null)
+            string? initialFloorFeedback = null,
+            // 같은 회차에 먼저 다시 만든 쓰는 쪽 본문(UpstreamSectionOrder). 재시도마다 같은 값을 싣는다.
+            IReadOnlyList<(string StepCode, string Body)>? upstreamSections = null)
         {
             // 이번 회차 안에서 어느 시도든 Exhausted를 던졌는지. adopted == null로
             // 끝났을 때만 반환값의 QuotaExhausted에 실린다.
@@ -4619,7 +4670,8 @@ namespace ReSet.Core.Services
                     var result = await _consolidatorService.GenerateBatchStepSectionAsync(
                         step, steps, conventions, specs, stepInterfaces, targetLanguage, jobName,
                         _consolidatorEffort, floorFeedback, previousBody,
-                        callGraph: callGraph, cancellationToken: cancellationToken);
+                        callGraph: callGraph, cancellationToken: cancellationToken,
+                        upstreamSections: upstreamSections);
                     content = result?.Content;
                 }
                 // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.

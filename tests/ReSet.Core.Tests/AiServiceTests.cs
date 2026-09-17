@@ -1620,6 +1620,48 @@ END",
             Assert.Contains("byte-for-byte", userPrompt);
         }
 
+        // [쓰는 쪽 먼저 - 2026-09-17] 같은 회차에 먼저 다시 만든 쓰는 쪽 본문을 읽는 쪽 요청에 싣는다. 자리는 [Revision Contract] 뒤 ·
+        // [Previous Attempt Rejected] 앞(요청 재생 실험 R2 와 같은 자리, 캐시 접두사 밖). 사전 선언 docs/audit-reports/2026-09-17-지목재생성-쓰는쪽먼저-사전선언.md P5.
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_WithUpstreamSections_PlacesThemBetweenRevisionContractAndRejection()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[1], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job",
+                effort: null, floorFeedback: "청크 진행 위치를 기록하라",
+                previousBody: "### S02. 이전 본문\n\n```sql\nSELECT 2;\n```",
+                upstreamSections: new[] { ("S01", "### S01. 새 본문\n\n```sql\nINSERT INTO batch.BatchControlTotal VALUES (N'LedgerRowCount');\n```") });
+
+            var userPrompt = result.UserPrompt!;
+            var contract = userPrompt.IndexOf("[Revision Contract]", StringComparison.Ordinal);
+            var upstream = userPrompt.IndexOf("[Upstream Section Body — S01 (regenerated in this round; do not change it)]", StringComparison.Ordinal);
+            var rejected = userPrompt.IndexOf("[Previous Attempt Rejected]", StringComparison.Ordinal);
+            Assert.True(contract >= 0 && upstream > contract && rejected > upstream, $"contract {contract} · upstream {upstream} · rejected {rejected}");
+            Assert.Contains("This step reads S01's control totals. Use exactly the ControlName values this section writes.", userPrompt);
+            Assert.Contains("N'LedgerRowCount'", userPrompt[upstream..rejected]);
+        }
+
+        [Fact]
+        public async Task GenerateBatchStepSectionAsync_WithoutUpstreamSections_DoesNotMentionThem()
+        {
+            var specs = new System.Collections.Generic.List<(string FileName, string Content)>
+            {
+                ("dbo.UP_UTIL_SETTLE_INS", "## 개요\n원장 생성")
+            };
+            var steps = TwoSteps();
+
+            var result = await StepService().GenerateBatchStepSectionAsync(
+                steps[1], steps, "공통 규약 본문", specs, Array.Empty<StepInterface>(), "C#", "Test_Job",
+                effort: null, floorFeedback: "청크 진행 위치를 기록하라", previousBody: "### S02\n");
+
+            Assert.DoesNotContain("[Upstream Section Body", result.UserPrompt!);
+        }
+
         // previousBody가 없으면 프롬프트가 한 바이트도 달라지면 안 된다.
         // 1차 회차 프롬프트가 재시도 회차와 같은 바이트를 유지해야 접두사 캐시가 산다.
         [Fact]

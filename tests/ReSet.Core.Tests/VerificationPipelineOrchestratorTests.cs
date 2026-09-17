@@ -6901,6 +6901,105 @@ SELECT 1;
             Assert.True(probe.MaxObserved > 1, "병렬이 전혀 일어나지 않았다 — 팬아웃이 동작하지 않는다.");
         }
 
+        // ── 쓰는 쪽 먼저(2026-09-17) ──────────────────────────────────────────────────────────
+        // 사전 선언 docs/audit-reports/2026-09-17-지목재생성-쓰는쪽먼저-사전선언.md P1~P3. 간선 추출 자체는 B21 실물로
+        // UpstreamSectionOrderTests 가 잰다 - 여기서는 파이프라인의 호출 순서와 요청 인자만 잰다(스텁은 모델 반응을 못 잰다).
+
+        private sealed record StepCall(string Code, int Nth, long Start, long End, IReadOnlyList<(string StepCode, string Body)>? Upstream);
+
+        private const string UpstreamReaderSql =
+            "\n```sql\n-- SQL_READ_S03_TOTAL\nSELECT ControlValue\n  FROM batch.BatchControlTotal\n WHERE RunId = @p_runId\n   AND StepCode = N'S03'\n   AND ControlName = N'LedgerRowCount';\n```\n";
+
+        private const string UpstreamWriterSql =
+            "\n```sql\n-- SQL_CAPTURE_S03_TOTAL\nINSERT INTO batch.BatchControlTotal (RunId, StepCode, ControlName, ControlValue, CapturedAtUtc)\nVALUES (@p_runId, N'S03', N'LedgerRowCount', 0, SYSUTCDATETIME());\n```\n";
+
+        /// <summary>세 단계 fake. S01 은 S03 몫을 읽고 S03 은 그 몫을 쓴다. 1 회차 리뷰가 <paramref name="defective"/> 를 지목한다.</summary>
+        private static (IAiService Service, List<StepCall> Calls) UpstreamOrderAiService(string[] defective, Func<string, int, string?>? overrideContent = null)
+        {
+            var aiService = ManyStepAiServiceBase(3);
+            var calls = new List<StepCall>();
+            var counts = new Dictionary<string, int>();
+            var gate = new object();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.IReadOnlyList<string>>>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<(string StepCode, string Body)>?>())
+                .Returns(async call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    var upstream = call.ArgAt<IReadOnlyList<(string StepCode, string Body)>?>(12);
+                    int nth;
+                    lock (gate) { nth = counts[step.Code] = counts.GetValueOrDefault(step.Code) + 1; }
+                    var start = Stopwatch.GetTimestamp();
+                    // 쓰는 쪽을 가장 늦게 끝나게 한다 - 종전 동시 실행이면 S01 이 S03 보다 먼저 끝난다.
+                    await Task.Delay(step.Code == "S03" ? 150 : 20);
+                    var end = Stopwatch.GetTimestamp();
+                    lock (gate) { calls.Add(new StepCall(step.Code, nth, start, end, upstream)); }
+                    var healthy = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]);
+                    var content = overrideContent?.Invoke(step.Code, nth) ?? step.Code switch
+                    {
+                        "S01" => healthy + UpstreamReaderSql,
+                        "S03" => healthy + (nth == 1 ? UpstreamWriterSql : UpstreamWriterSql.Replace("-- SQL_CAPTURE_S03_TOTAL", "-- SQL_CAPTURE_S03_TOTAL_REGENERATED")),
+                        _ => healthy
+                    };
+                    return new AiResult { Content = content };
+                });
+            var reviewCall = 0;
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    if (Interlocked.Increment(ref reviewCall) > 1)
+                        return new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 };
+                    var review = new ReviewResult { HasDefects = true, FeedbackComment = "짝 결함", ScoreAccuracy = 6, ScoreCrud = 9, ScoreInterface = 9, ScoreException = 9, ScoreReadability = 9 };
+                    foreach (var code in defective) review.DefectiveSteps.Add(code);
+                    return review;
+                });
+            return (aiService, calls);
+        }
+
+        // P1: 읽는 쪽(S01)이 목차상 앞인데도 쓰는 쪽(S03)이 먼저 끝나고, S01 요청에 S03 의 **새** 본문이 실린다.
+        [Fact]
+        public async Task TargetedRegeneration_WriterFinishesFirstAndItsNewBodyReachesTheReader()
+        {
+            var (aiService, calls) = UpstreamOrderAiService(new[] { "S01", "S03" });
+
+            await RunBatchPipelineWithConcurrency(aiService, Substitute.For<IVerificationUserInteraction>(), 4);
+
+            var s03 = calls.Single(c => c.Code == "S03" && c.Nth == 2);
+            var s01 = calls.Single(c => c.Code == "S01" && c.Nth == 2);
+            Assert.True(s03.End <= s01.Start, "지목 재생성에서 S01 이 S03 이 끝나기 전에 시작됐다.");
+            var upstream = Assert.Single(s01.Upstream!);
+            Assert.Equal("S03", upstream.StepCode);
+            Assert.Contains("SQL_CAPTURE_S03_TOTAL_REGENERATED", upstream.Body);
+            Assert.Null(s03.Upstream);
+            // 1 회차(전체 생성)에는 싣지 않는다.
+            Assert.All(calls.Where(c => c.Nth == 1), c => Assert.Null(c.Upstream));
+        }
+
+        // P2: 무관한 S02 가 함께 지목돼도 쓰는 쪽이 먼저 끝나고, S02 는 쓰는 쪽 무리에 안 들어간다(본문도 안 받는다).
+        [Fact]
+        public async Task TargetedRegeneration_WithAnUnrelatedStep_KeepsTheWriterFirst()
+        {
+            var (aiService, calls) = UpstreamOrderAiService(new[] { "S01", "S02", "S03" });
+
+            await RunBatchPipelineWithConcurrency(aiService, Substitute.For<IVerificationUserInteraction>(), 4);
+
+            var s03 = calls.Single(c => c.Code == "S03" && c.Nth == 2);
+            Assert.True(s03.End <= calls.Single(c => c.Code == "S01" && c.Nth == 2).Start);
+            Assert.True(s03.End <= calls.Single(c => c.Code == "S02" && c.Nth == 2).Start, "쓰는 쪽 무리가 끝나기 전에 나머지가 시작됐다.");
+            Assert.Null(calls.Single(c => c.Code == "S02" && c.Nth == 2).Upstream);
+        }
+
+        // P3: 쓰는 쪽 재생성이 전부 빈 응답(생성 실패 스텁)이면 읽는 쪽에 본문을 싣지 않는다.
+        [Fact]
+        public async Task TargetedRegeneration_WhenTheWriterFailsToGenerate_TheReaderGetsNoUpstreamBody()
+        {
+            var (aiService, calls) = UpstreamOrderAiService(new[] { "S01", "S03" },
+                (code, nth) => code == "S03" && nth >= 2 ? "" : null);
+
+            await RunBatchPipelineWithConcurrency(aiService, Substitute.For<IVerificationUserInteraction>(), 4);
+
+            var s01 = calls.Single(c => c.Code == "S01" && c.Nth == 2);
+            Assert.True(s01.Upstream == null || s01.Upstream.Count == 0);
+        }
+
         /// <summary>
         /// ② 첫 단계는 항상 단독으로 돈다. 이것이 프롬프트 접두사 캐시 이점의
         /// 유일한 기계적 보증이다 — 없으면 누군가 워밍을 "불필요한 직렬화"로 보고 지운다.
