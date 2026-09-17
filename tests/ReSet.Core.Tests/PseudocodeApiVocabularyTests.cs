@@ -13,10 +13,12 @@ namespace ReSet.Core.Tests;
 /// [의사코드 API 어휘] 프롬프트가 리포지터리 헬퍼 이름을 규정하지 않아 모델이 단계마다 이름을 새로 지었고,
 /// Critic 이 그 산포를 「한 문서 한 표기」 위반으로 감점했다(B18 2 차: 다중 행 조회가 `queryAll`·`queryMany`·`query` 셋).
 ///
-/// 정본 넷은 <b>관측에서</b> 골랐다 — 배송본 13 편 전수에서 `execute` 610 회(7 편) · `queryScalar` 71(5 편) ·
-/// `queryRows` 37(4 편) · `queryRow` 33(4 편)이 최다이고, 밀려난 이름은 `queryAll` 6 · `queryOne` 9 ·
-/// `query` 4 · `queryMany` 3 · `querySingle` 1 · `queryRowOrNone` 1 이다. 한 문서 안에서 같은 연산을 두 이름
-/// 이상으로 쓰는 Job 은 13 편 중 4(B12·B14·B17·B18).
+/// 정본 넷은 <b>관측에서</b> 골랐다 — 배송본 <b>14</b> 편 전수에서 `repository.` 접두사가 붙은 호출을 세면
+/// `execute` 610(7 편) · `queryScalar` 71(5 편) · `queryRows` 37(4 편) · `queryRow` 33(4 편)이 최다이고,
+/// 밀려난 이름은 `queryOne` 9 · `queryAll` 6 · `query` 4 · `queryMany` 3 · `querySingle` 1 · `queryRowOrNone` 1 이다.
+/// 접두사를 무관하게 세면 같은 연산을 두 이름 이상으로 쓰는 문서가 <b>6/14</b>(B5·B10·B12·B14·B17·B18)이고,
+/// 접두사 자체도 시대별로 갈린다(`repository.execute` 610 대 바닥 `execute` 642 — B1·B4·B5·B7·B8 이 바닥형).
+/// 정정: 처음에 「13 편 · 혼용 4」로 적었는데 분모와 집계가 모두 틀렸다(2026-09-17 리뷰).
 /// 판독: docs/audit-reports/2026-09-17-의사코드-API-어휘-계약-사전선언.md
 /// </summary>
 public sealed class PseudocodeApiVocabularyTests
@@ -65,11 +67,20 @@ public sealed class PseudocodeApiVocabularyTests
         Assert.Contains("one name per operation for the whole document", prompt);
     }
 
+    /// <summary>재료(단계 인터페이스)가 있는 평소 경로.</summary>
+    private static IReadOnlyList<StepInterface> Interfaces => StepInterfaceFacts.Build(
+        Steps,
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Procedure] = new[] { "@pi_strYMD char(8)" },
+        },
+        null);
+
     // 경로마다 잠근다 - 조항이 한 곳이어도 호출이 셋이다.
     [Fact]
     public async Task StepSectionPrompt_CarriesTheVocabulary() =>
         AssertCarriesTheVocabulary(await Service().GenerateBatchStepSectionAsync(
-            Steps[0], Steps, "공통 규약", Specs, null, "C#", "Job_Test"));
+            Steps[0], Steps, "공통 규약", Specs, Interfaces, "C#", "Job_Test"));
 
     [Fact]
     public async Task SkeletonPrompt_CarriesTheVocabulary() =>
