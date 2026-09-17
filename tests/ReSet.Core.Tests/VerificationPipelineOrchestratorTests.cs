@@ -7801,7 +7801,12 @@ SELECT 1;
 
             var merged = violations["S01"];
             // 두 사유가 모두 살아 있어야 한다 - 어느 한쪽도 통째로 지워지면 안 된다.
-            Assert.Contains("TargetTables", merged.Reason);
+            // [2026-09-17] 이 자리의 「검증 불가」 사유를 TargetTables 에서 ErrorCodes 로 바꿨다.
+            // S01 스텁 본문이 `SELECT 1;`(읽기 전용)이라 TargetTables 축은 이제 결함이 아니다 -
+            // 아무것도 쓰지 않는 단계의 빈 선언은 본문과 일치하므로 배너를 만들지 않는다
+            // (docs/audit-reports/2026-09-17-대상없는-단계-배너-사전선언.md). 이 시험이 재는 것은
+            // 두 사유의 **병합**이고, 그 축은 ErrorCodes 로도 똑같이 성립한다.
+            Assert.Contains("ErrorCodes", merged.Reason);
             Assert.Contains("USP_Split", merged.Reason);
             Assert.Contains("-9", merged.Reason);
             // 실제로 확인된 결함(QualityFloor)이 "검증 불가"(Unverifiable)보다

@@ -505,8 +505,25 @@ namespace ReSet.Core.Services
             // 고쳐지지 않는다 - PlanDefects에 따로 담아 재시도 여부를 가른다.
             if (!step.TargetTables.Any(table => BareObjectName(table).Length > 0))
             {
-                result.PlanDefects.Add(
-                    $"{step.Code}의 목차 TargetTables가 비어 있어 대상 테이블 대조를 실행할 수 없습니다.");
+                // [본문이 쓸 수 있을 때만 결함이다 - 2026-09-17] 이 결함은 「아무것도 쓰지 않는다는 선언은 그 자체로
+                // 확인이 필요하다」는 근거로 들었는데(아래 ErrorCodes 축 주석과 같은 계열), 그 확인을 사람 배너가 아니라
+                // 본문으로 닫을 수 있다. 실측: 빈 TargetTables 는 일곱 판(B11~B18) 전부 S01 하나였고 일곱 다
+                // 읽기 전용이라 쓰기 문장이 없었다 - 그런데도 매 판 「검증 불가」 배너가 붙어 설계의 정상 상태를
+                // 결함처럼 보고했다. 「쓸 수 있다」는 보수적으로 넓다(EXEC·동적 SQL·파싱 실패 포함).
+                // 판독: docs/audit-reports/2026-09-17-대상없는-단계-배너-사전선언.md
+                if (StepWriteCapabilityFacts.CanWrite(stepMarkdown))
+                {
+                    result.PlanDefects.Add(
+                        $"{step.Code}의 목차 TargetTables가 비어 있어 대상 테이블 대조를 실행할 수 없습니다.");
+                }
+                else
+                {
+                    // 결함이 아니라고 흔적까지 지우면 「대조 항목 0」과 「대조해서 깨끗함」이 로그에서 구별되지 않는다 -
+                    // 바로 아래 ErrorCodes 축이 쓰는 관례를 그대로 따른다.
+                    Log.Information(
+                        "{Code}는 본문이 무엇도 쓰지 않아 대상 테이블 대조 대상이 아닙니다(목차 TargetTables 가 빈 것과 일치).",
+                        step.Code);
+                }
             }
 
             // 레거시 출신이 없는 단계는 보존할 원본 코드가 없다. 그래서 이 결함은 레거시
