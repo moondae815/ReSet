@@ -132,4 +132,69 @@ public sealed class StepOrderOracleTests
             Errors(document, ErrorType.GateRequiresStepBeforeRunId, toc: null).Length,
             Errors(document, ErrorType.GateRequiresStepBeforeRunId, Toc("S01", "S02", "S21")).Length);
     }
+
+    // [리뷰 Important 1] 발급 절 탐색은 **같은 코드 절의 본문을 합쳐서** 본다. 발급 절과 같은 코드의 장식 헤딩(흐름도 조각)이
+    // 진짜 발급 절보다 먼저 나오면, 합치지 않고 첫 절만 보는 구현은 장식 본문(mermaid)만 보고 발급 절을 못 찾아 진짜 잠금 결함을 놓친다.
+    // 재료: B19 흐름도 조각의 **헤딩 코드만** S03 으로 바꿨고(본문은 실물), 그 뒤에 B17 실물 S02(잠금)·S03(발급)을 둔다.
+    [Fact]
+    public void ADecorativeHeadingWithTheIssuersCode_DoesNotHideTheIssuer()
+    {
+        var flow = Fixture("step-order", "Batch19-flow-range-heading.md");
+        var decorated = flow.Replace("### S13～S16", "### S03～S04");
+        Assert.NotEqual(flow, decorated);
+
+        var document = Document(decorated, new[]
+        {
+            Fixture("prerunid-lock", "Batch17-S02-lock-before-issue.md"), Fixture("prerunid-lock", "Batch17-S03-issuer.md"),
+        });
+
+        var error = Assert.Single(Errors(document, ErrorType.PreRunIdRunIdWrite, Toc("S01", "S02", "S03")));
+        Assert.Equal("S02", error.OwnerStepCode);
+    }
+
+    // [리뷰 Minor 1] 빈 목차는 목차가 없는 것과 같다 - 파서가 빈 단계 목록을 null 로 돌려주지만(도달 불가) 불변식을 잠근다.
+    [Fact]
+    public void AnEmptyToc_BehavesExactlyLikeNoToc()
+    {
+        var document = Document(null, new[]
+        {
+            Fixture("prerunid-lock", "Batch11-S03-lock-after-issue.md"), Fixture("prerunid-lock", "Batch11-S02-issuer.md"),
+        });
+
+        Assert.Equal(
+            Errors(document, ErrorType.PreRunIdRunIdWrite, toc: null).Length,
+            Errors(document, ErrorType.PreRunIdRunIdWrite, new List<BatchStepPlan>()).Length);
+    }
+
+    // [리뷰 미확인 → 재현] 게이트 검사의 코드 목록은 절 코드와 목차 코드의 합집합이라 BETWEEN 이 절 없는 목차 코드까지 넓힌다.
+    // 그래도 「발급 전」은 목차 순서로만 정해지므로, 넓어진 코드가 발급 **뒤**면 고발되지 않는다. 발급 **앞**의 절 없는 코드는
+    // 고발되는데 그것은 오탐이 아니다 - 발급 전 단계는 이 실행의 저널 행을 가질 수 없으니 게이트가 요구하면 늘 실패한다.
+    [Fact]
+    public void ABetweenGateWidenedByTocCodes_OnlyReportsStepsBeforeTheIssuer()
+    {
+        const string gate = """
+            ### S12. 게시 전 확인
+
+            ```sql
+            SELECT COUNT(*)
+              FROM batch.BatchCheckpoint
+             WHERE RunId = @p_runId
+               AND StepCode BETWEEN N'S03' AND N'S11'
+               AND CheckpointStatus = N'Succeeded';
+            ```
+            """;
+        var document = Document(null, new[]
+        {
+            Fixture("run-gate", "Batch11-S01.md"), Fixture("run-gate", "Batch11-S02.md"), gate,
+        });
+
+        // 목차: S01 · S02(발급) · S03~S11(절 없음) · S12 — BETWEEN S03..S11 은 전부 발급 뒤라 고발할 것이 없다.
+        var toc = Toc("S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08", "S09", "S10", "S11", "S12");
+        Assert.Empty(Errors(document, ErrorType.GateRequiresStepBeforeRunId, toc));
+
+        // 양성 대조 - 위 침묵이 「게이트로 인식조차 안 됐다」가 아님을 보인다: 절 없는 S03 을 목차에서 발급 앞으로 옮기면 고발된다.
+        var tocWithS03First = Toc("S01", "S03", "S02", "S04", "S05", "S06", "S07", "S08", "S09", "S10", "S11", "S12");
+        var error = Assert.Single(Errors(document, ErrorType.GateRequiresStepBeforeRunId, tocWithS03First));
+        Assert.Contains("S03", error.Message, StringComparison.Ordinal);
+    }
 }
