@@ -2316,7 +2316,9 @@ namespace ReSet.Core.Services
                 }
 
                 // L1: 기계적 무결성 검사
-                var l1Result = _validator.ValidateConsolidated(consolidatedPlan);
+                // 목차를 넘긴다 - 「무엇이 RunId 발급 절보다 앞인가」의 정본이 목차다(문서 순서로 짐작하면 흐름도의 범위 헤딩 하나가
+                // 아홉을 오탐했다 - B19). 분할 경로가 안 돌았으면 null 이고, 그때는 종전대로 문서 순서다.
+                var l1Result = _validator.ValidateConsolidated(consolidatedPlan, currentSteps);
                 consolidatedPlan = l1Result.CleansedMarkdown ?? consolidatedPlan;
 
                 // 원본 오류 코드 누락은 결정적으로 판정된다. 루프 밖 배너로만 내보내면
@@ -3419,7 +3421,8 @@ namespace ReSet.Core.Services
                     }
 
                     // 피드백 반영본에 대한 L1 정적 검사 1회 수행
-                    var l1Re = _validator.ValidateConsolidated(rePlan);
+                    // 재작성 경로도 목차를 넘긴다(위 L1 과 같은 이유).
+                    var l1Re = _validator.ValidateConsolidated(rePlan, stepsForRegeneration);
                     rePlan = l1Re.CleansedMarkdown ?? rePlan;
                     if (!l1Re.IsValid && stepsForRegeneration == null)
                     {

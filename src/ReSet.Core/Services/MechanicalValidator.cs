@@ -317,7 +317,13 @@ namespace ReSet.Core.Services
             return result;
         }
 
-        public ValidationResult ValidateConsolidated(string markdown)
+        /// <param name="steps">
+        /// 목차의 단계 목록. 있으면 「무엇이 RunId 발급 절보다 앞인가」를 <b>목차 순서</b>로 판정한다(없으면 종전대로 문서 순서).
+        /// [왜 목차인가 - 2026-09-17] B19 배송본의 첫 <c>### Sxx</c> 헤딩이 흐름도 안의 <c>### S13～S16 …</c> 이라 문서 순서가
+        /// S13 을 발급 절 앞으로 올렸고, 첫 L1 회차 오류 11 중 아홉이 그 오탐이었다. 마크다운만으로 순서를 짐작하는 규칙 둘은
+        /// 코퍼스 15 편을 다 못 맞췄다(B7·B14). 판독: docs/audit-reports/2026-09-17-단계순서-오라클-목차-사전선언.md
+        /// </param>
+        public ValidationResult ValidateConsolidated(string markdown, IReadOnlyList<BatchStepPlan>? steps = null)
         {
             var result = new ValidationResult();
             result.IsConsolidated = true;
@@ -344,9 +350,9 @@ namespace ReSet.Core.Services
                 SafeCheck(() => CheckVerificationCartesianComparison(cleansed, result));
                 SafeCheck(() => CheckBatchRunRowCreation(cleansed, result));
                 SafeCheck(() => CheckControlTotalProducer(cleansed, result));
-                SafeCheck(() => CheckGateRequiresStepsBeforeRunId(cleansed, result));
+                SafeCheck(() => CheckGateRequiresStepsBeforeRunId(cleansed, result, steps));
                 SafeCheck(() => CheckControlTableColumnContract(cleansed, result));
-                SafeCheck(() => CheckPreRunIdRunIdWrites(cleansed, result));
+                SafeCheck(() => CheckPreRunIdRunIdWrites(cleansed, result, steps));
                 SafeCheck(() => CheckLegacyReturnCodeBinding(cleansed, result));
                 // SQL 거처 축(규칙 3-1·10). 조사 §5의 A급 셋이다 - 그때까지 이 세
                 // 규칙은 기계 강제가 0건이었고, 프롬프트와 Critic 두 층만으로 서
@@ -11879,15 +11885,17 @@ namespace ReSet.Core.Services
         /// [면제] 어느 단계 절이든 그 표에 그 코드 리터럴로 행을 쓰면(발급 단계가 앞 단계 행을 대신 기록하는 설계) 그 코드는 뺀다.
         /// [귀속] 게이트가 단계 절 안이면 그 단계(<see cref="DetailedError.OwnerStepCode"/>), 밖(골격·검증 세트)이면 문제 코드가 있는 원문 줄을 어휘로 싣는다.
         /// </summary>
-        private static void CheckGateRequiresStepsBeforeRunId(string markdown, ValidationResult result)
+        private static void CheckGateRequiresStepsBeforeRunId(string markdown, ValidationResult result, IReadOnlyList<BatchStepPlan>? steps = null)
         {
             var sections = SplitStepSections(markdown);
             if (sections.Count == 0) return;
 
-            var issuer = sections.Select((s, i) => (s.Code, s.Body, Index: i)).FirstOrDefault(s => CreatesRowIn(s.Body, "BatchRun"));
-            if (issuer.Code == null) return;
+            // 발급 절과 「발급 전」 - 목차가 있으면 목차 순서다(RunIdIssuanceOrder 참고). B19 가 이 자리에서 아홉을 오탐했다.
+            var (issuer, before) = RunIdIssuanceOrder(sections, steps);
+            if (issuer == null) return;
 
-            var codes = sections.Select(s => s.Code).ToList();
+            var codes = sections.Select(s => s.Code).Concat(steps?.Select(st => st.Code) ?? Enumerable.Empty<string>())
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             // 면제: StepCode 칸에 그 코드를 실제로 넣는 쓰기만(최종 리뷰 Important 1 - 참조만 한 리터럴을 줍지 않는다).
             var exempt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var (_, body) in sections)
@@ -11896,7 +11904,7 @@ namespace ReSet.Core.Services
                     exempt.UnionWith(RunGateFacts.WrittenStepCodes(fence.Groups["sql"].Value));
             }
 
-            var beforeIssuer = new HashSet<string>(codes.Take(issuer.Index).Where(c => !exempt.Contains(c)), StringComparer.OrdinalIgnoreCase);
+            var beforeIssuer = new HashSet<string>(before.Where(c => !exempt.Contains(c)), StringComparer.OrdinalIgnoreCase);
             if (beforeIssuer.Count == 0) return;
 
             // 귀속은 자리(줄 번호)로 - 텍스트 포함으로 찾으면 바이트 같은 게이트를 가진 두 단계가 앞 단계 하나로 뭉친다(최종 리뷰 Important 4).
@@ -11931,7 +11939,7 @@ namespace ReSet.Core.Services
                     var earlyList = string.Join(", ", early.Select(c => "`" + c + "`"));
                     var message =
                         $"{(owner != null ? owner + " 섹션의" : "통합 문서의")} 실행 완료 게이트가 {earlyList}의 체크포인트·저널 `Succeeded` 를 요구하는데, " +
-                        $"{earlyList}은(는) RunId 를 발급하는 `{issuer.Code}` 보다 먼저 실행되어 이 실행의 체크포인트·저널 행이 생기지 않습니다 - 이 게이트는 " +
+                        $"{earlyList}은(는) RunId 를 발급하는 `{issuer}` 보다 먼저 실행되어 이 실행의 체크포인트·저널 행이 생기지 않습니다 - 이 게이트는 " +
                         "어떤 실행에서도 통과하지 못합니다. 이 게이트가 요구하는 단계 목록에서 빼십시오.";
 
                     result.Report(message);
@@ -12070,20 +12078,17 @@ namespace ReSet.Core.Services
         /// 두 처방 모두 한 절씩 다시 쓰는 것으로 따를 수 있다.
         /// 판독: docs/audit-reports/2026-09-16-발급전-잠금-계약-사전선언.md
         /// </summary>
-        private static void CheckPreRunIdRunIdWrites(string markdown, ValidationResult result)
+        private static void CheckPreRunIdRunIdWrites(string markdown, ValidationResult result, IReadOnlyList<BatchStepPlan>? steps = null)
         {
             if (string.IsNullOrWhiteSpace(markdown)) return;
 
             var sections = SplitStepSections(markdown);
             if (sections.Count == 0) return;
 
-            var issuer = sections.Select((s, i) => (s.Code, s.Body, Index: i)).FirstOrDefault(s => CreatesRowIn(s.Body, "BatchRun"));
-            // [중복 가드임을 밝혀 둔다 - 2026-09-16 리뷰 Minor 1] 발급 절이 없으면 FirstOrDefault 의 기본값이 Index 0 이라
-            // 아래 before 가 비어 어차피 반환한다(이 줄을 지워도 빨개지는 시험이 없다). 그래도 남긴다 - 뒤 코드가
-            // issuer.Code 를 메시지에 쓰므로, null 이 그 자리까지 갈 수 없다는 사실을 여기서 국소적으로 보이는 값이 있다.
-            if (issuer.Code == null) return;
-
-            var before = new HashSet<string>(sections.Take(issuer.Index).Select(s => s.Code), StringComparer.OrdinalIgnoreCase);
+            // 발급 절과 「발급 전」을 정한다 - 목차가 있으면 목차 순서다(RunIdIssuanceOrder 참고).
+            // 발급 절이 없으면 null 이 오고 여기서 끝난다 - 뒤 코드가 issuer 를 메시지에 쓰므로 null 이 거기 못 간다.
+            var (issuer, before) = RunIdIssuanceOrder(sections, steps);
+            if (issuer == null) return;
             if (before.Count == 0) return;
 
             var ranges = StepSectionLineRanges(markdown);
@@ -12109,11 +12114,11 @@ namespace ReSet.Core.Services
                 var columns = group.Select(w => w.Column).Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(c => c, StringComparer.Ordinal).ToList();
                 var message =
-                    $"{group.Key.Owner} 섹션은 RunId 를 발급하는 `{issuer.Code}` 보다 먼저 실행되는데 " +
+                    $"{group.Key.Owner} 섹션은 RunId 를 발급하는 `{issuer}` 보다 먼저 실행되는데 " +
                     $"`{group.Key.Table}` 의 {string.Join(", ", columns.Select(c => "`" + c + "`"))} 에 값을 씁니다 - " +
                     "그 컬럼은 발급된 RunId 를 담는 자리(계약이 `NOT NULL` 로 정했습니다)라서 이 시점에는 채울 값이 없고, " +
                     "예약값이나 자리표시값을 만들어 넣어서도 안 됩니다. 고치는 수는 둘입니다 - " +
-                    $"이 단계가 실행 행(`batch.BatchRun`)을 먼저 만들어 발급 단계가 되게 하거나, 이 쓰기를 `{issuer.Code}` 뒤로 옮기십시오. " +
+                    $"이 단계가 실행 행(`batch.BatchRun`)을 먼저 만들어 발급 단계가 되게 하거나, 이 쓰기를 `{issuer}` 뒤로 옮기십시오. " +
                     "중복 실행 판정은 잠금을 잡는 그 자리에서 하고, 그때 이미 만들어진 실행 행은 실패로 닫습니다.";
 
                 result.Report(message);
@@ -12193,6 +12198,40 @@ namespace ReSet.Core.Services
             }
 
             return ranges;
+        }
+
+        /// <summary>
+        /// RunId 를 발급하는 단계와 그보다 <b>먼저 실행되는</b> 단계들. 두 검사(RunId 게이트 · 발급 전 잠금)가 같은 답을 쓰게 한 자리에 둔다.
+        ///
+        /// [목차가 있으면 목차 순서 - 2026-09-17] 발급 단계는 「목차 순서로 처음, 자기 절 본문이 <c>batch.BatchRun</c> 에 INSERT 하는
+        /// 단계」이고 「발급 전」은 목차에서 그보다 앞선 단계다. 절 본문은 같은 코드끼리 합친다(흐름도의 <c>### S13～S16</c> 조각이나
+        /// 검증 세트의 사본 헤딩은 그 코드 몫으로 붙지만 SQL 쓰기가 없으면 판정에 영향이 없다).
+        /// 실측: 문서 순서를 쓰면 B19 의 흐름도 헤딩이 S13 을 발급 절 앞으로 올려 첫 L1 회차에 아홉을 오탐했고, 마크다운 규칙
+        /// 둘(단계 상세 H2 안만 · 범위 헤딩 제외)은 코퍼스 15 편을 다 못 맞췄다(B7·B14).
+        ///
+        /// [목차가 없으면 종전 - 문서 순서] 목차를 모르는 호출은 행동이 바뀌지 않는다.
+        /// </summary>
+        private static (string? Issuer, HashSet<string> Before) RunIdIssuanceOrder(
+            IReadOnlyList<(string Code, string Body)> sections, IReadOnlyList<BatchStepPlan>? steps)
+        {
+            var empty = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (steps is { Count: > 0 })
+            {
+                var bodies = sections
+                    .GroupBy(section => section.Code, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(group => group.Key, group => string.Join("\n", group.Select(x => x.Body)), StringComparer.OrdinalIgnoreCase);
+                var ordered = steps.Select(step => step.Code).ToList();
+                var issuerIndex = ordered.FindIndex(code => bodies.TryGetValue(code, out var body) && CreatesRowIn(body, "BatchRun"));
+                if (issuerIndex < 0) return (null, empty);
+
+                return (ordered[issuerIndex], new HashSet<string>(ordered.Take(issuerIndex), StringComparer.OrdinalIgnoreCase));
+            }
+
+            var issuer = sections.Select((s, i) => (s.Code, s.Body, Index: i)).FirstOrDefault(s => CreatesRowIn(s.Body, "BatchRun"));
+            if (issuer.Code == null) return (null, empty);
+
+            return (issuer.Code, new HashSet<string>(sections.Take(issuer.Index).Select(s => s.Code), StringComparer.OrdinalIgnoreCase));
         }
 
         /// <summary>
