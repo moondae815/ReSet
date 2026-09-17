@@ -190,15 +190,17 @@ namespace ReSet.Core.Services
 
             public override void ExplicitVisit(InsertStatement node)
             {
+                // WITH 가 INSERT 에 붙는 모양(`WITH … INSERT INTO … SELECT … JOIN …`)도 같은 문장 CTE 를 풀어야 한다 -
+                // 처음엔 SelectStatement 에서만 채워 조인으로 끌어온 이름이 조용했다(최종 리뷰 Important 1).
+                // 쓰기 이름(ReadInsert)도 같은 CTE 를 풀므로 먼저 채운다.
+                var outer = _ctes;
+                _ctes = CtesOf(node.WithCtesAndXmlNamespaces);
+
                 if (IsControlTable(node.InsertSpecification?.Target))
                 {
                     Writes.Add(ReadInsert(node));
                 }
 
-                // WITH 가 INSERT 에 붙는 모양(`WITH … INSERT INTO … SELECT … JOIN …`)도 같은 문장 CTE 를 풀어야 한다 -
-                // 처음엔 SelectStatement 에서만 채워 조인으로 끌어온 이름이 조용했다(최종 리뷰 Important 1).
-                var outer = _ctes;
-                _ctes = CtesOf(node.WithCtesAndXmlNamespaces);
                 base.ExplicitVisit(node);
                 _ctes = outer;
             }
@@ -370,25 +372,37 @@ namespace ReSet.Core.Services
                 if (source is not NamedTableReference { SchemaObject.SchemaIdentifier: null } named ||
                     !_ctes.TryGetValue(named.SchemaObject.BaseIdentifier.Value, out var cte)) return null;
 
+                return CteLiteralColumn(cte, "ControlName", names) ? names : null;
+            }
+
+            /// <summary>
+            /// 같은 문장 CTE 의 열 <paramref name="columnName"/> 이 <b>모든</b> <c>UNION</c> 가지에서 문자열 리터럴이면 그 값들을 담고 true.
+            /// 가지 하나라도 리터럴이 아니거나(매개변수·조합·다른 출처의 열) 열 위치를 못 찾으면 아무것도 담지 않고 false - 덜 보고한다.
+            /// 읽기(조인으로 끌어온 이름 · B13 V04)와 쓰기(POQSettleBatch20 S11 의 `ControlValueSet`)가 같은 판정을 쓴다.
+            /// </summary>
+            private static bool CteLiteralColumn(CommonTableExpression cte, string columnName, HashSet<string> names)
+            {
                 var specs = Flatten(cte.QueryExpression).ToList();
-                if (specs.Count == 0) return null;
+                if (specs.Count == 0) return false;
 
                 // 열 위치: CTE 열 목록이 있으면 그것, 없으면 첫 가지의 별칭·열 이름.
                 var position = cte.Columns.Count > 0
-                    ? cte.Columns.ToList().FindIndex(c => c.Value.Equals("ControlName", StringComparison.OrdinalIgnoreCase))
+                    ? cte.Columns.ToList().FindIndex(c => c.Value.Equals(columnName, StringComparison.OrdinalIgnoreCase))
                     : specs[0].SelectElements.ToList().FindIndex(e => e is SelectScalarExpression scalar &&
                         (scalar.ColumnName?.Value ?? (scalar.Expression as ColumnReferenceExpression is { } c ? LastIdentifier(c) : null))
-                            ?.Equals("ControlName", StringComparison.OrdinalIgnoreCase) == true);
-                if (position < 0) return null;
+                            ?.Equals(columnName, StringComparison.OrdinalIgnoreCase) == true);
+                if (position < 0) return false;
 
+                var found = new List<string>();
                 foreach (var spec in specs)
                 {
                     if (spec.SelectElements.Count <= position ||
-                        spec.SelectElements[position] is not SelectScalarExpression { Expression: StringLiteral literal }) return null;
-                    names.Add(literal.Value);
+                        spec.SelectElements[position] is not SelectScalarExpression { Expression: StringLiteral literal }) return false;
+                    found.Add(literal.Value);
                 }
 
-                return names;
+                names.UnionWith(found);
+                return true;
             }
 
             private QueryExpression? CteBody(TableReference source) => source switch
@@ -445,6 +459,13 @@ namespace ReSet.Core.Services
                                 // CROSS APPLY (VALUES (N'LedgerRowCount', …)) AS V(ControlName, …))만 따라간다.
                                 case ColumnReferenceExpression column when LastIdentifier(column) is { } columnName &&
                                                                           ResolveInline(SourceInlineTables(spec, column, ctes), columnName, names):
+                                    break;
+                                // 같은 문장 CTE 의 UNION ALL 가지마다 리터럴로 이름을 만든 것(실물 POQSettleBatch20/S11 의
+                                // `ControlValueSet AS (SELECT N'LedgerRowCount' AS ControlName … UNION ALL SELECT N'TxAmtSum', …)`).
+                                // 사전 선언: docs/audit-reports/2026-09-17-K2-CTE-UNION-쓰기이름-사전선언.md
+                                case ColumnReferenceExpression column when LastIdentifier(column) is { } columnName &&
+                                                                          SourceCte(spec, column) is { } cte &&
+                                                                          CteLiteralColumn(cte, columnName, names):
                                     break;
                                 default:
                                     unknown = true;
@@ -520,6 +541,31 @@ namespace ReSet.Core.Services
                 }
 
                 return result;
+            }
+
+            /// <summary>
+            /// 이 열이 오는 출처가 같은 문장 CTE 면 그 CTE. 출처 고르기는 <see cref="SourceInlineTables"/> 와 같다 - 한정자가 가리키는
+            /// 출처, 한정자가 없으면 FROM 의 유일한 출처. 둘 이상이 맞거나 CTE 가 아니면 null.
+            /// </summary>
+            private CommonTableExpression? SourceCte(QuerySpecification spec, ColumnReferenceExpression column)
+            {
+                var sources = new List<TableReference>();
+                foreach (var reference in spec.FromClause?.TableReferences ?? (IList<TableReference>)Array.Empty<TableReference>())
+                    Leaves(reference, sources);
+
+                var identifiers = column.MultiPartIdentifier.Identifiers;
+                var qualifier = identifiers.Count > 1 ? identifiers[^2].Value : null;
+                var matched = qualifier == null
+                    ? sources
+                    : sources.Where(r => r is NamedTableReference named &&
+                                         (named.Alias?.Value ?? named.SchemaObject.BaseIdentifier.Value)
+                                         .Equals(qualifier, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (matched.Count != 1) return null;
+
+                return matched[0] is NamedTableReference { SchemaObject.SchemaIdentifier: null } cteReference &&
+                       _ctes.TryGetValue(cteReference.SchemaObject.BaseIdentifier.Value, out var cte)
+                    ? cte
+                    : null;
             }
 
             private static void Leaves(TableReference reference, List<TableReference> leaves)

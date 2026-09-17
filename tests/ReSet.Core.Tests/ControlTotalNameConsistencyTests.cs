@@ -222,6 +222,90 @@ public sealed class ControlTotalNameConsistencyTests
         Assert.Equal("S20", Assert.Single(defects).Key);
     }
 
+    // ── CTE 안 UNION ALL 리터럴로 쓰는 이름(POQSettleBatch20, 2026-09-17) ──────────────────────────────
+    // 사전 선언: docs/audit-reports/2026-09-17-K2-CTE-UNION-쓰기이름-사전선언.md. 쓰는 단계가
+    // `WITH X AS (SELECT N'a' AS ControlName … UNION ALL SELECT N'b' …) INSERT … SELECT C.ControlName FROM X AS C`
+    // 로 쓰면 종전엔 「모름」이라 대조에서 빠졌다(agent/steps 관할 22 중 여섯이 이 모양).
+
+    /// <summary>B20 1 회차 S11 의 쓰기 CTE 가지 하나(<c>N'LedgerRowCount'</c>)만 바꿔 S18 이 읽는 이름과의 교집합을 0 으로 만든다.
+    /// 같은 리터럴이 뒤의 검증 SELECT(<c>LiveControl</c>)에도 있으나 그것은 쓰기가 아니라 첫 등장(쓰기 CTE)만 바꾼다.</summary>
+    private static string Batch20S11WithDisjointNames()
+    {
+        var original = Fixture("Batch20-S11-attempt1.md");
+        const string from = "    SELECT N'LedgerRowCount' AS ControlName, LedgerRowCount AS ControlValue FROM Ledger\n    UNION ALL\n";
+        var at = original.IndexOf(from, StringComparison.Ordinal);
+        Assert.True(at >= 0);
+        return original[..at] + from.Replace("N'LedgerRowCount'", "N'FrozenRowCount'") + original[(at + from.Length)..];
+    }
+
+    private static (string Code, string Markdown) ReaderOf(string owner, string name) => ("S99",
+        "### S99\n\n```sql\n-- SQL_READ\nSELECT ControlValue\n  FROM batch.BatchControlTotal\n WHERE RunId = @p_runId\n" +
+        $"   AND StepCode = N'{owner}'\n   AND ControlName = N'{name}';\n```\n");
+
+    // C1: 실물 1 회차 쌍에서 교집합을 0 으로 만든 변이 - 쓰는 단계의 이름을 알아야 읽는 단계(S18)를 지목한다.
+    [Fact]
+    public void RealCteUnionWriter_WithReaderSharingNoName_IsAttributedToTheReader()
+    {
+        var defects = Validate(("S11", Batch20S11WithDisjointNames()), ("S18", Fixture("Batch20-S18-attempt1.md")));
+
+        var defect = Assert.Single(defects);
+        Assert.Equal("S18", defect.Key);
+        foreach (var name in new[] { "FrozenRowCount", "TxAmtSum", "CLTotalSum", "PGTotalSum", "POQIncomeSum",
+                     "NonSettleAmtSum", "SeperateAmtSum", "ForeignSettleAmtSum" })
+            Assert.Contains("`" + name + "`", defect.Value.Reason);
+        Assert.DoesNotContain("`LedgerRowCount`, `NonSettleAmtSum`", defect.Value.Reason);
+    }
+
+    // C2: 변이 없는 실물 쌍은 교집합이 1(LedgerRowCount)이라 규칙 ⑤ 로 조용하다. 부분 겹침은 이 처방의 범위 밖이다.
+    [Fact]
+    public void RealCteUnionWriter_WithReaderSharingOneName_IsSilent()
+    {
+        Assert.Empty(Validate(("S11", Fixture("Batch20-S11-attempt1.md")), ("S18", Fixture("Batch20-S18-attempt1.md"))));
+    }
+
+    // C3: 한정자 없는 ControlName(B15 S18 · B19 S20)도 FROM 의 유일한 출처인 CTE 로 푼다. B19 S20 은 앞에 CTE 셋이 더 있고
+    // 가지 일부가 다른 CTE 에서 값을 끌어온다(이름 자리는 전부 리터럴). 읽는 단계는 합성이지만 쓰는 쪽은 배송본 그대로다.
+    [Theory]
+    [InlineData("Batch15-S18.md", "S18", "Ledger.RowCount")]
+    [InlineData("Batch19-S20.md", "S20", "Ledger.RowCount")]
+    [InlineData("Batch20-S11-attempt1.md", "S11", "LedgerRowCount")]
+    public void RealCteUnionWriter_IsKnown(string fixture, string owner, string writtenName)
+    {
+        var writer = Fixture(fixture);
+        Assert.Contains("N'" + writtenName + "'", writer);
+
+        Assert.Equal("S99", Assert.Single(Validate((owner, writer), ReaderOf(owner, "NoSuchControlName"))).Key);
+        // 짝: 실제로 쓰는 이름을 읽으면 조용하다 - 위 발화가 「이름을 읽어 냈고 안 겹쳐서」임을 보인다.
+        Assert.Empty(Validate((owner, writer), ReaderOf(owner, writtenName)));
+    }
+
+    // C4: CTE 가지 중 하나라도 이름 자리가 리터럴이 아니면 무엇을 쓰는지 다 모른다 - 「모름」으로 침묵한다.
+    // 코퍼스에 이 모양의 실물이 없어(사전 선언 C5 의 「모양 C 실물」은 틀렸다 - B13 S18 의 조합은 CTE 가지가 아니라 INSERT
+    // SELECT 자리에 있다) 실물 B20 S11 의 가지 하나를 매개변수로 바꾼다. 리터럴 가지만 담도록 바꾸면 이 시험이 빨갛다.
+    [Fact]
+    public void CteUnionWriterWithOneNonLiteralBranch_IsUnknown()
+    {
+        var original = Batch20S11WithDisjointNames();
+        const string from = "    SELECT N'TxAmtSum', TxAmtSum FROM Ledger\n";
+        var at = original.IndexOf(from, StringComparison.Ordinal);
+        Assert.True(at >= 0);
+        var writer = original[..at] + "    SELECT @p_extraControlName, TxAmtSum FROM Ledger\n" + original[(at + from.Length)..];
+
+        Assert.Empty(Validate(("S11", writer), ("S18", Fixture("Batch20-S18-attempt1.md"))));
+    }
+
+    // C4: 배송본 B13 S18 - CTE-UNION 위에서 이름을 `MetricName + N'.Expected'` 로 조합해 쓴다. 조합은 모른다.
+    // [판별력 없음 - 회귀 방지용] 조합이 CTE 가지가 아니라 INSERT 의 SELECT 자리에 있어 새 CTE 가지에 닿기 전에 종전 default 가
+    // 「모름」으로 만든다. 「가지 하나라도 비리터럴이면 모름」 가드를 재는 시험은 위 CteUnionWriterWithOneNonLiteralBranch_IsUnknown 이다.
+    [Fact]
+    public void RealWriterComposingNamesAtRuntimeOverACteUnion_IsUnknown()
+    {
+        var writer = Fixture("Batch13-S18.md");
+        Assert.Contains("MetricName + N'.Expected'", writer);
+
+        Assert.Empty(Validate(("S18", writer), ReaderOf("S18", "NoSuchControlName")));
+    }
+
     // [배선] 발화를 재는 시험은 이 검사가 파이프라인에서 아예 안 불려도 초록이다. 오케스트레이터가 결과를
     // floorViolations 에 합치는 자리를 소스에서 잠근다(T25 ValidateControlStatusTerminalWrites 와 같은 모양).
     [Fact]

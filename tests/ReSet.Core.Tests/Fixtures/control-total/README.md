@@ -45,3 +45,15 @@
 | `Batch16-runtime-name-fence.md` | `POQSettleBatch16` 의 `N'Rule_' + R.RuleCode + N'_Rows'` 펜스 하나 | **SQL 은 실물이고 자리만 옮겼다** — 런타임 이어 붙이기 안전판을 가르는 재료(코퍼스 전수에서 이 모양은 셋: B13 둘 · B16 하나) |
 
 줄바꿈만 LF 로 정규화했고 그 밖의 바이트는 원문과 같다.
+
+## CTE 안 UNION ALL 쓰기 이름 회차(2026-09-17) 추가
+
+사전 선언: `docs/audit-reports/2026-09-17-K2-CTE-UNION-쓰기이름-사전선언.md`. 단계 파일은 BOM 포함 바이트 그대로다.
+
+| 파일 | 출처 | 담은 모양 |
+| :-- | :-- | :-- |
+| `Batch20-S11-attempt1.md` | 로그 `output/logs-planonly-POQSettleBatch20/reset-20260917.log` 1358 행 응답의 `message.content`(= `raw/attempts/run-001/steps/S11.md` 와 바이트 일치) | `ControlValueSet` CTE 의 UNION ALL 가지 8 이 리터럴 이름 → `SELECT … C.ControlName FROM ControlValueSet AS C` 로 쓴다(한정자 있음) |
+| `Batch20-S18-attempt1.md` | 같은 로그 1975 행 응답(1 회차 — run-001 사본은 2 회차라 다르다) | S11 몫을 `LedgerTxAmt`… 8 이름으로 읽는다. S11 과의 교집합은 `LedgerRowCount` 하나 |
+| `Batch15-S18.md` | `output/Jobs/POQSettleBatch15/agent/steps/S18.md` | CTE-UNION 리터럴, `ControlName` 한정자 없음 |
+| `Batch19-S20.md` | `output/Jobs/POQSettleBatch19/agent/steps/S20.md` | CTE-UNION 리터럴, 한정자 없음, 앞에 CTE 셋 · 가지 일부가 다른 CTE 에서 값을 끌어온다 |
+| `Batch13-S18.md` | `output/Jobs/POQSettleBatch13/agent/steps/S18.md` | CTE-UNION 위에서 `MetricName + N'.Expected'` 로 이름을 조합한다 — 모름 유지 |
