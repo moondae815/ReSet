@@ -295,6 +295,8 @@ public sealed class ControlTotalNameConsistencyTests
     }
 
     // C4: 배송본 B13 S18 - CTE-UNION 위에서 이름을 `MetricName + N'.Expected'` 로 조합해 쓴다. 조합은 모른다.
+    // [판별력 없음 - 회귀 방지용] 조합이 CTE 가지가 아니라 INSERT 의 SELECT 자리에 있어 새 CTE 가지에 닿기 전에 종전 default 가
+    // 「모름」으로 만든다. 「가지 하나라도 비리터럴이면 모름」 가드를 재는 시험은 위 CteUnionWriterWithOneNonLiteralBranch_IsUnknown 이다.
     [Fact]
     public void RealWriterComposingNamesAtRuntimeOverACteUnion_IsUnknown()
     {
