@@ -1009,6 +1009,10 @@ namespace ReSet.Core.Services
         /// ③ 몫은 같은 문장의 <c>StepCode =</c>·<c>IN (…)</c> 리터럴로만 정한다. 없으면 누구와 맞대야 할지 몰라 침묵한다.
         /// ④ 대상 단계가 이름을 매개변수로 쓰거나(<c>@…Name…</c>) 리터럴 이름이 하나도 없으면 무엇을 쓰는지 몰라 침묵한다.
         /// ⑤ <b>교집합이 비었을 때만</b> 발화한다 - 일부만 겹치는 것은 정당한 부분 비교일 수 있다.
+        /// ⑥ <b>일부 겹침</b>(2026-09-17): ⑤ 가 안 난 읽기에서 몫 전부를 알고, 몫들이 쓰는 이름의 합집합과 겹치되 <b>문서 어디에서도
+        ///    안 쓰이는</b> 읽기 이름이 남으면 발화한다(<see cref="UnwrittenReadNames"/>). 정당한 부분 비교(읽는 이름 ⊆ 쓰는 이름)는 남는 이름이 없다.
+        ///    실측: POQSettleBatch20 1 회차 S18 이 S11 몫을 8 이름으로 읽는데 겹친 것은 하나 - 7 행이 어떤 실행에서도 없었다.
+        ///    판독: <c>docs/audit-reports/2026-09-17-K2-부분겹침-사전선언.md</c>.
         /// 문자열을 읽어야 하므로 <c>BlankCommentsAndStrings</c> 계열을 쓰지 않고 SQL 주석만 지운다.
         /// </summary>
         public IReadOnlyDictionary<string, StepDefect> ValidateControlTotalNameConsistency(
@@ -1020,12 +1024,18 @@ namespace ReSet.Core.Services
             var facts = CollectControlTotalFacts(sectionsByStepCode, allSteps);
             if (facts == null) return defects;
 
+            // ⑥ 의 재료 - 문서 단위로 한 번만 센다.
+            var namesWrittenAnywhere = facts.Written.Values.SelectMany(set => set).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var buildsNamesAtRuntime = sectionsByStepCode.Values.Any(markdown => markdown != null && ControlNameBuiltAtRuntimeRegex.IsMatch(markdown));
+
             foreach (var (reader, owners, names) in facts.Reads)
             {
+                var reportedEmptyOverlap = false;
                 foreach (var owner in owners.OrderBy(o => o, StringComparer.Ordinal))
                 {
                     if (facts.OwnerNamesOrNull(owner) is not { } ownerNames) continue;
                     if (names.Overlaps(ownerNames)) continue;
+                    reportedEmptyOverlap = true;
 
                     var readList = string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
                     // 전부 싣는다 - 이 문구가 재생성 프롬프트로 가고, 잘라 내면 맞출 이름이 빠진다(실측: 12 개로
@@ -1056,9 +1066,82 @@ namespace ReSet.Core.Services
                         ? prior with { Reason = prior.Reason + " " + reason }
                         : new StepDefect(StepDefectKind.QualityFloor, reason);
                 }
+
+                // ⑥ - 몫이 여럿이면 ⑤ 와 같은 읽기에 함께 날 수 있다. ⑤ 가 났으면 그 읽기는 이미 열렸다.
+                if (reportedEmptyOverlap || buildsNamesAtRuntime) continue;
+                if (UnwrittenReadNames(facts, owners, names, namesWrittenAnywhere,
+                        name => sectionsByStepCode.Any(section =>
+                            !string.Equals(section.Key, reader, StringComparison.OrdinalIgnoreCase) &&
+                            section.Value != null && MentionedInNonSqlFences(section.Value, name))) is not { } partial)
+                    continue;
+
+                var (partialOwners, written, missing) = partial;
+                var ownersText = string.Join(", ", partialOwners);
+                var readNames = string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
+                var missingNames = string.Join(", ", missing.Select(n => "`" + n + "`"));
+                var writtenNames = string.Join(", ", written.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
+
+                string partialTarget, partialReason;
+                if (partialOwners.Count == 1 && MentionsAnyLiteral(sharedConventions, missing) && !MentionsAnyLiteral(sharedConventions, written))
+                {
+                    partialTarget = partialOwners[0];
+                    partialReason =
+                        $"{partialTarget} ({partialTarget}이(가) 통제 합계를 {writtenNames}(으)로 쓰는데 공통 규약에는 그 이름이 없고, " +
+                        $"{reader}이(가) {partialTarget} 몫을 {readNames}(으)로 읽습니다. 그중 {missingNames}은(는) 공통 규약의 이름인데 어떤 단계도 쓰지 않아 " +
+                        $"그 행은 어떤 실행에서도 없습니다. 쓰는 이름을 공통 규약대로 맞추십시오.)";
+                }
+                else
+                {
+                    partialTarget = reader;
+                    partialReason =
+                        $"{reader} ({reader}이(가) {ownersText} 몫의 통제 합계를 ControlName {readNames}(으)로 읽는데 그중 {missingNames}은(는) " +
+                        $"어떤 단계도 쓰지 않는 이름이라 그 행은 어떤 실행에서도 없습니다. {ownersText}이(가) 쓰는 이름은 {writtenNames}입니다. " +
+                        $"읽는 이름을 쓰는 이름으로 맞추거나, 쓰이지 않는 이름을 읽기에서 빼십시오.)";
+                }
+
+                defects[partialTarget] = defects.TryGetValue(partialTarget, out var partialPrior)
+                    ? partialPrior with { Reason = partialPrior.Reason + " " + partialReason }
+                    : new StepDefect(StepDefectKind.QualityFloor, partialReason);
             }
 
             return defects;
+        }
+
+        /// <summary>
+        /// [K2 ⑥ 일부 겹침] 한 읽기(몫 <paramref name="owners"/>, 이름 <paramref name="names"/>)에서 <b>어떤 쓰기에도 없는</b> 이름.
+        /// 몫이 하나라도 「모름」이면 null(빠진 이름이 그 몫일 수 있다). 몫들이 쓰는 이름의 합집합과 하나도 안 겹치면 null(⑤ 의 일).
+        /// 합집합과 겹치고 남은 이름 중 문서의 「앎」 쓰기 어디에도 없는 것만 남기고, 문서에 「모름」 쓰기가 있으면
+        /// <paramref name="mentionedOutsideReader"/>(읽는 쪽 밖의 비 SQL 펜스 인용 - 헬퍼 호출 자리)에 나오는 것도 뺀다.
+        /// 읽는 쪽 자신의 의사코드는 보지 않는다 - 실물 B20 1 회차 S18 은 기대 이름을 자기 의사코드에 나열했다(사전 선언 §0-3).
+        /// 남는 것이 없으면 null.
+        /// </summary>
+        private static (IReadOnlyList<string> Owners, HashSet<string> Written, IReadOnlyList<string> Missing)? UnwrittenReadNames(
+            ControlTotalFacts facts, IEnumerable<string> owners, IReadOnlyCollection<string> names,
+            IReadOnlySet<string> namesWrittenAnywhere, Func<string, bool> mentionedOutsideReader, bool extraUnknownWrite = false)
+        {
+            var ownerList = owners.OrderBy(o => o, StringComparer.Ordinal).ToList();
+            if (ownerList.Count == 0) return null;
+
+            var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var owner in ownerList)
+            {
+                if (facts.OwnerNamesOrNull(owner) is not { } ownerNames) return null;
+                written.UnionWith(ownerNames);
+            }
+
+            // [구조상 죽은 가드 - 2026-09-17 최종 리뷰] 두 호출부 모두 ⑤ 가 안 난 읽기에서만 부르므로 여기 오면 합집합과 늘 겹친다
+            // (세트판은 ⑤ 가 걸러 낸 이름이 전부 「어디엔가 쓰인」 이름이라 아래 missing 에서도 빠진다). 걷어내도 빨개지는 시험이 없다.
+            // 남기는 이유는 ⑥ 의 정의(겹칠 때만)를 호출부 순서에 기대지 않게 하는 것이다.
+            if (!names.Any(written.Contains)) return null;
+
+            var anyUnknownWrite = extraUnknownWrite || facts.UnknownWriters.Count > 0;
+            var missing = names
+                .Where(name => !written.Contains(name) && !namesWrittenAnywhere.Contains(name))
+                .Where(name => !anyUnknownWrite || !mentionedOutsideReader(name))
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToList();
+
+            return missing.Count > 0 ? (ownerList, written, missing) : null;
         }
 
         /// <summary>
@@ -1146,17 +1229,22 @@ namespace ReSet.Core.Services
                 // 헬퍼 호출이 이름을 리터럴로 넘기는 자리는 SQL 밖(의사코드 펜스)에 있을 수 있다 - 거기 나오면 침묵한다.
                 && !MentionedInNonSqlFences(planMarkdown, name);
 
+            // ⑥ 의 안전판 - 세트판 기존 ③ 은 「모름」 쓰기가 있을 때만 조합을 봤다. ⑥ 은 문서에 조합이 있으면 늘 침묵한다.
+            var buildsNamesAtRuntime = ControlNameBuiltAtRuntimeRegex.IsMatch(planMarkdown);
+
             foreach (var read in verificationReads)
             {
+                var readOwners = read.Owners.Where(o => StepCodeLiteralRegex.IsMatch(o)).ToList();
+                var reportedEmptyOverlap = false;
                 var names = new HashSet<string>(
                     read.Names.Where(name => !namesTheSetWrites.Contains(name)
                                              && (!hasUnknownWrite || NameWrittenNowhere(name))),
                     StringComparer.OrdinalIgnoreCase);
-                if (names.Count == 0) continue;
-                foreach (var owner in read.Owners.Where(o => StepCodeLiteralRegex.IsMatch(o)).OrderBy(o => o, StringComparer.Ordinal))
+                foreach (var owner in (names.Count == 0 ? new List<string>() : readOwners).OrderBy(o => o, StringComparer.Ordinal))
                 {
                     if (facts.OwnerNamesOrNull(owner) is not { } ownerNames) continue;
                     if (names.Overlaps(ownerNames)) continue;
+                    reportedEmptyOverlap = true;
 
                     var readList = string.Join(", ", names.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
                     var writeList = string.Join(", ", ownerNames.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
@@ -1188,6 +1276,51 @@ namespace ReSet.Core.Services
                         Message = message,
                         Lexemes = lexemes,
                         OwnerStepCode = ownerStepCode
+                    });
+                }
+
+                // ⑥ 일부 겹침 - 실물 POQSettleBatch20 V25. 세트가 스스로 쓰는 이름(규칙 ①, B16 실물)은 namesWrittenAnywhere 에 들어 있어
+                // 「어디에서도 안 쓰인다」에서 빠진다 - 따로 거르지 않는다(따로 거르던 첫 구현은 되돌림에서 지키는 것이 없었다).
+                if (reportedEmptyOverlap || buildsNamesAtRuntime) continue;
+                var readNames = read.Names.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (UnwrittenReadNames(facts, readOwners, readNames, namesWrittenAnywhere,
+                        // 세트판은 세트 절 자신도 본다 - 세트의 헬퍼 호출은 기대 이름 나열이 아니라 쓰기다(최종 리뷰에서 찾은 오탐:
+                        // 세트 절 안의 호출 줄을 빼고 봐서 발화했다). 세트판 ⑤ 의 NameWrittenNowhere 와 같은 범위다.
+                        name => sectionsByStepCode.Values.Any(section => section != null && MentionedInNonSqlFences(section, name))
+                                || MentionedInNonSqlFences(planMarkdown, name),
+                        extraUnknownWrite: hasUnknownWrite) is not { } partial)
+                    continue;
+
+                var (partialOwners, written, missing) = partial;
+                var ownersText = string.Join(", ", partialOwners);
+                var readList2 = string.Join(", ", readNames.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
+                var missingNames = string.Join(", ", missing.Select(n => "`" + n + "`"));
+                var writtenNames = string.Join(", ", written.OrderBy(n => n, StringComparer.Ordinal).Select(n => "`" + n + "`"));
+
+                if (partialOwners.Count == 1 && MentionsAnyLiteral(sharedConventions, missing) && !MentionsAnyLiteral(sharedConventions, written))
+                {
+                    errors.Add(new DetailedError
+                    {
+                        Type = ErrorType.VerificationControlTotalNameMismatch,
+                        Message =
+                            $"{partialOwners[0]}이(가) 통제 합계를 {writtenNames}(으)로 쓰는데 공통 규약에는 그 이름이 없고, 통합 데이터 정합성 검증 SQL 세트가 " +
+                            $"{partialOwners[0]} 몫을 {readList2}(으)로 읽습니다. 그중 {missingNames}은(는) 공통 규약의 이름인데 어떤 단계도 쓰지 않아 " +
+                            $"그 행은 어떤 실행에서도 없습니다. {partialOwners[0]}의 쓰는 이름을 공통 규약대로 맞추십시오.",
+                        Lexemes = LinesMentioningLiterals(sectionsByStepCode[partialOwners[0]], written),
+                        OwnerStepCode = partialOwners[0]
+                    });
+                }
+                else
+                {
+                    errors.Add(new DetailedError
+                    {
+                        Type = ErrorType.VerificationControlTotalNameMismatch,
+                        Message =
+                            $"통합 데이터 정합성 검증 SQL 세트가 {ownersText} 몫의 통제 합계를 ControlName {readList2}(으)로 읽는데 그중 {missingNames}은(는) " +
+                            $"어떤 단계도 쓰지 않는 이름이라 그 행은 어떤 실행에서도 없습니다. {ownersText}이(가) 쓰는 이름은 {writtenNames}입니다. " +
+                            $"검증 SQL 이 읽는 이름을 쓰는 이름으로 맞추거나, 쓰이지 않는 이름을 읽기에서 빼십시오.",
+                        Lexemes = LinesMentioningLiterals(verification, missing),
+                        OwnerStepCode = null
                     });
                 }
             }
@@ -1267,10 +1400,10 @@ namespace ReSet.Core.Services
         /// SQL 이 아닌 펜스(의사코드·C#)가 이 이름을 인용 리터럴로 담고 있는가. 범용 헬퍼에 이름을 넘기는 호출이
         /// 그 자리에 있으면, 리터럴 INSERT 가 없어도 실행 때 그 이름의 행이 생긴다 - 그때는 고발하지 않는다.
         ///
-        /// [코퍼스 도달 0 · 시험 없음 - 2026-09-16 실측] 배송본 13 편의 비 SQL 펜스 전수에서 통제명을 리터럴로 넘기는
-        /// 호출 자리는 **0** 이다(`controlName:`·`p_controlName =` 모양 전수 검색). 그래서 이 가지를 걷어내도 빨개지는
-        /// 시험이 없다(되돌림 n4 생존). 남기는 이유는 방향이다 - 이 가지는 발화를 **줄이기만** 하고, 그 모양이 나오면
-        /// 막는 것이 오탐으로 재시도를 태우는 것보다 싸다. 실물이 생기면 그때 가르는 시험을 붙여라.
+        /// [정정 - 2026-09-17] 2026-09-16 에 「배송본 비 SQL 펜스에서 통제명을 리터럴로 넘기는 호출 자리 0」이라 적었으나 틀렸다 -
+        /// 그때 찾은 모양(`controlName:`·`p_controlName =`)이 실물 모양(`p_controlName: "TSettleMst_CLTotal_TX"`)과 달랐다.
+        /// 배송본 `agent/steps`·`agent/verification` 에서 실물은 POQSettleBatch10 S17 의 8 줄이다. 이 가지는 이제 ⑥ 시험이 가른다
+        /// (`WithAnUnknownWriter_AHelperCallElsewherePassingTheMissingNames_IsSilent` · `Batch20_V25WithAHelperCallPassingTheMissingNames_IsSilent`).
         /// </summary>
         private static bool MentionedInNonSqlFences(string markdown, string name)
         {

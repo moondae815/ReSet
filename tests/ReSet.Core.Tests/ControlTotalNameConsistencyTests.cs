@@ -227,15 +227,14 @@ public sealed class ControlTotalNameConsistencyTests
     // `WITH X AS (SELECT N'a' AS ControlName … UNION ALL SELECT N'b' …) INSERT … SELECT C.ControlName FROM X AS C`
     // 로 쓰면 종전엔 「모름」이라 대조에서 빠졌다(agent/steps 관할 22 중 여섯이 이 모양).
 
-    /// <summary>B20 1 회차 S11 의 쓰기 CTE 가지 하나(<c>N'LedgerRowCount'</c>)만 바꿔 S18 이 읽는 이름과의 교집합을 0 으로 만든다.
-    /// 같은 리터럴이 뒤의 검증 SELECT(<c>LiveControl</c>)에도 있으나 그것은 쓰기가 아니라 첫 등장(쓰기 CTE)만 바꾼다.</summary>
+    /// <summary>B20 1 회차 S11 의 통제명 <c>N'LedgerRowCount'</c> 를 바꿔 S18 이 읽는 이름과의 교집합을 0 으로 만든다.
+    /// 같은 리터럴이 쓰기 CTE 와 뒤의 자기 재조회 SELECT(<c>LiveControl</c>) 두 자리에 있다 - <b>둘 다</b> 바꾼다. 처음엔 쓰기만 바꿨는데
+    /// 그러면 변이된 S11 이 아무도 안 쓰는 이름을 스스로 읽어 ⑥(일부 겹침, 2026-09-17)이 S11 을 옳게 고발했다 - 변이가 모순이었다.</summary>
     private static string Batch20S11WithDisjointNames()
     {
         var original = Fixture("Batch20-S11-attempt1.md");
-        const string from = "    SELECT N'LedgerRowCount' AS ControlName, LedgerRowCount AS ControlValue FROM Ledger\n    UNION ALL\n";
-        var at = original.IndexOf(from, StringComparison.Ordinal);
-        Assert.True(at >= 0);
-        return original[..at] + from.Replace("N'LedgerRowCount'", "N'FrozenRowCount'") + original[(at + from.Length)..];
+        Assert.Equal(2, original.Split("N'LedgerRowCount'").Length - 1);
+        return original.Replace("N'LedgerRowCount'", "N'FrozenRowCount'");
     }
 
     private static (string Code, string Markdown) ReaderOf(string owner, string name) => ("S99",
@@ -256,12 +255,8 @@ public sealed class ControlTotalNameConsistencyTests
         Assert.DoesNotContain("`LedgerRowCount`, `NonSettleAmtSum`", defect.Value.Reason);
     }
 
-    // C2: 변이 없는 실물 쌍은 교집합이 1(LedgerRowCount)이라 규칙 ⑤ 로 조용하다. 부분 겹침은 이 처방의 범위 밖이다.
-    [Fact]
-    public void RealCteUnionWriter_WithReaderSharingOneName_IsSilent()
-    {
-        Assert.Empty(Validate(("S11", Fixture("Batch20-S11-attempt1.md")), ("S18", Fixture("Batch20-S18-attempt1.md"))));
-    }
+    // C2(「변이 없는 실물 쌍은 ⑤ 로 조용하다」)는 ⑥(2026-09-17)이 뒤집었다 - 같은 입력이 이제 발화한다:
+    // RealReaderSharingOneNameButReadingSevenNamesNobodyWrites_IsAttributedToTheReader.
 
     // C3: 한정자 없는 ControlName(B15 S18 · B19 S20)도 FROM 의 유일한 출처인 CTE 로 푼다. B19 S20 은 앞에 CTE 셋이 더 있고
     // 가지 일부가 다른 CTE 에서 값을 끌어온다(이름 자리는 전부 리터럴). 읽는 단계는 합성이지만 쓰는 쪽은 배송본 그대로다.
@@ -304,6 +299,139 @@ public sealed class ControlTotalNameConsistencyTests
         Assert.Contains("MetricName + N'.Expected'", writer);
 
         Assert.Empty(Validate(("S18", writer), ReaderOf("S18", "NoSuchControlName")));
+    }
+
+    // ── ⑥ 일부 겹침(2026-09-17) ─────────────────────────────────────────────────────────────
+    // 사전 선언: docs/audit-reports/2026-09-17-K2-부분겹침-사전선언.md. 이름이 하나라도 겹치면 ⑤ 는 침묵한다 - 그래서
+    // B20 1 회차 S18 이 S11 몫을 8 이름으로 읽는데 S11 이 쓰는 이름과 LedgerRowCount 하나만 겹친 것(나머지 7 행은 어떤 실행
+    // 에서도 없다)을 Critic 만 잡았다. ⑥ 은 「몫 전부를 알고 · 겹치되 · 문서 어디에서도 안 쓰인 읽기 이름이 남을 때」 발화한다.
+
+    private static readonly string[] Batch20S18MissingNames =
+    {
+        "LedgerCLTotal", "LedgerExtraTxAmt", "LedgerForeignSettleAmt", "LedgerPGTotal", "LedgerPOQIncome", "LedgerSeperateAmt", "LedgerTxAmt",
+    };
+
+    /// <summary>⑥ 문구의 「그중 … 은(는)」 사이 - 빠진 이름 목록.</summary>
+    private static string MissingList(string reason)
+    {
+        var start = reason.IndexOf("그중 ", StringComparison.Ordinal);
+        var end = reason.IndexOf("은(는)", start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start, reason);
+        return reason[start..end];
+    }
+
+    private static (string Code, string Markdown)[] Batch20Attempt1() => new[]
+    {
+        ("S11", Fixture("Batch20-S11-attempt1.md")), ("S18", Fixture("Batch20-S18-attempt1.md")),
+    };
+
+    // P1: 변이 없는 실물 1 회차 쌍.
+    [Fact]
+    public void RealReaderSharingOneNameButReadingSevenNamesNobodyWrites_IsAttributedToTheReader()
+    {
+        var defect = Assert.Single(Validate(Batch20Attempt1()));
+
+        Assert.Equal("S18", defect.Key);
+        var missing = MissingList(defect.Value.Reason);
+        foreach (var name in Batch20S18MissingNames) Assert.Contains("`" + name + "`", missing);
+        Assert.DoesNotContain("`LedgerRowCount`", missing);
+        Assert.Contains("`TxAmtSum`", defect.Value.Reason);   // S11 이 실제로 쓰는 이름 - 맞출 짝
+    }
+
+    // P7 n3: 빠진 이름을 다른 단계가 쓰면 그 행은 실행 때 생길 수 있다 - 「어디에서도 안 쓰인다」가 거짓이 되어 침묵한다.
+    [Fact]
+    public void WhenAnotherStepWritesTheMissingNames_IsSilent()
+    {
+        var values = string.Join(",\n", Batch20S18MissingNames.Select(n => $"    (@p_runId, N'S12', N'{n}', 0, SYSUTCDATETIME())"));
+        var writer = "### S12\n\n```sql\n-- SQL_INSERT_EXTRA\nINSERT INTO batch.BatchControlTotal (RunId, StepCode, ControlName, ControlValue, CapturedAtUtc)\nVALUES\n" + values + ";\n```\n";
+
+        Assert.Empty(Validate(Batch20Attempt1().Append(("S12", writer)).ToArray()));
+    }
+
+    /// <summary>실물 B10 S17(이름을 매개변수로 쓰는 범용 헬퍼)을 S17 자리에 둔다 - 문서에 「모름」 쓰기가 생긴다.
+    /// <paramref name="callsWithMissingNames"/> 면 그 의사코드의 실물 호출 줄 모양(<c>p_controlName: "…"</c>)으로 빠진 이름 7 을 넘기는 줄을 더한다.</summary>
+    private static string Batch10S17AsUnknownWriter(bool callsWithMissingNames)
+    {
+        var original = Fixture("Batch10-S17.md");
+        const string anchor = "repository.execute(SQL_INSERT_CONTROL_TOTAL, { p_runId: runId, p_stepCode: \"S17\", p_controlName: \"TSettleMst_CLTotal_TX\",  p_controlValue: ledgerTxTotal })\n";
+        Assert.Contains(anchor, original);
+        if (!callsWithMissingNames) return original;
+        var calls = string.Concat(Batch20S18MissingNames.Select(n =>
+            $"repository.execute(SQL_INSERT_CONTROL_TOTAL, {{ p_runId: runId, p_stepCode: \"S11\", p_controlName: \"{n}\",  p_controlValue: ledgerTxTotal }})\n"));
+        return original.Replace(anchor, anchor + calls);
+    }
+
+    // P6(a): 「모름」 쓰기가 있고 **다른 단계**의 의사코드가 그 이름들을 헬퍼에 넘기면 그 행은 실행 때 생긴다 - 침묵한다.
+    [Fact]
+    public void WithAnUnknownWriter_AHelperCallElsewherePassingTheMissingNames_IsSilent()
+    {
+        Assert.Empty(Validate(Batch20Attempt1().Append(("S17", Batch10S17AsUnknownWriter(callsWithMissingNames: true))).ToArray()));
+    }
+
+    // P6(b): 같은 「모름」 쓰기가 있어도 이름을 담은 의사코드가 **읽는 단계 자신**뿐이면 발화한다. 실물 S18 은
+    // requiredFrozenNames = ["LedgerRowCount", "LedgerTxAmt", …] 로 자기가 기대하는 이름을 나열한다 - 그것은 쓰기가 아니다.
+    [Fact]
+    public void WithAnUnknownWriter_TheReadersOwnPseudocodeListingTheNames_StillReports()
+    {
+        Assert.Contains("\"LedgerTxAmt\"", Fixture("Batch20-S18-attempt1.md"));
+
+        var defect = Assert.Single(Validate(Batch20Attempt1().Append(("S17", Batch10S17AsUnknownWriter(callsWithMissingNames: false))).ToArray()));
+
+        Assert.Equal("S18", defect.Key);
+    }
+
+    // P6(c): 이름을 런타임에 조합하는 문서는 「어디에서도 안 쓰인다」를 믿을 수 없다 - 통째로 침묵한다(실물 B16 조합 펜스를 옮겼다).
+    [Fact]
+    public void ADocumentBuildingNamesAtRuntime_IsSilent()
+    {
+        var withRuntimeNames = Fixture("Batch20-S11-attempt1.md") + "\n" + Fixture("Batch16-runtime-name-fence.md");
+
+        Assert.Empty(Validate(("S11", withRuntimeNames), ("S18", Fixture("Batch20-S18-attempt1.md"))));
+    }
+
+    // P7 n6: 몫이 둘인데 하나를 모르면 빠진 이름이 그 단계 몫일 수 있다 - 침묵한다. 읽기의 몫만 IN (N'S11', N'S17') 로 넓히고
+    // S17 자리에 실물 매개변수 헬퍼(B10 S17)를 둔다.
+    [Fact]
+    public void WhenOneOfTheReadOwnersIsUnknown_IsSilent()
+    {
+        var original = Fixture("Batch20-S18-attempt1.md");
+        const string from = "   AND StepCode = N'S11'\n   AND ControlName IN\n";
+        Assert.Contains(from, original);
+        var reader = original.Replace(from, "   AND StepCode IN (N'S11', N'S17')\n   AND ControlName IN\n");
+
+        Assert.Empty(Validate(("S11", Fixture("Batch20-S11-attempt1.md")), ("S17", Batch10S17AsUnknownWriter(callsWithMissingNames: false)), ("S18", reader)));
+    }
+
+    // ⑥ 의 공통 규약 동률: 규약이 빠진 이름을 담고 쓰는 쪽 이름을 하나도 안 담으면 어긴 것은 쓰는 단계(S11)다.
+    // 규약 문장은 합성이다(B20 실물 규약에는 통제명이 없다) - ⑤ 의 같은 규칙 시험과 같은 방식.
+    [Fact]
+    public void PartialOverlap_WhenOnlyTheReaderFollowsTheSharedConventions_TheWriterIsAttributed()
+    {
+        var conventions = "통제명은 " + string.Join(", ", Batch20S18MissingNames.Select(n => "N'" + n + "'")) + " 을 쓴다.";
+
+        var defect = Assert.Single(ValidateWith(conventions, Batch20Attempt1()));
+
+        Assert.Equal("S11", defect.Key);
+        Assert.Contains("공통 규약", defect.Value.Reason);
+        // 짝: 규약이 쓰는 쪽 이름(TxAmtSum)도 담으면 종전대로 읽는 단계다.
+        Assert.Equal("S18", Assert.Single(ValidateWith(conventions + " N'TxAmtSum'", Batch20Attempt1())).Key);
+    }
+
+    // ⑤ 가 난 읽기에는 ⑥ 을 겹쳐 걸지 않는다 - 몫이 둘(S13·S20)인 실물 B11 S20 은 S13 몫으로 ⑤ 가 나는데, 읽기 목록에 아무도 안 쓰는
+    // 이름 하나를 더하면 합집합(S20 이 LEDGER_* 를 쓴다)과는 겹쳐 ⑥ 조건도 참이 된다. 같은 읽기를 두 문구로 두 번 여는 것을 막는다.
+    [Fact]
+    public void AReadAlreadyReportedForAnEmptyOverlap_GetsNoPartialOverlapReportToo()
+    {
+        var original = Fixture("Batch11-S20.md");
+        const string from = "               N'LEDGER_POQ_INCOME'\n           )";
+        Assert.Contains(from, original);
+        var reader = original.Replace(from, "               N'LEDGER_POQ_INCOME',\n               N'LEDGER_NOBODY_WRITES'\n           )");
+
+        var defect = Assert.Single(Validate(("S13", Fixture("Batch11-S13.md")), ("S20", reader)));
+
+        Assert.Equal("S20", defect.Key);
+        Assert.Contains("겹치는 이름이 하나도 없어", defect.Value.Reason);
+        Assert.DoesNotContain("그중 ", defect.Value.Reason);
     }
 
     // [배선] 발화를 재는 시험은 이 검사가 파이프라인에서 아예 안 불려도 초록이다. 오케스트레이터가 결과를

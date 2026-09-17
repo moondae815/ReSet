@@ -251,6 +251,104 @@ public sealed class VerificationControlTotalNamesTests
         Assert.Contains("`TSettleMst.PGTotal`", message);
     }
 
+    // ── ⑥ 일부 겹침(2026-09-17) ─────────────────────────────────────────────────────────────
+    // 사전 선언: docs/audit-reports/2026-09-17-K2-부분겹침-사전선언.md §0-2 X2. B20 배송본 V25 는 S11 동결값과 현재값 CTE 를
+    // ControlName 으로 FULL OUTER JOIN 하는데 현재값 5 이름 중 S11 이 쓰는 이름과 겹치는 것은 LedgerRowCount 하나다 - 매 실행
+    // 불일치를 낸다. 「첫 깨끗한 판(L1 0 · Critic 98)」이 이것을 배송했다.
+
+    private static readonly string[] Batch20V25MissingNames = { "LedgerCLTotal", "LedgerPGTotal", "LedgerPOQIncome", "LedgerTxAmt" };
+
+    // P2: 배송본 검증 세트 절(바이트 그대로) + S11(배송본과 BOM 만 다른 1 회차 픽스처).
+    [Fact]
+    public void Batch20_V25SharingOneNameButReadingFourNamesNobodyWrites_IsReported()
+    {
+        var error = Assert.Single(Validate(Fixture("Batch20-verification.md"), null, ("S11", Fixture("Batch20-S11-attempt1.md"))));
+
+        Assert.Equal(ErrorType.VerificationControlTotalNameMismatch, error.Type);
+        Assert.Null(error.OwnerStepCode);   // 읽는 쪽(골격)이 고친다
+        var start = error.Message.IndexOf("그중 ", StringComparison.Ordinal);
+        var missing = error.Message[start..error.Message.IndexOf("은(는)", start, StringComparison.Ordinal)];
+        foreach (var name in Batch20V25MissingNames) Assert.Contains("`" + name + "`", missing);
+        Assert.DoesNotContain("`LedgerRowCount`", missing);
+        Assert.Contains("`TxAmtSum`", error.Message);
+        // 어휘는 세트의 원문 줄 - 빠진 이름을 담은 줄만.
+        Assert.All(MechanicalValidator.ViolationLexemes(error), lexeme => Assert.Contains(lexeme, Fixture("Batch20-verification.md")));
+        Assert.Contains("SELECT N'LedgerTxAmt',", MechanicalValidator.ViolationLexemes(error));
+    }
+
+    // P6(c) 세트판: 조합 펜스가 있는 문서는 ⑥ 도 침묵한다(세트판 기존 안전판은 「모름」 쓰기가 있을 때만 걸었다).
+    [Fact]
+    public void Batch20_V25InADocumentBuildingNamesAtRuntime_IsSilent()
+    {
+        var plan = Fixture("Batch20-verification.md") + "\n" + Fixture("Batch16-runtime-name-fence.md");
+
+        Assert.Empty(Validate(plan, null, ("S11", Fixture("Batch20-S11-attempt1.md"))));
+    }
+
+    // P6(a) 세트판: 「모름」 쓰기(실물 B10 S17 헬퍼)가 있고 그 의사코드가 빠진 이름을 헬퍼에 넘기면 침묵한다.
+    [Fact]
+    public void Batch20_V25WithAHelperCallPassingTheMissingNames_IsSilent()
+    {
+        var helper = Fixture("Batch10-S17.md");
+        const string anchor = "repository.execute(SQL_INSERT_CONTROL_TOTAL, { p_runId: runId, p_stepCode: \"S17\", p_controlName: \"TSettleMst_CLTotal_TX\",  p_controlValue: ledgerTxTotal })\n";
+        Assert.Contains(anchor, helper);
+        var calling = helper.Replace(anchor, anchor + string.Concat(Batch20V25MissingNames.Select(n =>
+            $"repository.execute(SQL_INSERT_CONTROL_TOTAL, {{ p_runId: runId, p_stepCode: \"S11\", p_controlName: \"{n}\",  p_controlValue: ledgerTxTotal }})\n")));
+
+        Assert.Empty(Validate(Fixture("Batch20-verification.md"), null, ("S11", Fixture("Batch20-S11-attempt1.md")), ("S17", calling)));
+        // 짝: 호출 줄이 없는 같은 헬퍼면 발화한다 - 위 침묵이 호출 줄 때문임을 보인다.
+        Assert.Single(Validate(Fixture("Batch20-verification.md"), null, ("S11", Fixture("Batch20-S11-attempt1.md")), ("S17", helper)));
+    }
+
+    // [최종 리뷰에서 찾은 구멍] 세트 **자신의** 절 안에서 헬퍼에 빠진 이름을 넘기는 호출은 「기대 이름 나열」이 아니라 쓰기다 -
+    // 세트판 ⑤ 는 이미 문서 전체의 비 SQL 인용을 보는데 ⑥ 만 세트 절을 빼고 봐서 발화했다. 단계판의 「읽는 쪽 제외」는 B20 S18 이
+    // 자기 의사코드에 기대 이름을 나열한 실물 때문이고, 세트판에는 그런 실물이 없다. 입력: V25 + 실물 B17 헬퍼 펜스 + 호출 줄(B10 S17 모양)을 세트 절 안에.
+    [Fact]
+    public void Batch20_V25WithTheSetsOwnHelperCallsInsideTheSet_IsSilent()
+    {
+        var b17 = Fixture("Batch17-verification.md");
+        var start = b17.IndexOf("```sql\n-- SQL_CAPTURE_CONTROL_TOTAL\n", StringComparison.Ordinal);
+        var helperFence = b17[start..(b17.IndexOf("```", start + 3, StringComparison.Ordinal) + 3)];
+        var calls = "```pseudocode\n" + string.Concat(Batch20V25MissingNames.Select(n =>
+            $"repository.execute(SQL_CAPTURE_CONTROL_TOTAL, {{ p_runId: runId, p_stepCode: \"S11\", p_controlName: \"{n}\",  p_controlValue: value }})\n")) + "```\n";
+        var plan = Fixture("Batch20-verification.md") + "\n\n" + helperFence + "\n\n" + calls;
+        Assert.StartsWith("## 통합 데이터 정합성 검증 SQL 세트", plan);
+        Assert.DoesNotContain("\n## ", plan);   // 호출 줄이 세트 절 안에 있다
+
+        Assert.Empty(Validate(plan, null, ("S11", Fixture("Batch20-S11-attempt1.md"))));
+    }
+
+    // ⑥ 세트판 공통 규약 동률: 규약이 세트의 빠진 이름만 담으면 S11 을 연다 - 어휘는 S11 의 원문 줄, OwnerStepCode 는 S11.
+    [Fact]
+    public void Batch20_V25_WhenOnlyTheSetFollowsTheSharedConventions_OpensTheWriter()
+    {
+        var conventions = "통제명은 " + string.Join(", ", Batch20V25MissingNames.Select(n => "N'" + n + "'")) + " 을 쓴다.";
+        var s11 = Fixture("Batch20-S11-attempt1.md");
+
+        var error = Assert.Single(Validate(Fixture("Batch20-verification.md"), conventions, ("S11", s11)));
+
+        Assert.Contains("공통 규약", error.Message);
+        Assert.Equal("S11", error.OwnerStepCode);
+        Assert.All(MechanicalValidator.ViolationLexemes(error), lexeme => Assert.Contains(lexeme, s11));
+        // 짝: 규약이 S11 이름도 담으면 종전대로 세트(골격)다.
+        Assert.Null(Assert.Single(Validate(Fixture("Batch20-verification.md"), conventions + " N'TxAmtSum'", ("S11", s11))).OwnerStepCode);
+    }
+
+    // 세트 **자신의** 「모름」 쓰기(실물 B17 범용 헬퍼 펜스)도 헬퍼 호출 안전판을 켠다 - 단계에 「모름」 쓰기가 없어도.
+    // 호출 줄은 세트 밖 절의 의사코드에 두었다(실물 B10 S17 호출 줄 모양). 이 입력에서 ⑤ 는 호출 줄 때문에 이름을 다 거르고 침묵한다.
+    [Fact]
+    public void Batch20_V25WithTheSetsOwnHelperAndACallPassingTheMissingNames_IsSilent()
+    {
+        var b17 = Fixture("Batch17-verification.md");
+        var start = b17.IndexOf("```sql\n-- SQL_CAPTURE_CONTROL_TOTAL\n", StringComparison.Ordinal);
+        var helperFence = b17[start..(b17.IndexOf("```", start + 3, StringComparison.Ordinal) + 3)];
+        var calls = "\n\n## 배치 실행 오케스트레이션\n\n```pseudocode\n" + string.Concat(Batch20V25MissingNames.Select(n =>
+            $"repository.execute(SQL_CAPTURE_CONTROL_TOTAL, {{ p_runId: runId, p_stepCode: \"S11\", p_controlName: \"{n}\",  p_controlValue: value }})\n")) + "```\n";
+        var withHelper = Fixture("Batch20-verification.md") + "\n\n" + helperFence + "\n";
+
+        Assert.Empty(Validate(withHelper + calls, null, ("S11", Fixture("Batch20-S11-attempt1.md"))));
+    }
+
     // [귀속] 어휘는 검증 세트의 원문 줄이다 - 조립 문서에서 골격만 열고 단계는 열지 않는다(골격 패치 수리로 간다).
     [Fact]
     public void OnTheAssembledPlan_TheDefectOpensOnlyTheSkeleton()

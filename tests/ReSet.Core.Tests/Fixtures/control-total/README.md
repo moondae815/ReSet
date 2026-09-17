@@ -57,3 +57,14 @@
 | `Batch15-S18.md` | `output/Jobs/POQSettleBatch15/agent/steps/S18.md` | CTE-UNION 리터럴, `ControlName` 한정자 없음 |
 | `Batch19-S20.md` | `output/Jobs/POQSettleBatch19/agent/steps/S20.md` | CTE-UNION 리터럴, 한정자 없음, 앞에 CTE 셋 · 가지 일부가 다른 CTE 에서 값을 끌어온다 |
 | `Batch13-S18.md` | `output/Jobs/POQSettleBatch13/agent/steps/S18.md` | CTE-UNION 위에서 `MetricName + N'.Expected'` 로 이름을 조합한다 — 모름 유지 |
+
+## 일부 겹침(⑥) 회차(2026-09-17) 추가
+
+사전 선언: `docs/audit-reports/2026-09-17-K2-부분겹침-사전선언.md`.
+
+| 파일 | 출처 | 담은 모양 |
+| :-- | :-- | :-- |
+| `Batch20-verification.md` | `output/Jobs/POQSettleBatch20/docs/BatchMigrationPlan.md` 10128~11094 행(`## 통합 데이터 정합성 검증 SQL 세트` 절, 잘라 낸 바이트가 원본에 그대로 있음을 확인) | V25 가 S11 몫을 5 이름으로 읽어 S11 이 쓰는 8 이름과 `LedgerRowCount` 하나만 겹친다 — ⑥ 양성(배송된 결함) |
+
+같은 회차의 단계판 양성은 기존 `Batch20-S11-attempt1.md`·`Batch20-S18-attempt1.md` 를 **변이 없이** 쓴다. 배송본 S11 은 1 회차 S11 과 BOM 만 다르다.
+
