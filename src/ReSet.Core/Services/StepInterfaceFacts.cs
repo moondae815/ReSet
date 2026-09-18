@@ -26,7 +26,18 @@ namespace ReSet.Core.Services
     /// <paramref name="SelectColumns"/> 는 EXISTS 가 투영하는 목록일 뿐 조건이 아니다.
     /// </summary>
     /// <param name="Negated"><c>IF NOT EXISTS</c> 면 true - 같은 WHERE 라도 뜻이 반대라 표가 행마다 싣는다.</param>
-    public sealed record StepGuard(string Procedure, int Line, string Table, string Where, IReadOnlyList<string> SelectColumns, bool Negated = false);
+    /// <param name="FirstBeginTranLine">
+    /// 원본의 <b>첫</b> <c>BEGIN TRANSACTION</c> 줄. 이 값보다 <see cref="Line"/> 이 앞이면 원본은 그 가드를
+    /// <b>트랜잭션 없이</b> 평가하고 그대로 반환했다는 뜻이다. 원본이 트랜잭션을 아예 안 열면 <c>null</c>(모름) -
+    /// 0 이나 <c>int.MaxValue</c> 를 넣으면 표가 거짓을 적는다.
+    ///
+    /// [왜 이 칸이 필요한가] 재료는 이미 프롬프트에 둘 다 있었다 - 명세서의 「트랜잭션 경계 (기계 확정)」 표와
+    /// 이 가드 표. 없던 것은 <b>두 표를 줄 번호로 맞춰 보라는 조항</b>이고, 그래서 B21 의 S10·S11 이 원본과 달리
+    /// 트랜잭션을 먼저 열고 가드에서 롤백했다. 요청 재생 실험에서 이 칸을 주자 양성 3/3 이 고쳐지고
+    /// 음성(가드 둘 중 하나는 트랜잭션 안이 옳은 S05)은 오탐 0 이었다.
+    /// 판독: docs/audit-reports/2026-09-18-가드-트랜잭션-순서-판독.md
+    /// </param>
+    public sealed record StepGuard(string Procedure, int Line, string Table, string Where, IReadOnlyList<string> SelectColumns, bool Negated = false, int? FirstBeginTranLine = null);
 
     /// <summary>
     /// 단계별 원본 프로시저 인터페이스를 모은다.
@@ -273,13 +284,22 @@ namespace ReSet.Core.Services
                     if (ddlByProcedure != null &&
                         (ddlByProcedure.TryGetValue(legacy, out var ddl) || ddlByProcedure.TryGetValue(BareName(legacy), out ddl)))
                     {
+                        // 첫 트랜잭션 개시 줄. 값은 제품 추출기에서만 온다 - 여기서 DDL 을 다시 훑으면
+                        // 같은 사실에 두 권위가 생기고, 그 어긋남은 표 어디에도 드러나지 않는다.
+                        var firstBeginTran = TransactionBoundaryExtractor.Extract(ddl)
+                            .Where(b => b.Kind.StartsWith("BEGIN", StringComparison.OrdinalIgnoreCase))
+                            .Select(b => (int?)b.Line)
+                            .DefaultIfEmpty(null)
+                            .Min();
+
                         foreach (var guard in GuardPredicateFacts.GuardsFromDdl(ddl))
                         {
                             guards.Add(new StepGuard(
                                 legacy, guard.Line, guard.Table,
                                 System.Text.RegularExpressions.Regex.Replace(string.Join(" AND ", guard.Terms.Select(t => t.Raw)), @"\s+", " ").Trim(),
                                 guard.SelectColumns,
-                                guard.Negated));
+                                guard.Negated,
+                                firstBeginTran));
                         }
                     }
 
@@ -369,13 +389,16 @@ namespace ReSet.Core.Services
             if (rows.Count == 0) return string.Empty;
 
             var sb = new StringBuilder();
-            sb.AppendLine("| Step | Legacy procedure | DDL line | Check | Table | WHERE conditions (exact) | SELECT list (not a condition) |");
-            sb.AppendLine("|---|---|---|---|---|---|---|");
+            sb.AppendLine("| Step | Legacy procedure | DDL line | Check | Table | WHERE conditions (exact) | SELECT list (not a condition) | Original first BEGIN TRAN (DDL line) | Guard is outside the transaction |");
+            sb.AppendLine("|---|---|---|---|---|---|---|---|---|");
             foreach (var (code, guard) in rows)
             {
+                var (tranLine, outside) = guard.FirstBeginTranLine is int first
+                    ? (first.ToString(), guard.Line < first ? "YES" : "NO")
+                    : ("-", "UNKNOWN");
                 sb.AppendLine(
                     $"| {code} | {guard.Procedure} | {guard.Line} | {(guard.Negated ? "IF NOT EXISTS" : "IF EXISTS")} | {guard.Table} | `{guard.Where}` | " +
-                    $"{(guard.SelectColumns.Count > 0 ? string.Join(", ", guard.SelectColumns.Select(c => "`" + c + "`")) : "-")} |");
+                    $"{(guard.SelectColumns.Count > 0 ? string.Join(", ", guard.SelectColumns.Select(c => "`" + c + "`")) : "-")} | {tranLine} | {outside} |");
             }
 
             return sb.ToString();

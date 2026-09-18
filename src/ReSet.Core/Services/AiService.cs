@@ -2757,6 +2757,31 @@ passing it there would leave its type to the driver, and a `DECIMAL(5,2)` that a
 // @pi_strYMD CHAR(8) -> p_ymd
 execute(SQL_APPLY_RATE, { p_ymd: batchYmd })
 ```
+
+* Pre-validation guard and the transaction boundary (rule 5 - the guard always runs; its ORDER is fixed):
+```pseudocode
+// The guard runs with NO transaction open, exactly as the original did - the original opened its
+// transaction only after this check passed (the guard-conditions table states this per guard).
+// Returning here must not have opened one, so there is nothing to roll back and the snapshot
+// reference point is not pulled earlier than the original's.
+currentStatementName = SQL_GUARD_ALREADY_SETTLED
+currentStepErrorCode = NULL
+IF queryScalar(SQL_GUARD_ALREADY_SETTLED, { p_ymd: batchYmd }) is present:
+    legacyReturnCode = -9
+    return                       // no transaction was ever opened
+
+// Only now open the transaction, and open it INSIDE the TRY - a failure of beginTransaction itself
+// must be observed by the SAME failure path as the statements, not escape it.
+TRY:
+    beginTransaction()
+    currentStatementName = SQL_DELETE_RANGE
+    currentStepErrorCode = -1
+    execute(SQL_DELETE_RANGE, { p_ymd: batchYmd })
+    commit()
+ON FAILURE observed by the application:
+    rollback the transaction if open
+    record the failure under currentStatementName and currentStepErrorCode
+```
 ";
 
         private ReviewResult ParseReviewResult(string? responseContent, string contextName)
@@ -5192,6 +5217,18 @@ Consolidate the provided specifications into a single unified batch job named '{
                 builder.AppendLine("These are the source procedures' IF [NOT] EXISTS checks, read from their DDL. Translate each check with EXACTLY these WHERE");
                 builder.AppendLine("conditions - the columns in the check's SELECT list are only what EXISTS projects, not a condition.");
                 builder.AppendLine("Do not add, drop, or change a condition.");
+                // [가드와 트랜잭션의 순서 - 2026-09-18] 마지막 두 칸이 「원본이 이 가드를 트랜잭션 안에서 봤는가」를
+                // 말한다. 재료는 이 표와 명세서의 「트랜잭션 경계 (기계 확정)」 표로 이미 둘 다 있었고, 없던 것은
+                // 두 표를 줄 번호로 맞춰 보라는 이 조항이다. 재생 실험: 양성 3/3 고침 · 음성(가드 둘 중 하나는
+                // 트랜잭션 안이 옳은 자리) 오탐 0. 판독: docs/audit-reports/2026-09-18-가드-트랜잭션-순서-판독.md
+                builder.AppendLine("The last two columns say WHERE the check ran in the original. When the guard's DDL line comes BEFORE the");
+                builder.AppendLine("procedure's first BEGIN TRANSACTION, the original evaluated that guard with NO transaction open and returned");
+                builder.AppendLine("without ever opening one. Reproduce that order: run the check first, and open this step's transaction only");
+                builder.AppendLine("AFTER it passes. Do NOT open a transaction and then roll it back on the guard - that moves the snapshot");
+                builder.AppendLine("reference point earlier than the original and can change which rows the step sees. The guard still runs");
+                builder.AppendLine("unconditionally on every call (rule 5); moving it out of the transaction does NOT make it skippable.");
+                builder.AppendLine("A row marked NO ran INSIDE the original's transaction - keep it there. UNKNOWN means the original opened no");
+                builder.AppendLine("transaction at all, so there is no order to preserve. If you cannot keep the original's order, say why.");
                 builder.AppendLine();
                 builder.Append(guardTable);
             }
