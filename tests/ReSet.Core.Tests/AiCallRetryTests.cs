@@ -182,11 +182,20 @@ namespace ReSet.Core.Tests
             var calls = 0;
             var plan = new RetryPlan(2, TimeSpan.FromMilliseconds(60), TimeSpan.FromMilliseconds(90));
 
-            cts.CancelAfter(TimeSpan.FromMilliseconds(15));
-
+            // [흔들림을 없앴다 - 2026-09-18] 옛 판은 `cts.CancelAfter(15ms)` 가 재시도 지연 `60~90ms` 와
+            // **벽시계로 경주**했다. 전체 판에서는 xUnit 이 컬렉션을 병렬로 돌려 스레드풀이 포화되고, 그때
+            // 15ms 타이머 콜백이나 그 뒤 연속 실행이 밀리면 지연이 먼저 끝나 두 번째 시도가 돌았다
+            // (부하 걸린 창에서 2 회 관측 · 단독 실행은 5/5 통과라 원인이 안 보인다).
+            //
+            // 첫 호출 **안에서** 취소하면 경주가 사라진다 - 지연이 이미 취소된 토큰으로 시작하므로
+            // `Task.Delay(…, token)` 이 즉시 OCE 를 던진다. 재는 것은 그대로다: 「대기 중에 취소됐으면
+            // 두 번째 시도로 넘어가지 않는다」. `AiRetryPolicy.Classify` 는 **OCE 에만** Cancelled 을 내므로
+            // (그 자리 주석: 「구분은 우리가 넘긴 토큰이다」) 토큰이 취소됐어도 Transient 실패는 여전히
+            // Transient 로 분류되고, 그래서 이 시험은 여전히 **지연 경로**를 지나간다.
+            // 판독: docs/audit-reports/2026-09-18-가드-트랜잭션-순서-판독.md §A-4
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 AiCallRetry.ExecuteAsync<string>(
-                    () => { calls++; throw Transient(); },
+                    () => { calls++; cts.Cancel(); throw Transient(); },
                     cts.Token,
                     plan));
 
