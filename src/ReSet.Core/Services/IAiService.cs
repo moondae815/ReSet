@@ -32,7 +32,10 @@ namespace ReSet.Core.Services
         Task<AiResult> GenerateBatchStepSectionAsync(BatchStepPlan step, IReadOnlyList<BatchStepPlan> allSteps, string sharedConventions, System.Collections.Generic.List<(string FileName, string Content)> specs, IReadOnlyList<StepInterface> stepInterfaces, string targetLanguage, string jobName, string? effort = null, string? floorFeedback = null, string? previousBody = null, IReadOnlyDictionary<string, IReadOnlyList<string>>? callGraph = null, CancellationToken cancellationToken = default,
             // 같은 지목 재생성 회차에 먼저 다시 만든 쓰는 쪽 단계의 본문(제어 합계 몫 간선 - UpstreamSectionOrder).
             // [왜 cancellationToken 뒤인가] ReviewConsolidatedPlanAsync 의 confirmations 와 같은 이유 - 기존 매처 자리를 안 옮긴다.
-            IReadOnlyList<(string StepCode, string Body)>? upstreamSections = null);
+            IReadOnlyList<(string StepCode, string Body)>? upstreamSections = null,
+            // [목차 요구 대응] 목차가 단계마다 건 요구 불릿(PlanStructureRequirementReader).
+            // null 이면 종전 동작 - 실을 것이 없으면 절 자체가 나가지 않는다.
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? requirementsByStep = null);
         Task<ReviewResult> ReviewConsolidatedPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string planMarkdown, string jobName, string? effort = null, CancellationToken cancellationToken = default,
             // 파이프라인이 목차·원본 DDL 로만 찾아낸 「확인 요청」 항목(결함 단정이 아니다 - TransactionSpanSplitFacts).
             // [왜 cancellationToken 뒤인가] 앞에 끼우면 기존 호출과 NSubstitute 매처 150 자리가 위치로 어긋난다.
