@@ -35,7 +35,11 @@ namespace ReSet.Core.Services
             IReadOnlyList<(string StepCode, string Body)>? upstreamSections = null,
             // [목차 요구 대응] 목차가 단계마다 건 요구 불릿(PlanStructureRequirementReader).
             // null 이면 종전 동작 - 실을 것이 없으면 절 자체가 나가지 않는다.
-            IReadOnlyDictionary<string, IReadOnlyList<string>>? requirementsByStep = null);
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? requirementsByStep = null,
+            // [검증 세트 재사용] 골격이 이미 쓴 `## 통합 데이터 정합성 검증 SQL 세트` 절 전문
+            // (BatchPlanAssembler.ExtractVerificationSet). 전 단계가 같은 값을 받으므로 공유
+            // 접두사에 실린다. null/빈 값이면 종전 동작.
+            string? verificationSet = null);
         Task<ReviewResult> ReviewConsolidatedPlanAsync(System.Collections.Generic.List<(string FileName, string Content)> specs, string planMarkdown, string jobName, string? effort = null, CancellationToken cancellationToken = default,
             // 파이프라인이 목차·원본 DDL 로만 찾아낸 「확인 요청」 항목(결함 단정이 아니다 - TransactionSpanSplitFacts).
             // [왜 cancellationToken 뒤인가] 앞에 끼우면 기존 호출과 NSubstitute 매처 150 자리가 위치로 어긋난다.

@@ -4152,6 +4152,17 @@ namespace ReSet.Core.Services
             }
 
             var conventions = BatchPlanAssembler.ExtractSharedConventions(skeleton);
+
+            // [검증 세트 재사용 - 2026-09-19] 골격이 이미 쓴 검증 SQL 세트 절을 한 번 잘라
+            // 단계 호출까지 내려보낸다. 단계 작성자에게 이 칸이 없어서 B22 축 B 감사의 도달
+            // 1 위 가족(검증 SQL 이름 공간 분열)이 났다 - 요청 본문 실측으로 단계 섹션 요청
+            // 20 건 중 세트 본문이 실린 것이 0 이었고, 골격 응답은 첫 단계 요청보다 먼저
+            // 정의 24 를 갖고 있었다. 판독: docs/audit-reports/2026-09-18-검증세트-단계요청-재생-판독.md
+            //
+            // 비었으면 null 로 내려보낸다 - 골격이 그 절을 못 쓴 회차와 「실었다」를 호출
+            // 기록에서 가른다(requirementsByStep 과 같은 이유).
+            var extractedVerificationSet = BatchPlanAssembler.ExtractVerificationSet(skeleton);
+            var verificationSet = string.IsNullOrWhiteSpace(extractedVerificationSet) ? null : extractedVerificationSet;
             var sections = previousSections != null
                 ? new Dictionary<string, string>(previousSections)
                 : new Dictionary<string, string>();
@@ -4277,7 +4288,8 @@ namespace ReSet.Core.Services
                         ddlByProcedure, journal, attempt, cancellationToken, PreviousBodyFor(step.Code),
                         initialFloorFeedback: sharedBlockFeedback.GetValueOrDefault(step.Code),
                         upstreamSections: UpstreamFor(step.Code),
-                        requirementsByStep: requirementsByStep);
+                        requirementsByStep: requirementsByStep,
+                        verificationSet: verificationSet);
 
                     progressScope.CompleteTask(taskKey);
 
@@ -4623,7 +4635,9 @@ namespace ReSet.Core.Services
             // 같은 회차에 먼저 다시 만든 쓰는 쪽 본문(UpstreamSectionOrder). 재시도마다 같은 값을 싣는다.
             IReadOnlyList<(string StepCode, string Body)>? upstreamSections = null,
             // [목차 요구 대응] GenerateBySplitAsync 가 목차에서 한 번 읽어 그대로 내려보낸 요구 불릿.
-            IReadOnlyDictionary<string, IReadOnlyList<string>>? requirementsByStep = null)
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? requirementsByStep = null,
+            // [검증 세트 재사용] GenerateBySplitAsync 가 골격에서 한 번 잘라 내려보낸 검증 SQL 세트 절.
+            string? verificationSet = null)
         {
             // 이번 회차 안에서 어느 시도든 Exhausted를 던졌는지. adopted == null로
             // 끝났을 때만 반환값의 QuotaExhausted에 실린다.
@@ -4685,7 +4699,8 @@ namespace ReSet.Core.Services
                         _consolidatorEffort, floorFeedback, previousBody,
                         callGraph: callGraph, cancellationToken: cancellationToken,
                         upstreamSections: upstreamSections,
-                        requirementsByStep: requirementsByStep);
+                        requirementsByStep: requirementsByStep,
+                        verificationSet: verificationSet);
                     content = result?.Content;
                 }
                 // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.

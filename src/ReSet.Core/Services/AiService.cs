@@ -4730,7 +4730,10 @@ Consolidate the provided specifications into a single unified batch job named '{
             IReadOnlyList<(string StepCode, string Body)>? upstreamSections = null,
             // [목차 요구 대응 - 2026-09-18] 목차가 단계마다 건 요구 불릿. 오케스트레이터가
             // PlanStructureRequirementReader 로 한 번 읽어 그대로 내려보낸다. null 이면 종전 동작.
-            IReadOnlyDictionary<string, IReadOnlyList<string>>? requirementsByStep = null)
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? requirementsByStep = null,
+            // [검증 세트 재사용 - 2026-09-19] 골격이 이미 쓴 검증 SQL 세트 절 전문.
+            // 전 단계가 같은 값을 받으므로 공유 접두사에 싣는다. null/빈 값이면 종전 동작.
+            string? verificationSet = null)
         {
             var systemPrompt = $@"You are a principal database modernization architect writing ONE step section of the '{jobName}' consolidated {targetLanguage} batch migration plan.
 
@@ -4767,6 +4770,11 @@ Consolidate the provided specifications into a single unified batch job named '{
                 totalProcedureCount: FeedbackSpec.OnlyProcedureSpecs(specs).Count);
 
             AppendStatementAnchorRules(userPrompt);
+
+            // [검증 세트 재사용] 공유 접두사의 끝에 붙인다 - 목차 요구(꼬리)와 반대 축이다.
+            // 값이 전 단계에 대해 같으므로 접두사에 실으면 캐시 쓰기가 1 회로 끝난다.
+            // 꼬리에 실으면 단계마다 27KB 를 새로 쓰게 된다.
+            userPrompt.Append(RenderVerificationSetBlock(verificationSet));
 
             // 단계 지시와 재시도 피드백은 회차마다 달라지므로 공통 컨텍스트에 붙이지
             // 않는다. gpt-5.6 이후 모델은 암묵적 cache breakpoint를 마지막 메시지에 놓고
@@ -5014,6 +5022,57 @@ Consolidate the provided specifications into a single unified batch job named '{
                 builder.AppendLine(entry.Content);
                 builder.AppendLine();
             }
+        }
+
+        /// <summary>
+        /// 골격이 이미 쓴 검증 SQL 세트를 단계 요청의 <b>공유 접두사</b>에 싣는 절.
+        ///
+        /// [왜 필요한가] B22 축 B 감사의 도달 1 위 가족 「검증 SQL 이름 공간 분열」. 요청 본문 실측으로
+        /// 단계 섹션 요청 20/20 에 세트 본문이 0 건이었고, 골격 응답(정의 24)은 첫 단계 요청보다 먼저
+        /// 존재했다 - 재료는 있고 배선이 없었다.
+        ///
+        /// 요청 재생 실험(18 호출 $3.38): 세트 이름 호출 <b>A0 0/3 → 3/3</b>(23~24 이름),
+        /// 세트 이름 재정의 1·1·1 → 0·0·0, 자기 지역 이름 16·8·7 → 1·1·1,
+        /// <b>신설 Error 검증 14·8·0 → 0·0·0</b>, 전재 0/18, 길이 0.55 배, 목차 요구 대응 회귀 0.
+        /// 계약 조항을 뺀 팔(본문만)도 호출은 3/3 이었으나 <b>계약이 금지한 `BatchValidationResult` 가
+        /// 16·9·3 으로 늘었다</b> - 세 조항을 함께 싣는 이유가 그것이다(판독 §4-4·§6).
+        ///
+        /// 선언·판독: docs/audit-reports/2026-09-18-검증세트-단계요청-재생-{사전선언,판독}.md
+        ///
+        /// [여기에 「레거시 기원 없음」 금지 조항을 넣지 마라] 그 판정은 단계마다 갈리는데 이 절은
+        /// 전 단계가 공유한다. 무조건 실으면 <b>레거시 기원이 있는 단계에 거짓 금지를 싣게 된다</b> -
+        /// 실제로 S14 는 원본(`dbo.UP_Util_Settle_Summary_AcqManual`)이 `NOLOCK` 을 4 회 쓴다.
+        /// 그 조항의 거처는 단계별로 갈리는 <see cref="AppendRequirementCoverageContract"/> 다.
+        /// 판독 부록 B.
+        /// </summary>
+        private static string RenderVerificationSetBlock(string? verificationSet)
+        {
+            // 재료가 없으면 절 자체를 내지 않는다. 빈 머리글은 "이 문서에 검증 세트가 있다"는
+            // 거짓 전제를 주고, 골격이 그 절을 못 쓴 회차와 구분되지 않는다.
+            if (string.IsNullOrWhiteSpace(verificationSet))
+            {
+                return string.Empty;
+            }
+
+            var block = new StringBuilder();
+            block.AppendLine();
+            block.AppendLine("[Integrity Validation SQL Set — ALREADY WRITTEN in this document]");
+            block.AppendLine("The section below is part of THIS plan document. It is not a suggestion and not an example.");
+            block.AppendLine();
+            block.AppendLine(verificationSet.Trim());
+            block.AppendLine();
+            block.AppendLine("[Validation Reuse Contract]");
+            block.AppendLine("- The validation SQL above is already part of THIS document. When this step needs a check that");
+            block.AppendLine("  one of them performs, REFER TO IT BY ITS NAME and state when the step runs it. Do NOT restate");
+            block.AppendLine("  the SQL body here.");
+            block.AppendLine("- Do NOT define a second check for the same thing under a new name or with a new threshold.");
+            block.AppendLine("  If the existing one is wrong for this step, say which name is wrong and why, then correct it.");
+            block.AppendLine("- If the validation set's own execution contract (parameters, result columns, target table)");
+            block.AppendLine("  disagrees with the shared conventions or the canonical DDL in this request, follow the shared");
+            block.AppendLine("  conventions and the DDL, and write down which name you rejected and why. Do NOT silently adopt");
+            block.AppendLine("  either side.");
+            block.AppendLine();
+            return block.ToString();
         }
 
         /// <summary>
