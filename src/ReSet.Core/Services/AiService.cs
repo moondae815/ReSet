@@ -4515,6 +4515,12 @@ Consolidate the provided specifications into a single unified batch job named '{
             userPrompt.AppendLine("[Approved Document Structure & Plan]");
             userPrompt.AppendLine(planStructure);
             userPrompt.AppendLine();
+
+            // [목차 요구 대응] 요구 불릿은 위 목차 전문 안에 이미 있다 - 이 경로에 없던 것은
+            // 계약이므로 계약만 더한다. 분할 경로와 같은 문장을 쓴다.
+            AppendRequirementCoverageContract(userPrompt, hasLegacyOrigin: null);
+            userPrompt.AppendLine();
+
             AppendFeedbackSection(userPrompt, specs);
 
             userPrompt.AppendLine("Please draft the Consolidated Batch Modernization Plan, STRICTLY adhering to the [Approved Document Structure & Plan] above.");
@@ -4696,7 +4702,10 @@ Consolidate the provided specifications into a single unified batch job named '{
             string? previousBody = null,
             IReadOnlyDictionary<string, IReadOnlyList<string>>? callGraph = null,
             CancellationToken cancellationToken = default,
-            IReadOnlyList<(string StepCode, string Body)>? upstreamSections = null)
+            IReadOnlyList<(string StepCode, string Body)>? upstreamSections = null,
+            // [목차 요구 대응 - 2026-09-18] 목차가 단계마다 건 요구 불릿. 오케스트레이터가
+            // PlanStructureRequirementReader 로 한 번 읽어 그대로 내려보낸다. null 이면 종전 동작.
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? requirementsByStep = null)
         {
             var systemPrompt = $@"You are a principal database modernization architect writing ONE step section of the '{jobName}' consolidated {targetLanguage} batch migration plan.
 
@@ -4739,6 +4748,21 @@ Consolidate the provided specifications into a single unified batch job named '{
             // 그 지점의 접두사 전체를 비교하므로, 243KB 컨텍스트 뒤에 이 몇 줄이 붙으면
             // 12단계가 공유하던 캐시가 통째로 죽는다.
             var volatileSuffix = new StringBuilder();
+
+            // [목차 요구 대응] 공유 접두사가 아니라 꼬리에 싣는다. 요구는 단계마다 다르므로
+            // 접두사에 실으면 20 단계가 나눠 쓰는 캐시가 통째로 죽는다 - 꼬리는 이미 단계마다
+            // 갈리므로 손해가 0 이다(재생 실험 45 호출 전량 캐시 적중, 첫 호출 뒤 $0.10~0.21).
+            if (requirementsByStep != null
+                && requirementsByStep.TryGetValue(step.Code, out var stepRequirements))
+            {
+                var requirementBlock = RenderStepRequirementBlock(
+                    stepRequirements, hasLegacyOrigin: step.LegacyProcedures is { Count: > 0 });
+                if (requirementBlock.Length > 0)
+                {
+                    volatileSuffix.Append(requirementBlock);
+                }
+            }
+
             volatileSuffix.AppendLine($"Now write the section for step {step.Code} ({step.Name}) ONLY.");
 
             // 직전 본문이 있으면 백지 재작성이 아니라 패치를 요구한다.
@@ -4965,6 +4989,80 @@ Consolidate the provided specifications into a single unified batch job named '{
                 builder.AppendLine(entry.Content);
                 builder.AppendLine();
             }
+        }
+
+        /// <summary>
+        /// [목차 요구 대응 - 2026-09-18] 목차가 이 단계에 건 요구 불릿과 대응 계약을 낸다.
+        ///
+        /// B21 축 B 감사의 가장 넓은 가족이 「목차가 건 요구에 대응 절·항목이 없다」(12 건 / 9 단계)였고,
+        /// 요청 본문 실측으로 원인이 확정됐다 - <b>단계 섹션 요청 24 건 중 목차 요구 문구가 실린 것 0</b>,
+        /// 골격 요청은 3/3. 칸이 없으면 모델은 못 쓴다.
+        ///
+        /// 요청 재생 실험(45 호출 $7.33, 자리 셋 × 팔 다섯 × 3 회): 대응 <b>A0 0/9 → 불릿을 실은 팔 전부 9/9</b>.
+        /// 부작용으로 (러)「없던 원본 힌트를 제거했다」는 거짓 전제 문장이 A1·A2 각 3/9 났고,
+        /// <b>세 번째 조항(레거시 기원 없는 단계 금지)이 0/9 로 껐다</b>(대응 9/9 유지).
+        /// 둘째 조항(정본 순서)은 값도 비용도 측정되지 않은 중립이고, 근거는 A1 의 한 응답이
+        /// `AttemptNo`(번들 정본 DDL 에 없는 열)를 10 회 쓴 실측 하나다 - 목차를 단계 요청에 싣는 것이
+        /// 바로 그 위험을 새로 여니 보험으로 남긴다. <b>제거 후보</b>이며 지우려면 먼저 다시 재라.
+        ///
+        /// 선언·판독: docs/audit-reports/2026-09-18-목차요구-단계요청-재생-{사전선언,판독}.md
+        /// </summary>
+        private static string RenderStepRequirementBlock(
+            IReadOnlyList<string> requirements,
+            bool hasLegacyOrigin)
+        {
+            // 재료가 없으면 절 자체를 내지 않는다. 빈 머리글은 "목차가 이 단계에 요구를 걸지
+            // 않았다"는 거짓 전제를 주고, 옛 판 목차(산문)와 구분되지 않는다.
+            if (requirements == null || requirements.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var block = new StringBuilder();
+            block.AppendLine("[Approved Step Requirements — the table of contents pins these for THIS step]");
+            block.AppendLine("Every bullet below is a requirement that this step's section must cover.");
+            block.AppendLine();
+            foreach (var requirement in requirements)
+            {
+                block.AppendLine(requirement);
+            }
+
+            block.AppendLine();
+            AppendRequirementCoverageContract(block, hasLegacyOrigin);
+            block.AppendLine();
+            return block.ToString();
+        }
+
+        /// <summary>
+        /// 대응 계약 세 조항. <b>두 경로가 같은 문장을 쓰게 하려고 여기 한 곳에 둔다</b> -
+        /// 조항이 한쪽에만 있으면 안 도는 쪽만 보고 있을 수 있다(2026-09-08 분할 경로 실측).
+        /// </summary>
+        /// <param name="hasLegacyOrigin">
+        /// 단계 하나를 쓰는 경로면 그 단계의 레거시 기원 유무. <c>null</c>이면 여러 단계를 한 번에
+        /// 쓰는 경로(단일 호출 폴백)라 판정을 모델에게 「기원이 없다고 선언된 단계에서는」으로 넘긴다.
+        /// </param>
+        private static void AppendRequirementCoverageContract(StringBuilder block, bool? hasLegacyOrigin)
+        {
+            block.AppendLine("[Requirement Coverage Contract]");
+            block.AppendLine("- For EVERY requirement above, either write the clause or item that covers it, or state");
+            block.AppendLine("  explicitly in this section that you are narrowing it, and why.");
+            block.AppendLine("- The authoritative source for original logic is the procedure specification and the");
+            block.AppendLine("  bundle's canonical DDL, not this list. Where a requirement conflicts with them, follow");
+            block.AppendLine("  them and write that you resolved the conflict.");
+
+            // 레거시 기원이 있는 단계에는 걸지 않는다 - 거기서는 "원본의 NOLOCK 을 제거했다"가
+            // 참이고, 금지를 걸면 참인 서술까지 막는다.
+            if (hasLegacyOrigin == true)
+            {
+                return;
+            }
+
+            block.AppendLine();
+            block.AppendLine(hasLegacyOrigin == false
+                ? "- This step has NO legacy origin. Do NOT write that you removed, dropped or \"no longer use\""
+                : "- For any step whose legacy origin is none, do NOT write that you removed, dropped or \"no longer use\"");
+            block.AppendLine("  hints, logic or clauses of an original procedure — there is no original here, and a later");
+            block.AppendLine("  audit inherits that false premise.");
         }
 
         private static void AppendSharedStepContext(

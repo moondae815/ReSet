@@ -6417,6 +6417,57 @@ namespace ReSet.Core.Tests
         // ("dbo.USP_Spec1")를 S01이 커버하도록 선언한다 — 목차 커버리지 검사(Task 11)가
         // 도입된 뒤, 커버리지를 의도적으로 검사하지 않는 기존 테스트에서 예기치
         // 않은 "[커버리지 누락]" 배너가 섞여 나오지 않게 하기 위함이다.
+        /// <summary>
+        /// [목차 요구 대응 - 배선] 목차 산문의 요구 불릿이 <b>단계 섹션 호출까지 값으로 도달</b>하는가.
+        /// 소스 정규식 시험(PlanStructureRequirementTests)은 「문장이 파일에 있다」만 재고, 배선이
+        /// 끊겨도 초록일 수 있다. 이 시험은 호출 인자를 붙잡아 값을 본다.
+        ///
+        /// B21 축 B 감사의 가장 넓은 가족(12 건 / 9 단계)이 바로 이 값이 0 이어서 났다 -
+        /// 요청 본문 실측: 단계 섹션 요청 24 건 중 목차 요구 문구가 실린 것 0.
+        /// 판독: docs/audit-reports/2026-09-18-목차요구-단계요청-재생-판독.md
+        /// </summary>
+        [Fact]
+        public async Task RunConsolidatedPipeline_CarriesThePlanStructureRequirementsIntoEachStepCall()
+        {
+            const string structureWithRequirements = @"## 목차
+
+#### S01 — 첫 단계
+
+- 레거시 기원: `USP_Spec1`
+- 첫 단계는 배포 버전 호환성을 확인한다.
+
+#### S02 — 둘째 단계
+
+- 둘째 단계는 그룹별 제어 합계를 저장한다.
+
+" + StepsJson;
+
+            var aiService = Substitute.For<IAiService>();
+            aiService.BrainstormBatchPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = "Brainstorm" });
+            aiService.DraftBatchPlanStructureAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = structureWithRequirements });
+            aiService.GenerateBatchPlanSkeletonAsync(Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<SkeletonRevision?>(), Arg.Any<CancellationToken>())
+                .Returns(new AiResult { Content = SkeletonMarkdown });
+
+            var seen = new Dictionary<string, IReadOnlyList<string>?>();
+            aiService.GenerateBatchStepSectionAsync(Arg.Any<BatchStepPlan>(), Arg.Any<IReadOnlyList<BatchStepPlan>>(), Arg.Any<string>(), Arg.Any<List<(string, string)>>(), Arg.Any<IReadOnlyList<StepInterface>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.IReadOnlyList<string>>>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<(string StepCode, string Body)>?>(), Arg.Any<System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.IReadOnlyList<string>>?>())
+                .Returns(call =>
+                {
+                    var step = call.Arg<BatchStepPlan>();
+                    var requirements = call.ArgAt<System.Collections.Generic.IReadOnlyDictionary<string, System.Collections.Generic.IReadOnlyList<string>>?>(13);
+                    seen[step.Code] = requirements != null && requirements.TryGetValue(step.Code, out var mine) ? mine : null;
+                    return new AiResult { Content = HealthyStepSection(step.Code, step.TargetTables[0], step.ErrorCodes[0]) };
+                });
+            aiService.ReviewConsolidatedPlanAsync(Arg.Any<List<(string, string)>>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(new ReviewResult { HasDefects = false, ScoreAccuracy = 10, ScoreCrud = 10, ScoreInterface = 10, ScoreException = 10, ScoreReadability = 10 });
+
+            await RunBatchPipeline(aiService);
+
+            Assert.Equal(new[] { "- 첫 단계는 배포 버전 호환성을 확인한다." }, seen["S01"]?.ToArray());
+            Assert.Equal(new[] { "- 둘째 단계는 그룹별 제어 합계를 저장한다." }, seen["S02"]?.ToArray());
+        }
+
         private const string StepsJson = @"```json
 {
   ""Steps"": [

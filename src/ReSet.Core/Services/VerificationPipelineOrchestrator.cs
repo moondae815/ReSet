@@ -4104,6 +4104,16 @@ namespace ReSet.Core.Services
             // 단계마다 뽑아도 결과가 같다.
             var stepInterfaces = StepInterfaceFacts.Build(steps, parametersByProcedure, ddlByProcedure);
 
+            // [목차 요구 대응 - 2026-09-18] 목차가 단계마다 건 요구 불릿을 한 번 읽어 단계 호출까지
+            // 내려보낸다. 단계 작성자에게 이 칸이 없어서 B21 축 B 감사의 가장 넓은 가족(12 건 / 9 단계)이
+            // 났다 - 요청 본문 실측으로 단계 섹션 요청 24 건 중 목차 요구 문구가 실린 것이 0 이었다.
+            // 판독: docs/audit-reports/2026-09-18-목차요구-단계요청-재생-판독.md
+            var parsedRequirements = PlanStructureRequirementReader.Read(planStructure);
+            // 비었으면 null 로 내려보낸다. 옛 판 목차는 단계 블록이 산문이라 요구가 0 이고,
+            // 그때 빈 사전을 넘기면 호출 기록에서 「요구가 없다」와 「요구를 싣는다」가
+            // 구분되지 않는다 - 배선을 재는 시험이 한쪽을 다른 쪽으로 오독한다.
+            var requirementsByStep = parsedRequirements.Count > 0 ? parsedRequirements : null;
+
             string skeleton;
             AiResult generation;
 
@@ -4266,7 +4276,8 @@ namespace ReSet.Core.Services
                         knownTableNames, stepInterfaces, codesByProcedure, tablesByProcedure, callGraph,
                         ddlByProcedure, journal, attempt, cancellationToken, PreviousBodyFor(step.Code),
                         initialFloorFeedback: sharedBlockFeedback.GetValueOrDefault(step.Code),
-                        upstreamSections: UpstreamFor(step.Code));
+                        upstreamSections: UpstreamFor(step.Code),
+                        requirementsByStep: requirementsByStep);
 
                     progressScope.CompleteTask(taskKey);
 
@@ -4610,7 +4621,9 @@ namespace ReSet.Core.Services
             // 없으면 직전 본문만 받은 모델이 그대로 돌려주고 호출 1 회가 헛돈다.
             string? initialFloorFeedback = null,
             // 같은 회차에 먼저 다시 만든 쓰는 쪽 본문(UpstreamSectionOrder). 재시도마다 같은 값을 싣는다.
-            IReadOnlyList<(string StepCode, string Body)>? upstreamSections = null)
+            IReadOnlyList<(string StepCode, string Body)>? upstreamSections = null,
+            // [목차 요구 대응] GenerateBySplitAsync 가 목차에서 한 번 읽어 그대로 내려보낸 요구 불릿.
+            IReadOnlyDictionary<string, IReadOnlyList<string>>? requirementsByStep = null)
         {
             // 이번 회차 안에서 어느 시도든 Exhausted를 던졌는지. adopted == null로
             // 끝났을 때만 반환값의 QuotaExhausted에 실린다.
@@ -4671,7 +4684,8 @@ namespace ReSet.Core.Services
                         step, steps, conventions, specs, stepInterfaces, targetLanguage, jobName,
                         _consolidatorEffort, floorFeedback, previousBody,
                         callGraph: callGraph, cancellationToken: cancellationToken,
-                        upstreamSections: upstreamSections);
+                        upstreamSections: upstreamSections,
+                        requirementsByStep: requirementsByStep);
                     content = result?.Content;
                 }
                 // 취소를 삼키면 실패로 위장한 정상 반환이 되어 취소 사실이 사라진다.
