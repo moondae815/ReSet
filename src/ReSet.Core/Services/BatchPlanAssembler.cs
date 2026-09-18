@@ -19,6 +19,9 @@ namespace ReSet.Core.Services
     {
         public const string StepDetailHeader = "## 단계별 이행 상세 및 의사코드";
 
+        /// <summary>검증 SQL 세트 H2. 느슨하게 찾는다 - 모델이 꼬리표를 붙여 쓰는 일이 있다(LocateStepDetailBlock 주석 참고).</summary>
+        public const string VerificationSetHeader = "## 통합 데이터 정합성 검증 SQL 세트";
+
         private static readonly Regex StepPlaceholderRegex = new(
             @"(?m)^[ \t]*<!--\s*STEP:[^>]*-->[ \t]*\r?\n?",
             RegexOptions.Compiled);
@@ -38,6 +41,42 @@ namespace ReSet.Core.Services
             }
 
             return string.Join("\n", lines.Skip(headerIndex + 1).Take(endIndex - headerIndex - 1)).Trim();
+        }
+
+        /// <summary>
+        /// 골격의 `## 통합 데이터 정합성 검증 SQL 세트` 절을 **헤딩 줄까지 포함해** 뽑는다.
+        /// 단계별 호출의 공유 접두사에 그대로 실어, 단계가 이미 정의된 검증 SQL 을
+        /// 다시 짓지 않고 이름으로 부르게 한다.
+        ///
+        /// [왜 필요한가 - B22 요청 본문 실측]
+        /// 축 B 감사의 도달 1 위 가족이 「검증 SQL 이름 공간이 통째로 둘로 갈렸다」였다.
+        /// 골격은 목차의 V01~V12 요구 87/87 을 받아 검증 세트 24 정의를 쓰는데,
+        /// <b>단계 섹션 요청 20 건에는 그 본문이 0 건</b> 실린다 - <see cref="ExtractSharedConventions"/>
+        /// 가 H2③ 만 자르기 때문이다. 그래서 S18 은 같은 검증을 새 이름으로 다시 짓고,
+        /// 그중 일부가 원본이 커밋하는 입력을 거부한다.
+        ///
+        /// 요청 재생 실험(18 호출 $3.38, 자리 S18·S14 × 팔 3 × 3 회): 세트 이름 호출이
+        /// <b>A0 0/3 → 세트를 실은 팔 3/3</b>(매번 23~24 이름), 자기 지역 이름 16·8·7 → 1,
+        /// <b>신설 Error 검증 14·8·0 → 0·0·0</b>, 전재 0/18, 길이 0.55 배.
+        /// 선언·판독: docs/audit-reports/2026-09-18-검증세트-단계요청-재생-{사전선언,판독}.md
+        ///
+        /// [왜 헤딩 줄을 포함하는가] 실은 것이 문서의 어느 절인지 모델이 알아야 한다.
+        /// <see cref="ExtractSharedConventions"/> 는 본문만 주지만 그쪽은 「공통 규약」이라는
+        /// 이름을 호출부가 따로 붙여 준다 - 이쪽은 절 제목 자체가 계약의 일부다.
+        ///
+        /// 실패는 예외가 아니라 빈 문자열이다. 못 잘라도 단계 생성은 종전대로 돌아야 한다.
+        /// </summary>
+        public static string ExtractVerificationSet(string? skeletonMarkdown)
+        {
+            var lines = Normalize(skeletonMarkdown);
+            var (headerIndex, endIndex) = MarkdownSectionLocator.LocateSection(
+                lines, VerificationSetHeader, "## ", exact: false);
+            if (headerIndex < 0)
+            {
+                return string.Empty;
+            }
+
+            return string.Join("\n", lines.Skip(headerIndex).Take(endIndex - headerIndex)).Trim();
         }
 
         public static string Assemble(string? skeletonMarkdown, IReadOnlyList<string> stepSections)
