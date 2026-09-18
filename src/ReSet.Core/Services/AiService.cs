@@ -4695,7 +4695,8 @@ Consolidate the provided specifications into a single unified batch job named '{
             string? floorFeedback = null,
             string? previousBody = null,
             IReadOnlyDictionary<string, IReadOnlyList<string>>? callGraph = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            IReadOnlyList<(string StepCode, string Body)>? upstreamSections = null)
         {
             var systemPrompt = $@"You are a principal database modernization architect writing ONE step section of the '{jobName}' consolidated {targetLanguage} batch migration plan.
 
@@ -4753,6 +4754,21 @@ Consolidate the provided specifications into a single unified batch job named '{
                 volatileSuffix.AppendLine("- Output the FULL section again, but change ONLY what the feedback below identifies.");
                 volatileSuffix.AppendLine("- Every sentence not implicated by the feedback MUST be reproduced byte-for-byte.");
                 volatileSuffix.AppendLine("- Do NOT rewrite, reorder, or \"improve\" untouched parts.");
+            }
+
+            // [쓰는 쪽 먼저 - 2026-09-17] 같은 지목 재생성 회차에 먼저 다시 만든 쓰는 쪽의 새 본문. 읽는 쪽은 옛 쓰는 쪽에 맞추고
+            // 쓰는 쪽은 떠나 짝 결함이 뒤집혔다(POQSettleBatch21 S12↔S19) - 요청 재생 실험에서 새 본문을 실은 읽는 쪽은 5/5 수렴했다.
+            // 판독: docs/audit-reports/2026-09-17-지목재생성-하한사유-요청재생-사전선언.md §결과 · 선언: …-쓰는쪽먼저-사전선언.md
+            if (upstreamSections != null)
+            {
+                foreach (var (upstreamCode, upstreamBody) in upstreamSections)
+                {
+                    if (string.IsNullOrWhiteSpace(upstreamBody)) continue;
+                    volatileSuffix.AppendLine();
+                    volatileSuffix.AppendLine($"[Upstream Section Body — {upstreamCode} (regenerated in this round; do not change it)]");
+                    volatileSuffix.AppendLine($"This step reads {upstreamCode}'s control totals. Use exactly the ControlName values this section writes.");
+                    volatileSuffix.AppendLine(upstreamBody);
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(floorFeedback))

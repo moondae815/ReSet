@@ -26,6 +26,14 @@ namespace ReSet.Core.Services
 
         private static readonly Regex SqlFence = new(@"```sql[^\n]*\n(?<body>.*?)```", RegexOptions.Singleline | RegexOptions.IgnoreCase);
 
+        /// <summary>제어 합계 표(<c>ControlName</c> 칸이 있는 계약 표)와 그 별칭의 맨이름. K2 와 지목 재생성 순서(<see cref="UpstreamSectionOrder"/>)가 같은 표를 본다.</summary>
+        internal static IReadOnlyList<string> ControlTableBareNames() => BatchControlContract.Tables
+            .Where(t => t.Columns.Any(c => string.Equals(c.Name, "ControlName", StringComparison.OrdinalIgnoreCase)))
+            .SelectMany(t => new[] { t.Name }.Concat(t.Aliases ?? Array.Empty<string>()))
+            .Select(n => n[(n.LastIndexOf('.') + 1)..])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         internal static (List<Write> Writes, List<Read> Reads) Collect(string markdown, IReadOnlyCollection<string> tableBareNames)
         {
             var writes = new List<Write>();
