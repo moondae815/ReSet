@@ -30,6 +30,8 @@ public sealed class PlanStructureRequirementTests
     private const string Contract = "[Requirement Coverage Contract]";
     private const string Authority = "The authoritative source for original logic is the procedure specification";
     private const string NoLegacyBan = "This step has NO legacy origin.";
+    // 금지 조항의 공통 꼬리. 단계 하나를 쓰는 경로와 여러 단계를 쓰는 경로가 머리 문장만 다르다.
+    private const string BanTail = "hints, logic or clauses of an original procedure";
 
     // B21 의 목차 모양. `#### Snn — 이름` 아래 불릿이고 첫 줄은 메타(`- 레거시 기원: 없음`)다.
     private const string B21Shape = @"## 통합 배치 아키텍처 개요
@@ -210,11 +212,38 @@ public sealed class PlanStructureRequirementTests
     }
 
     // 금지 한 줄은 「레거시 기원이 없는 단계」에만. 레거시 단계에 실으면 참인 제거 서술까지 막는다.
+    //
+    // [되돌림이 살아남아 고친 자리] 처음엔 `NoLegacyBan`(「This step has NO legacy origin.」)만
+    // 봤는데, 판정을 뒤집는 뮤턴트에서 <b>초록이었다</b> - 레거시 단계에는 삼항의 다른 가지
+    // (「For any step whose legacy origin is none…」)가 나가서 그 문자열이 안 보였기 때문이다.
+    // 금지의 <b>공통 꼬리</b>로 잠근다 - 어느 문구가 나가든 금지 자체를 잡는다.
     [Fact]
     public async Task StepSectionPrompt_ForbidsRemovalClaimsOnlyForStepsWithNoLegacyOrigin()
     {
-        Assert.Contains(NoLegacyBan, (await StepSection(NewStep, Requirements)).Suffix);
-        Assert.DoesNotContain(NoLegacyBan, (await StepSection(LegacyStep, Requirements)).Suffix ?? "");
+        var newStep = (await StepSection(NewStep, Requirements)).Suffix ?? "";
+        var legacyStep = (await StepSection(LegacyStep, Requirements)).Suffix ?? "";
+
+        Assert.Contains(NoLegacyBan, newStep);
+        Assert.Contains(BanTail, newStep);
+        Assert.DoesNotContain(NoLegacyBan, legacyStep);
+        Assert.DoesNotContain(BanTail, legacyStep);
+    }
+
+    // [되돌림이 살아남아 더한 자리] 빈 목록은 이 가드만이 막는다 - 목차 파서는 빈 목록을 내지
+    // 않으므로 이 입력은 「이 가지만이 침묵시킬 수 있는 입력」이다. 가드를 지우면 불릿 없는
+    // 머리글이 나가고, 모델은 「목차가 이 단계에 요구를 걸지 않았다」로 읽는다.
+    [Fact]
+    public async Task StepSectionPrompt_WithAnEmptyRequirementListForThisStep_HasNoBlockAtAll()
+    {
+        var c = await StepSection(NewStep, new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            [NewStep.Code] = Array.Empty<string>(),
+        });
+
+        var whole = c.System + c.User + c.Suffix;
+        Assert.DoesNotContain(Header, whole);
+        Assert.DoesNotContain(Contract, whole);
+        Assert.DoesNotContain(BanTail, whole);
     }
 
     // 재료가 없으면 절 자체가 없다 - 빈 머리글은 「목차가 요구를 안 냈다」는 거짓 전제를 준다.
