@@ -17,8 +17,50 @@ namespace ReSet.Cli
 
         public void NotifyStatus(string message)
         {
-            AnsiConsole.MarkupLine(message);
+            AnsiConsole.MarkupLine(SafeMarkupText(message));
             Serilog.Log.Information(StripMarkup(message));
+        }
+
+        /// <summary>
+        /// Spectre가 읽을 수 있는 문구로 바꿔 돌려준다. 읽을 수 있으면 원문 그대로다.
+        ///
+        /// <para>
+        /// <see cref="NotifyStatus"/>는 호출부가 마크업을 싣는 자리라 인자를 통째로
+        /// 이스케이프할 수 없다(색이 죽는다). 그래서 호출부가 자유 문자열을
+        /// <c>EscapeMarkup</c>으로 감싸는 것이 1차 방어다. 이것은 2차 방어다 -
+        /// <b>한 줄의 문구 결함이 파이프라인을 죽이지 않게 한다.</b>
+        /// </para>
+        /// <para>
+        /// 실물: POQSettleBatch24(2026-09-19)에서 단계 하한 검사 발화가 AI 본문의
+        /// <c>S.[value]</c>(T-SQL 대괄호 식별자)를 인용했고, Spectre가 그것을 스타일로
+        /// 읽어 던진 예외가 19단계를 마친 회차 전체를 버렸다. 그 대가에 비하면
+        /// 태그가 글자로 보이는 것은 싸다.
+        /// </para>
+        /// <para>
+        /// 먼저 쓰고 실패하면 다시 쓰지 않는다 - <see cref="Markup"/> 생성자가 파싱을
+        /// 모두 끝내므로, 여기서 걸린 문구는 콘솔에 한 글자도 나가지 않은 상태다.
+        /// 실패를 조용히 삼키지 않고 경고로 남긴다 - 이스케이프를 빠뜨린 호출부는
+        /// 고쳐야 할 결함이지 정상이 아니다.
+        /// </para>
+        /// </summary>
+        public static string SafeMarkupText(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return string.Empty;
+
+            try
+            {
+                _ = new Markup(message);
+                return message;
+            }
+            // Spectre는 알 수 없는 스타일·닫히지 않은 태그를 InvalidOperationException으로
+            // 알린다. 다른 예외는 이 방어의 몫이 아니므로 그대로 올린다.
+            catch (System.InvalidOperationException ex)
+            {
+                Serilog.Log.Warning(
+                    "콘솔 문구의 마크업을 읽지 못해 원문 그대로 출력합니다 - 사유: {Reason}, 문구: {Message}",
+                    ex.Message, message);
+                return Markup.Escape(message);
+            }
         }
 
         public void NotifyError(string message)

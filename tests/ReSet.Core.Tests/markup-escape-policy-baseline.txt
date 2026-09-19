@@ -1,0 +1,70 @@
+# NotifyStatus 보간 중 EscapeMarkup을 거치지 않는 자리.
+#
+# NotifyStatus 는 인자를 Spectre 마크업으로 파싱한다. 우리가 쓰지 않은 글자(AI 본문·검사
+# 오류문·DB 객체 이름·경로·예외 메시지)를 그대로 실으면 그 안의 [..] 가 스타일 태그로
+# 읽힌다. POQSettleBatch24(2026-09-19)가 그렇게 죽었다 - 하한 검사 발화가 인용한 AI 본문에
+# S.[value] 가 있었고, 19단계를 마친 회차가 통째로 버려졌다.
+#
+# 여기 남는 것은 그런 값이 아니어야 한다. 지금 남은 셋:
+#   (가) 숫자 - 점수·개수·깊이·시도 횟수. 대괄호를 낼 수 없고, 서식 지정자(:D3)가 붙은
+#        자리도 있어 감싸면 오히려 깨진다.
+#   (나) 설정 문자열 - 공급자·모델 이름과 effort. appsettings 가 정하고 사람이 읽고 쓴다.
+#   (다) 도구가 조립한 문장 - graphState·scoreSummary·reason 처럼 이 파일이 자기 리터럴로
+#        만든 문구. 바깥 글자가 섞이지 않는다.
+#
+# 새 자리를 여기 더하기 전에 그 값의 출처를 말하라. AI·DB·파일·예외에서 왔다면 면제가
+# 아니라 EscapeMarkup 이 답이다.
+#
+# 양방향으로 잠겨 있다 - 새 자리가 생겨도, 고친 자리를 안 지워도 MarkupEscapePolicyTests 가
+# 실패한다. 키는 파일|멤버|식이다(줄 번호는 편집마다 썩는다).
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|DraftReplacementPlanStructureAsync|reason
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|_aiService.ModelName
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|_aiService.ProviderName
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|_consolidatorEffort ?? "medium"
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|_consolidatorService.ModelName
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|_consolidatorService.ProviderName
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|_criticService.ModelName
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|_criticService.ProviderName
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|actorInfo
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|attemptText
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|bestCandidateIndex + 1
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|criticEffortText
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|criticInfo
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|effortText
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|highestScore
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|maxDepth
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[0]!.NormalizedScore
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[0]!.ScoreAccuracy
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[0]!.ScoreCrud
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[0]!.ScoreException
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[0]!.ScoreInterface
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[0]!.ScoreReadability
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[1]!.NormalizedScore
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[1]!.ScoreAccuracy
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[1]!.ScoreCrud
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[1]!.ScoreException
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[1]!.ScoreInterface
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[1]!.ScoreReadability
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[2]!.NormalizedScore
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[2]!.ScoreAccuracy
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[2]!.ScoreCrud
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[2]!.ScoreException
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[2]!.ScoreInterface
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|reviews[2]!.ScoreReadability
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunCodeObjectPipelineCoreAsync|scoreSummary
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|_consolidatorService.ModelName
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|_consolidatorService.ProviderName
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|_criticService.ModelName
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|_criticService.ProviderName
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|_stepConcurrency
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|attempt
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|attemptText
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|bestAttempt.Current.AttemptNumber
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|bestAttempt.Current.Review.NormalizedScore
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|consolidatorEffortText
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|criticEffortText
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|found.ReusableSections.Count
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|found.Run
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|found.TotalStepsInStructure
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|graphState
+ReSet.Core/Services/VerificationPipelineOrchestrator.cs|RunConsolidatedPipelineAsync|l2Result.NormalizedScore

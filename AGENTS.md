@@ -35,6 +35,7 @@
 | 정합성 검증기(Validator) | `architecture.md §4.6` + 범주 5 |
 | `Prd.md` 도출·귀속 검사 | `architecture.md §4.14` + 범주 4 |
 | 취소 처리 | 범주 2 + `CancellationPolicyTests` |
+| 콘솔 문구 이스케이프 | `architecture.md §5.5` + `MarkupEscapePolicyTests` |
 | 프롬프트 문구·환각 차단 규칙 | `architecture.md §4.9` + 범주 7 |
 
 ---

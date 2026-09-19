@@ -194,7 +194,7 @@ namespace ReSet.Core.Services
             Log.Information("[파이프라인] 코드 객체 분석 시작 - Type: {ObjectType}, Key: {ObjectKey}, Provider: {Provider}, MaxDepth: {MaxDepth}, BatchMode: {IsBatchMode}",
                 objectKind, key.CanonicalName, provider, maxDepth, isBatchMode);
 
-            _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - DB 메타데이터 및 의존성 분석 중 (최대 깊이: {maxDepth}단계)...");
+            _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(objectStatus)}[/] - DB 메타데이터 및 의존성 분석 중 (최대 깊이: {maxDepth}단계)...");
             try
             {
                 spDef = directDependenciesOnly
@@ -315,7 +315,7 @@ namespace ReSet.Core.Services
                             outputPaths))
                     {
                         Log.Information("[파이프라인] 캐시 히트 - AI 분석 건너뜀 - SP: {SpName}", selectedOption);
-                        _userInteraction.NotifyStatus($"[green]{objectStatus}[/] - 캐시가 유효합니다. AI 분석을 건너뛰고 기존 보고서를 사용합니다. (Cache Hit)");
+                        _userInteraction.NotifyStatus($"[green]{EscapeMarkup(objectStatus)}[/] - 캐시가 유효합니다. AI 분석을 건너뛰고 기존 보고서를 사용합니다. (Cache Hit)");
                         var specFilePath = outputPaths.ResolveSpecPath(cacheObjectKey);
                         if (System.IO.File.Exists(specFilePath))
                         {
@@ -339,7 +339,7 @@ namespace ReSet.Core.Services
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Log.Warning(ex, "[파이프라인] 캐시 확인 중 예외 발생 (무시됨) - SP: {SpName}", selectedOption);
-                    _userInteraction.NotifyStatus($"[yellow]경고: 캐시 확인 중 오류가 발생하여 무시하고 분석을 진행합니다. ({ex.Message})[/]");
+                    _userInteraction.NotifyStatus($"[yellow]경고: 캐시 확인 중 오류가 발생하여 무시하고 분석을 진행합니다. ({EscapeMarkup(ex.Message)})[/]");
                 }
             }
             else if (enableCache)
@@ -362,7 +362,7 @@ namespace ReSet.Core.Services
                 AiResult[]? candidatesResult = null;
                 var actorInfo = $"Actor: {_aiService.ProviderName} - {_aiService.ModelName}(dynamic effort)";
                 var criticInfo = $"Critic: {_criticService.ProviderName} - {_criticService.ModelName}({_criticEffort ?? "high"} effort)";
-                _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - 하이브리드 다중 후보군 병렬 생성 및 검토 중... ({actorInfo} / {criticInfo})");
+                _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(objectStatus)}[/] - 하이브리드 다중 후보군 병렬 생성 및 검토 중... ({actorInfo} / {criticInfo})");
                 
                 using (var progressScope = _userInteraction.CreateProgressScope("하이브리드 다중 후보군 생성") ?? NullProgressScope.Instance)
                 {
@@ -507,7 +507,7 @@ namespace ReSet.Core.Services
 
                 if (reviews != null && reviews.Length >= 3 && reviews[0] != null && reviews[1] != null && reviews[2] != null)
                 {
-                    _userInteraction.NotifyStatus($"[green]{objectStatus}[/] - Effort별 Spec 검토 완료:");
+                    _userInteraction.NotifyStatus($"[green]{EscapeMarkup(objectStatus)}[/] - Effort별 Spec 검토 완료:");
                     _userInteraction.NotifyStatus($"  - Low Spec: [bold]{reviews[0]!.NormalizedScore}[/]점 (정합성:{reviews[0]!.ScoreAccuracy}, CRUD:{reviews[0]!.ScoreCrud}, 연동:{reviews[0]!.ScoreInterface}, 예외:{reviews[0]!.ScoreException}, 시각화:{reviews[0]!.ScoreReadability})");
                     if (!string.IsNullOrWhiteSpace(reviews[0]!.FeedbackComment))
                     {
@@ -564,7 +564,7 @@ namespace ReSet.Core.Services
                     string scoreSummary = (reviews != null && reviews.Length >= 3 && reviews[0] != null && reviews[1] != null && reviews[2] != null) 
                         ? $" (Low: {reviews[0].NormalizedScore}점, Medium: {reviews[1].NormalizedScore}점, High: {reviews[2].NormalizedScore}점)"
                         : string.Empty;
-                    _userInteraction.NotifyStatus($"[green]{objectStatus}[/] - 완벽한 후보군(후보 {bestCandidateIndex + 1}, AI 신뢰도: [bold green]{highestScore}[/]/100점)이 발견되어 즉시 채택합니다.{scoreSummary}");
+                    _userInteraction.NotifyStatus($"[green]{EscapeMarkup(objectStatus)}[/] - 완벽한 후보군(후보 {bestCandidateIndex + 1}, AI 신뢰도: [bold green]{highestScore}[/]/100점)이 발견되어 즉시 채택합니다.{scoreSummary}");
                     specificationMarkdown = candidates[bestCandidateIndex];
                     finalReview = reviews![bestCandidateIndex];
                     fastPassTriggered = true;
@@ -635,7 +635,7 @@ namespace ReSet.Core.Services
                     string scoreSummary = (reviews != null && reviews.Length >= 3 && reviews[0] != null && reviews[1] != null && reviews[2] != null) 
                         ? $" (Low: {reviews[0].NormalizedScore}점, Medium: {reviews[1].NormalizedScore}점, High: {reviews[2].NormalizedScore}점)"
                         : string.Empty;
-                    _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - 이종 모델 합성 에이전트(Consolidator) 구동 중 ({_consolidatorService.ProviderName} - {_consolidatorService.ModelName}, {_consolidatorEffort ?? "medium"} effort)...{scoreSummary}");
+                    _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(objectStatus)}[/] - 이종 모델 합성 에이전트(Consolidator) 구동 중 ({_consolidatorService.ProviderName} - {_consolidatorService.ModelName}, {_consolidatorEffort ?? "medium"} effort)...{scoreSummary}");
                     try
                     {
                         AiResult consolidatorResult;
@@ -714,7 +714,7 @@ namespace ReSet.Core.Services
                     }
 
                     // [추가] 합성본 L2 최종 Critic 검토 및 최대 1회 보완
-                    _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - 최종 합성본 L2 정성 검토 중 ({_criticService.ProviderName} - {_criticService.ModelName})...");
+                    _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(objectStatus)}[/] - 최종 합성본 L2 정성 검토 중 ({_criticService.ProviderName} - {_criticService.ModelName})...");
                     ReviewResult? finalL2Result = null;
                     string? finalReviewFailureReason = null;
                     try
@@ -781,7 +781,7 @@ namespace ReSet.Core.Services
                                 spDef.RawPromptContext = $"=== [System Prompt] ===\n{finalConsolidatedFixResult.SystemPrompt}\n\n=== [User Prompt] ===\n{finalConsolidatedFixResult.UserPrompt}";
 
                                 // 보완된 최종 합성본에 대해 L2 재리뷰를 받아 최종 점수를 갱신
-                                _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - 보완된 최종 합성본 L2 재검토 중...");
+                                _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(objectStatus)}[/] - 보완된 최종 합성본 L2 재검토 중...");
                                 try
                                 {
                                     using (var progressScope = _userInteraction.CreateProgressScope("보완본 재검토") ?? NullProgressScope.Instance)
@@ -885,7 +885,7 @@ namespace ReSet.Core.Services
                     Log.Information("[파이프라인] AI 명세서 생성 시작 - SP: {SpName}, 시도: {Attempt}, Provider: {Provider}, Model: {Model}",
                         selectedOption, attempt, provider, _modelName);
                     var effortText = !string.IsNullOrWhiteSpace(_actorEffort) ? $", Effort: {_actorEffort}" : "";
-                    _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - AI 리버스 엔지니어링 수행 중 ({_aiService.ProviderName} - {_aiService.ModelName}{effortText}) [[{attemptText}]]...");
+                    _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(objectStatus)}[/] - AI 리버스 엔지니어링 수행 중 ({_aiService.ProviderName} - {_aiService.ModelName}{effortText}) [[{attemptText}]]...");
                     try
                     {
                         if (ReSet.Core.Services.Clients.AiClientFactory.IsLocalProvider(provider) && spDef.ObjectType == CodeObjectType.Procedure)
@@ -1124,7 +1124,7 @@ namespace ReSet.Core.Services
 
                     Log.Information("[파이프라인] L2 AI 교차 리뷰 시작 - SP: {SpName}, 시도: {Attempt}", selectedOption, attempt);
                     var criticEffortText = !string.IsNullOrWhiteSpace(_criticEffort) ? $", Effort: {_criticEffort}" : "";
-                    _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - AI 교차 리뷰 분석 중 ({_criticService.ProviderName} - {_criticService.ModelName}{criticEffortText})...");
+                    _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(objectStatus)}[/] - AI 교차 리뷰 분석 중 ({_criticService.ProviderName} - {_criticService.ModelName}{criticEffortText})...");
                     try
                     {
                         using (var progressScope = _userInteraction.CreateProgressScope("L2 교차 리뷰") ?? NullProgressScope.Instance)
@@ -1339,7 +1339,7 @@ namespace ReSet.Core.Services
                             continue;
                         }
 
-                        _userInteraction.NotifyStatus($"[yellow]{objectStatus}[/] - 피드백 반영 재생성 중...");
+                        _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(objectStatus)}[/] - 피드백 반영 재생성 중...");
                         var humanFeedbackLog = $"[L3 사용자 보완 피드백 로그]:\n{reviewResult.UserFeedback}";
 
                         string reSpec = string.Empty;
@@ -1829,7 +1829,7 @@ namespace ReSet.Core.Services
                     : $"원본 호출 그래프는 {callGraph.Count}편이지만 그 이웃 중 명세서를 가진 것이 하나도 없습니다(호출 대상이 UDF뿐일 때 이렇게 됩니다)";
 
                 _userInteraction.NotifyStatus(
-                    $"[yellow]{jobName}[/] - 명세서 범위가 Narrow인데 {graphState}. " +
+                    $"[yellow]{EscapeMarkup(jobName)}[/] - 명세서 범위가 Narrow인데 {graphState}. " +
                     "각 단계가 자기 프로시저의 명세서만 받고 1-hop 이웃은 하나도 싣지 않습니다 - " +
                     "원본들이 정말 서로를 부르지 않는지, 아니면 의존성 수집이 되지 않은 것인지 확인하십시오. " +
                     "이웃이 빠지면 이웃 명세가 규정한 오류 코드·인터페이스를 지키지 못하는 결함이 늘어납니다.");
@@ -1862,7 +1862,7 @@ namespace ReSet.Core.Services
                 ReSet.Core.Services.Clients.AiClientFactory.IsSingleGpuLocalProvider(_consolidatorService.ProviderName))
             {
                 _userInteraction.NotifyStatus(
-                    $"[yellow]{jobName}[/] - StepConcurrency={_stepConcurrency}이지만 Consolidator가 로컬 공급자({_consolidatorService.ProviderName})입니다. " +
+                    $"[yellow]{EscapeMarkup(jobName)}[/] - StepConcurrency={_stepConcurrency}이지만 Consolidator가 로컬 공급자({_consolidatorService.ProviderName})입니다. " +
                     "단일 GPU에서는 동시 실행이 순차보다 느리거나 메모리가 부족할 수 있습니다 — appsettings.json의 AiSettings:StepConcurrency를 1로 낮추는 것을 권장합니다.");
             }
 
@@ -2039,7 +2039,7 @@ namespace ReSet.Core.Services
                 bool genSuccess = false;
 
                 var consolidatorEffortText = !string.IsNullOrWhiteSpace(_consolidatorEffort) ? $", Effort: {_consolidatorEffort}" : "";
-                _userInteraction.NotifyStatus($"[yellow]{jobName}[/] - AI 통합 배치 전환 계획 수립 중 ({_consolidatorService.ProviderName} - {_consolidatorService.ModelName}{consolidatorEffortText}) [[{attemptText}]]...");
+                _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(jobName)}[/] - AI 통합 배치 전환 계획 수립 중 ({_consolidatorService.ProviderName} - {_consolidatorService.ModelName}{consolidatorEffortText}) [[{attemptText}]]...");
                 try
                 {
                     var specsCopy = new System.Collections.Generic.List<(string FileName, string Content)>(specs);
@@ -2122,7 +2122,7 @@ namespace ReSet.Core.Services
                                 // 무인 모드면 이 줄이 「왜 이 산출물이 이 모양인가」에 답하는
                                 // 유일한 화면 기록이다(설계 §3-4-b). manifest의 ResumedFrom과 짝이다.
                                 _userInteraction.NotifyStatus(
-                                    $"[yellow]{jobName}[/] - run-{found.Run:D3} 에서 이어서 합니다 " +
+                                    $"[yellow]{EscapeMarkup(jobName)}[/] - run-{found.Run:D3} 에서 이어서 합니다 " +
                                     $"(재사용 {found.ReusableSections.Count}/{found.TotalStepsInStructure}, " +
                                     $"브레인스토밍·목차 생성을 건너뜁니다)" +
                                     (isBatchMode ? " — 무인 모드라 묻지 않았습니다." : "."));
@@ -2183,7 +2183,7 @@ namespace ReSet.Core.Services
                             // 강등되면 사용자는 왜 이 회차만 품질이 다른지 알 수 없다.
                             // 상세 사유는 BatchStepPlanParser가 경고 로그에 남긴다.
                             _userInteraction.NotifyStatus(
-                                $"[yellow]{jobName}[/] - 목차에서 단계 목록을 읽지 못해 단일 호출로 생성합니다 " +
+                                $"[yellow]{EscapeMarkup(jobName)}[/] - 목차에서 단계 목록을 읽지 못해 단일 호출로 생성합니다 " +
                                 "(로그의 단계 목록 경고를 확인하십시오).");
                         }
 
@@ -2387,7 +2387,7 @@ namespace ReSet.Core.Services
                 if (machineFoundStructureDefect && !previouslyFoundStructureDefect)
                 {
                     _userInteraction.NotifyStatus(
-                        $"[yellow]{jobName}[/] - 어느 단계도 맡지 않은 원본 오류 코드가 누락되어 " +
+                        $"[yellow]{EscapeMarkup(jobName)}[/] - 어느 단계도 맡지 않은 원본 오류 코드가 누락되어 " +
                         "목차 결함으로 기록합니다.");
                 }
 
@@ -2568,7 +2568,7 @@ namespace ReSet.Core.Services
                             repairTargets.AddRange(pendingDefectiveSteps);
 
                             _userInteraction.NotifyStatus(
-                                $"[yellow]{jobName}[/] - L1 위반을 {string.Join(", ", repairTargets)} 자리로 " +
+                                $"[yellow]{EscapeMarkup(jobName)}[/] - L1 위반을 {EscapeMarkup(string.Join(", ", repairTargets))} 자리로 " +
                                 "좁혀 그 자리만 다시 만듭니다.");
                         }
                         else
@@ -2676,7 +2676,7 @@ namespace ReSet.Core.Services
                 string? reviewFailureReason = null;
 
                 var criticEffortText = !string.IsNullOrWhiteSpace(_criticEffort) ? $", Effort: {_criticEffort}" : "";
-                _userInteraction.NotifyStatus($"[yellow]{jobName}[/] - AI 통합 계획 교차 리뷰 분석 중 ({_criticService.ProviderName} - {_criticService.ModelName}{criticEffortText})...");
+                _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(jobName)}[/] - AI 통합 계획 교차 리뷰 분석 중 ({_criticService.ProviderName} - {_criticService.ModelName}{criticEffortText})...");
                 try
                 {
                     using (var progressScope = _userInteraction.CreateProgressScope("배치 계획 L2 리뷰") ?? NullProgressScope.Instance)
@@ -2795,7 +2795,7 @@ namespace ReSet.Core.Services
                         // 회차가 알아낸 사실(발견이든 해소든)도 정보이고, 롤백은 산출물
                         // 텍스트만 되감을 뿐 그 사실까지 되감지 않는다.
                         _userInteraction.NotifyStatus(
-                            $"[yellow]{jobName}[/] - {attempt}차 시도({l2Result.NormalizedScore}/100)가 " +
+                            $"[yellow]{EscapeMarkup(jobName)}[/] - {attempt}차 시도({l2Result.NormalizedScore}/100)가 " +
                             $"최고 후보({bestAttempt.Current.AttemptNumber}차, {bestAttempt.Current.Review.NormalizedScore}/100)를 " +
                             "넘지 못해 최고 후보 상태로 되돌립니다.");
                     }
@@ -2951,7 +2951,7 @@ namespace ReSet.Core.Services
                             {
                                 reviewRetriedThisAttempt = true;
                                 _userInteraction.NotifyStatus(
-                                    $"[yellow]{jobName}[/] - Critic이 결함을 신고했으나 자리를 대지 못해 리뷰를 다시 요청합니다.");
+                                    $"[yellow]{EscapeMarkup(jobName)}[/] - Critic이 결함을 신고했으나 자리를 대지 못해 리뷰를 다시 요청합니다.");
                                 continue;   // attempt 를 올리지 않는다
                             }
 
@@ -3009,7 +3009,7 @@ namespace ReSet.Core.Services
                             {
                                 pendingSkeletonRevision = new SkeletonRevision(l2Result.FeedbackComment!, lastSkeleton, FromCritic: true);
                                 _userInteraction.NotifyStatus(
-                                    $"[yellow]{jobName}[/] - 공통 규약과 단계 본문의 모순이 지적되어 직전 골격 위에서 그 자리만 고칩니다(골격 패치).");
+                                    $"[yellow]{EscapeMarkup(jobName)}[/] - 공통 규약과 단계 본문의 모순이 지적되어 직전 골격 위에서 그 자리만 고칩니다(골격 패치).");
                             }
                             else
                             {
@@ -3026,7 +3026,7 @@ namespace ReSet.Core.Services
                                 lastSkeleton = null;
                                 lastSkeletonResult = null;
                                 _userInteraction.NotifyStatus(
-                                    $"[yellow]{jobName}[/] - 공통 규약과 단계 본문의 모순이 지적되어 골격만 다시 만듭니다.");
+                                    $"[yellow]{EscapeMarkup(jobName)}[/] - 공통 규약과 단계 본문의 모순이 지적되어 골격만 다시 만듭니다.");
                             }
                         }
                         else if (pendingDefectiveSteps.Count == 0)
@@ -3195,7 +3195,7 @@ namespace ReSet.Core.Services
             // L3: 인간 개입형 승인 (TUI 모드 전용, 배치 모드 시 즉시 승인 및 반환)
             if (isBatchMode)
             {
-                _userInteraction.NotifyStatus($"[green]{jobName}[/] - 배치 모드로 인해 통합 계획서가 자동으로 최종 승인되었습니다.");
+                _userInteraction.NotifyStatus($"[green]{EscapeMarkup(jobName)}[/] - 배치 모드로 인해 통합 계획서가 자동으로 최종 승인되었습니다.");
                 return new ConsolidatedPipelineResult(consolidatedPlan, finalAiResult, planReview, planOutcome, BuildLayout(adoptedSteps), coverage, abortReason);
             }
 
@@ -3223,7 +3223,7 @@ namespace ReSet.Core.Services
                         continue;
                     }
 
-                    _userInteraction.NotifyStatus($"[yellow]{jobName}[/] - 피드백 반영 재생성 중...");
+                    _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(jobName)}[/] - 피드백 반영 재생성 중...");
 
                     // 사용자가 구조까지 바꾸라고 했다면 목차부터 다시 세운다.
                     // 목차를 고정한 채로는 3/3의 "STRICTLY adhering to the [Approved
@@ -3723,7 +3723,7 @@ namespace ReSet.Core.Services
             IReadOnlyList<string> sourceProcedures,
             CancellationToken cancellationToken)
         {
-            _userInteraction.NotifyStatus($"[yellow]{jobName}[/] - {reason}...");
+            _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(jobName)}[/] - {reason}...");
 
             string redrafted;
             try
@@ -4209,8 +4209,8 @@ namespace ReSet.Core.Services
                     sharedBlockFeedback[step.Code] = feedback.SuggestedPromptFix ?? feedback.Errors[0];
 
                     _userInteraction.NotifyStatus(
-                        $"  [yellow]* {step.Code} 단계가 부르는 공통 SQL 블록이 지금 골격에 없어 다시 생성합니다: " +
-                        $"{string.Join(", ", unrecorded)}[/]");
+                        $"  [yellow]* {EscapeMarkup(step.Code)} 단계가 부르는 공통 SQL 블록이 지금 골격에 없어 다시 생성합니다: " +
+                        $"{EscapeMarkup(string.Join(", ", unrecorded))}[/]");
                     Log.Warning(
                         "동결 섹션이 부르는 공통 SQL 블록이 지금 골격에 없습니다 - Step: {Step}, Names: {Names}",
                         step.Code, string.Join(", ", unrecorded));
@@ -4339,8 +4339,8 @@ namespace ReSet.Core.Services
             {
                 var firstCodes = new HashSet<string>(upstreamPlan.First, StringComparer.OrdinalIgnoreCase);
                 _userInteraction.NotifyStatus(
-                    $"  [grey]* 제어 합계를 읽는 단계보다 쓰는 단계를 먼저 다시 만듭니다: {string.Join(", ", upstreamPlan.First)} → " +
-                    $"{string.Join(", ", upstreamPlan.UpstreamOf.Keys)}[/]");
+                    $"  [grey]* 제어 합계를 읽는 단계보다 쓰는 단계를 먼저 다시 만듭니다: {EscapeMarkup(string.Join(", ", upstreamPlan.First))} → " +
+                    $"{EscapeMarkup(string.Join(", ", upstreamPlan.UpstreamOf.Keys))}[/]");
                 Log.Information(
                     "지목 재생성 순서 - 쓰는 쪽 먼저: {First} · 읽는 쪽: {Readers}",
                     string.Join(", ", upstreamPlan.First), string.Join(", ", upstreamPlan.UpstreamOf.Keys));
@@ -4465,7 +4465,7 @@ namespace ReSet.Core.Services
             if (lost.Count == 0) return result;
 
             _userInteraction.NotifyStatus(
-                $"[yellow]{jobName}[/] - 고쳐진 골격이 {string.Join(", ", lost)}을(를) 잃어 " +
+                $"[yellow]{EscapeMarkup(jobName)}[/] - 고쳐진 골격이 {EscapeMarkup(string.Join(", ", lost))}을(를) 잃어 " +
                 "그 자리를 대고 한 번 더 요청합니다.");
 
             var retryFeedback =
@@ -4759,7 +4759,7 @@ namespace ReSet.Core.Services
                 {
                     var reason = string.Join(" / ", stepResult.Errors);
                     _userInteraction.NotifyStatus(
-                        $"  [yellow]* {step.Code} 단계는 목차 결함으로 하한 검사를 실행할 수 없습니다 - 재생성으로 고쳐지지 않아 건너뜁니다: {reason}[/]");
+                        $"  [yellow]* {EscapeMarkup(step.Code)} 단계는 목차 결함으로 하한 검사를 실행할 수 없습니다 - 재생성으로 고쳐지지 않아 건너뜁니다: {EscapeMarkup(reason)}[/]");
                     Log.Warning(
                         "단계 하한 검사를 실행하지 못했습니다 - Step: {StepCode}, 사유: {Reason}", step.Code, reason);
                     return (content, new StepDefect(StepDefectKind.Unverifiable, $"{step.Code} ({reason})"), false);
@@ -4767,7 +4767,7 @@ namespace ReSet.Core.Services
 
                 adoptedErrors = string.Join(" / ", stepResult.Errors);
                 _userInteraction.NotifyStatus(
-                    $"  [grey]* {step.Code} 단계가 하한 검사를 통과하지 못해 다시 생성합니다: {adoptedErrors}[/]");
+                    $"  [grey]* {EscapeMarkup(step.Code)} 단계가 하한 검사를 통과하지 못해 다시 생성합니다: {EscapeMarkup(adoptedErrors)}[/]");
                 floorFeedback = stepResult.SuggestedPromptFix;
 
                 // 다음 시도를 부르기 전에 이번 시도의 본문을 남긴다 - RunStepAsync의
@@ -5069,7 +5069,7 @@ namespace ReSet.Core.Services
                 var sqlPath = System.IO.Path.Combine(cleansingDir, $"{cleansingFileBaseName}_MetadataCleansing.sql");
                 System.IO.File.WriteAllText(sqlPath, sb.ToString(), System.Text.Encoding.UTF8);
                 Log.Debug("[파이프라인] 메타데이터 보완 SQL 스크립트 저장 성공 - SP: {SpName}, 경로: {SqlPath}", selectedOption, sqlPath);
-                _userInteraction.NotifyStatus($"[green]{selectedOption}[/] - 메타데이터 보완 SQL 스크립트가 저장되었습니다: [blue]{sqlPath}[/]");
+                _userInteraction.NotifyStatus($"[green]{EscapeMarkup(selectedOption)}[/] - 메타데이터 보완 SQL 스크립트가 저장되었습니다: [blue]{EscapeMarkup(sqlPath)}[/]");
             }
             catch (Exception ex)
             {
@@ -5115,7 +5115,7 @@ namespace ReSet.Core.Services
                 var sqlText = await System.IO.File.ReadAllTextAsync(sqlPath, cancellationToken);
                 if (string.IsNullOrWhiteSpace(sqlText)) return;
 
-                _userInteraction.NotifyStatus($"[yellow]{selectedOption}[/] - DB 메타데이터 설명 역반영 중...");
+                _userInteraction.NotifyStatus($"[yellow]{EscapeMarkup(selectedOption)}[/] - DB 메타데이터 설명 역반영 중...");
 
                 var batches = sqlText.Split(new[] { "GO\r\n", "GO\n", "go\r\n", "go\n" }, StringSplitOptions.RemoveEmptyEntries);
                 Log.Debug("[파이프라인] 실행할 SQL 배치 수: {BatchCount} - SP: {SpName}", batches.Length, selectedOption);
@@ -5135,7 +5135,7 @@ namespace ReSet.Core.Services
                     }
                 }
                 Log.Information("[파이프라인] DB 메타데이터 역반영 완료 - SP: {SpName}", selectedOption);
-                _userInteraction.NotifyStatus($"[green]{selectedOption}[/] - DB 메타데이터 설명 역반영 완료!");
+                _userInteraction.NotifyStatus($"[green]{EscapeMarkup(selectedOption)}[/] - DB 메타데이터 설명 역반영 완료!");
             }
             // 취소를 삼키면 DB 역반영이 중단됐다는 사실이 감춰지고 호출부는
             // 정상 완료(Result)로만 본다.
