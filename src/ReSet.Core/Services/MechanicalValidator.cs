@@ -118,6 +118,10 @@ namespace ReSet.Core.Services
         // 오류다. B23 배송본이 `AS RowCount` 를 48 자리에 달고 게이트를 통과했고,
         // 그중 12 가 다른 단계들이 부르는 검증 세트 정본에 있다.
         ReservedWordAliasInSql,
+        // SQL 펜스가 파싱되지 않는다. 위 항목의 상위 축이다 - 계획서 19 편 2628 펜스
+        // 실측에서 구문 오류 가족이 다섯이고 예약어 별칭은 67/72 다. 나머지 다섯 중
+        // 넷(컬럼 참조·CTE 이름·EXEC 인자 식·미닫힌 문자열)은 위 검사가 못 잡는다.
+        SqlFenceDoesNotParse,
         General
     }
 
@@ -363,6 +367,9 @@ namespace ReSet.Core.Services
                 // 있었다. 셋 다 재료를 받지 않으므로 시그니처가 그대로다.
                 // SQL 펜스의 예약어 별칭. 위 셋과 축이 다르다 - 저쪽은 「SQL 이 앱으로
                 // 옮겨졌는가」를 보고 이쪽은 「그 SQL 이 컴파일되는가」를 본다.
+                // 상위 축 - 「그 SQL 이 파싱되는가」. 바로 아래 검사는 그중
+                // 예약어 별칭(67/72)에 정확한 시정 문구를 준다.
+                SafeCheck(() => CheckSqlFenceParses(cleansed, result));
                 SafeCheck(() => CheckReservedWordAliasInSql(cleansed, result));
                 SafeCheck(() => CheckNoLockHints(cleansed, result));
                 SafeCheck(() => CheckPrescribedFrameworkType(cleansed, result));
@@ -12795,6 +12802,104 @@ namespace ReSet.Core.Services
 
             return summary.ToString();
         }
+
+        /// <summary>
+        /// 계획서의 SQL 펜스가 <b>파싱되는가</b>.
+        ///
+        /// [왜 <see cref="CheckReservedWordAliasInSql"/>로 모자란가] 그 검사는 B23 한 편
+        /// 325 펜스를 재고 만들었다. 계획서 <b>19 편 2628 펜스</b>로 넓혀 재니 구문 오류
+        /// 가족이 다섯이다 - `AS 예약어` 67 · 예약어를 컬럼 참조로 1 · 예약어를 CTE
+        /// 이름으로 1 · `EXEC` 인자에 식 2 · 미닫힌 문자열 1. 앞 검사가 잡는 것은 67 뿐이다.
+        /// 다섯 전부 실물 SQL Server 2022 로 교차 확인했다.
+        ///
+        /// [둘을 다 두는 이유] 이 검사는 파서 메시지를 그대로 실을 수밖에 없어
+        /// 「어디가 깨졌는지」만 말한다. 앞 검사는 「대괄호로 감싸거나 이름을 바꾸십시오」로
+        /// <b>무엇을 고칠지</b>를 말한다. 실패의 67/72 가 그 가족이라 그 자리만큼은
+        /// 정확한 시정 문구가 있어야 한다 - 같은 펜스가 둘 다에 걸리는 것은 중복이
+        /// 아니라 진단과 처방이다.
+        ///
+        /// [제외 둘] 정당하게 파싱되지 않는 펜스가 코퍼스에 넷이다.
+        /// 산문의 「교정본」·「참조용」을 읽지 않는다 - 문구가 바뀌면 조용히 꺼진다
+        /// (작성 계약 8). 실측으로 이 둘이 넷을 정확히 걷고 진짜 72 를 하나도 안 먹는다.
+        ///
+        /// [미선언 변수는 오류가 아니다] 계획서의 SQL 은 앱이 파라미터를 넣는다.
+        /// ScriptDom 은 순수 구문 검사라 바인딩을 안 한다 - SQL Server 의
+        /// <c>SET PARSEONLY</c>는 미선언 변수를 고발하고 그것이 구문 오류로 연쇄해
+        /// 하네스가 322/325 를 거짓 고발한 적이 있다(선언 §1-1).
+        /// </summary>
+        private static void CheckSqlFenceParses(string markdown, ValidationResult result)
+        {
+            var hits = new List<CodeTokenHit>();
+
+            foreach (Match fence in SqlFenceRegex.Matches(markdown))
+            {
+                var sql = fence.Groups["sql"].Value;
+                if (AngleBracketPlaceholderPattern.IsMatch(sql)) continue;
+                if (OpensWithATokenThatCannotBeginAStatement(sql)) continue;
+
+                var parser = new TSql160Parser(initialQuotedIdentifiers: true);
+                parser.Parse(new StringReader(sql), out IList<ParseError> errors);
+                if (errors is not { Count: > 0 }) continue;
+
+                var first = errors[0];
+                hits.Add(new CodeTokenHit(
+                    first.Message,
+                    LineAt(markdown, fence.Groups["sql"].Index + Math.Max(0, first.Offset))));
+            }
+
+            if (hits.Count == 0) return;
+
+            var message =
+                "계획서의 SQL 블록이 파싱되지 않습니다. 이 SQL 은 실행되기 전에 " +
+                "**컴파일 단계에서** 죽습니다 - 데이터도 권한도 필요 없이 그 전에 " +
+                "거부됩니다. 파서가 지목한 자리를 고치십시오. 예약어를 식별자로 쓴 " +
+                "자리라면 대괄호로 감싸고(`AS [RowCount]`·`WITH [Current] AS`), " +
+                "`EXEC` 인자에는 식을 넘길 수 없으므로 변수에 먼저 담으십시오. " +
+                $"({SummarizeCodeTokenHits(hits)})";
+
+            result.Report(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.SqlFenceDoesNotParse,
+                Message = message,
+                RawContext = hits[0].Line,
+                // 작성 계약 9 - 토큰이 아니라 발화가 있던 원문 줄을 싣는다.
+                Lexemes = AttributionLexemes(hits)
+            });
+        }
+
+        private static readonly Regex SqlFenceRegex = new(
+            @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+
+        /// <summary>
+        /// `&lt;식별자&gt;` 서식 자리표시자. 이것을 담은 펜스는 템플릿이라 파싱되지 않는 것이
+        /// 정상이다. 코퍼스 실측 - 걸리는 펜스 12, 그중 파싱 실패 2, <b>꺾쇠 안에 공백이
+        /// 든 것 0</b>(비교 연산자 <c>a&lt;b</c> 오인 없음).
+        /// </summary>
+        private static readonly Regex AngleBracketPlaceholderPattern = new(
+            @"<[A-Za-z_][A-Za-z0-9_ ]*>", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 주석을 건너뛴 첫 토큰이 문장을 시작할 수 없으면 조각이다 - 계획서가 의도적으로
+        /// 절 하나만 인용한 자리(「교정본」·「원본 발췌」)가 그 모양이다.
+        /// </summary>
+        private static bool OpensWithATokenThatCannotBeginAStatement(string sql)
+        {
+            var first = FirstTokenPattern.Match(sql);
+            return first.Success && TokensThatCannotBeginAStatement.Contains(first.Groups["tok"].Value);
+        }
+
+        private static readonly Regex FirstTokenPattern = new(
+            @"\A\s*(?:(?:--[^\n]*\n|/\*.*?\*/)\s*)*(?<tok>[A-Za-z_]+|[),])",
+            RegexOptions.Singleline | RegexOptions.Compiled);
+
+        private static readonly HashSet<string> TokensThatCannotBeginAStatement =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                "AND", "OR", "CASE", "WHEN", "THEN", "ELSE", "END", ")", ",",
+                "ON", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS",
+                "GROUP", "ORDER", "HAVING", "WHERE", "FROM"
+            };
 
         /// <summary>
         /// SQL 펜스가 예약어를 대괄호 없이 별칭으로 쓴 자리.
