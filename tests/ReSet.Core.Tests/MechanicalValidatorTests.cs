@@ -1593,6 +1593,74 @@ A[""시작""] --> B[""끝""]
         }
 
         [Fact]
+        public void Validate_TheExhaustionBannerQuotingItsOwnErrorMustNotFireAgain()
+        {
+            // [실측 2026-09-19 · UP_Util_Settle_Summary] 이 검사가 6회를 소진시키고
+            // 검증 미통과본을 배송했다. 원인은 위 시험이 「증거는 다시 걸려도 옳다」고
+            // 적어 둔 그 전제였다 - **배너 안에서는 틀리다.**
+            //
+            // VerificationBanner 가 소진 시 잔존 오류를 인용문(>)으로 본문 앞에 싣는데,
+            // 그 메시지의 증거 부분이 트리거를 담는다. 그러면 다음 검증에서 배너가
+            // 스스로를 오류로 만들고, **고칠 것이 없는데 재시도가 소진된다** -
+            // 소진할 때마다 재발하므로 어떤 재생성으로도 빠져나올 수 없다.
+            //
+            // StripQuotedLines 가 이 문제를 위해 이미 있었으나(COMM_UPD 실측) 이
+            // 검사만 쓰지 않았다. 줄 번호를 메시지에 싣기 때문에 줄을 제거하지 않고
+            // 건너뛴다.
+            var markdown = WrapSpec("이 칸을 근거로 그렇게 서술해서는 안 됩니다.");
+            var message = Assert.Single(
+                new MechanicalValidator().Validate(markdown).DetailedErrors,
+                e => e.Type == ErrorType.DocumentInstructsItsAuthor).Message;
+
+            // Act - 파이프라인이 그 메시지를 배너로 인용한 모양 그대로.
+            var banner = string.Join("\n", new[]
+            {
+                "> [!CAUTION]",
+                "> " + VerificationBanner.L1ExhaustedMarker,
+                "> - **잔존 오류**:",
+                ">   - " + message.Replace("\n", " "),
+                ""
+            });
+            var withBanner = new MechanicalValidator().Validate(banner + WrapSpec("정상 서술입니다."));
+
+            // Assert - 인용문은 파이프라인이 붙인 메타 정보이지 AI가 쓴 명세가 아니다.
+            Assert.DoesNotContain(
+                withBanner.DetailedErrors,
+                e => e.Type == ErrorType.DocumentInstructsItsAuthor);
+        }
+
+        [Fact]
+        public void Validate_ARealViolationOutsideTheBannerStillFires()
+        {
+            // 위 제외가 본문까지 덮으면 검사가 통째로 죽는다. 배너와 진짜 위반이
+            // 함께 있는 문서에서 진짜 쪽은 여전히 걸려야 한다 - 실측에서
+            // UP_Util_Settle_Summary 가 정확히 이 모양이었다(배너 1 · 본문 1).
+            //
+            // 배너 줄은 지어내지 않고 실물에서 오려 온다 - 처음에 합성했더니
+            // EvidenceMarker 가 빠져 제외 대상이 아니었고, 그 픽스처였으면 이 시험이
+            // 「제외가 너무 좁다」를 통과시켰을 것이다(픽스처도 오라클이다).
+            var banner = string.Join("\n", new[]
+            {
+                "> [!CAUTION]",
+                "> " + VerificationBanner.L1ExhaustedMarker,
+                "> - **잔존 오류**:",
+                ">   - 명세서 294번째 줄이 문서의 내용이 아니라 **작성 지시**입니다. "
+                    + "그 줄을 평서문으로 바꾸어, 그 자리에서 참인 사실만 남기는 문장으로 다시 쓰기 바랍니다. "
+                    + MechanicalValidator.AuthorInstructionEvidenceMarker
+                    + " 문제 표현 「해서는 안 됩니다」 · 해당 줄: - `SET XACT_ABORT ON`을 설정하지 않습니다.",
+                ""
+            });
+            var markdown = banner + WrapSpec("이 칸을 근거로 그렇게 서술해서는 안 됩니다.");
+
+            var result = new MechanicalValidator().Validate(markdown);
+
+            var error = Assert.Single(
+                result.DetailedErrors, e => e.Type == ErrorType.DocumentInstructsItsAuthor);
+            Assert.NotNull(error.Lexemes);
+            Assert.Contains(error.Lexemes!, l => l.Contains("서술해서는 안 됩니다"));
+        }
+
+        [Fact]
         public void Validate_WhenTheDocumentIsPlainDescription_ShouldStaySilent()
         {
             // Arrange - 되돌림의 반대편. 같은 주제를 사실로만 적으면 걸리지 않는다

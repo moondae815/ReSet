@@ -4462,6 +4462,28 @@ namespace ReSet.Core.Services
                     // 문서의 서술로 세면 원본을 옮긴 죄가 된다.
                     if (fenceFlags[i]) continue;
 
+                    // [배너 자기 오염 - 실측 2026-09-19 · UP_Util_Settle_Summary]
+                    // 이 검사의 **자기 메시지 사본**만 뺀다. 인용문(>) 전부를 빼면 안
+                    // 된다 - 참 양성 11 중 6 이 인용줄이고(프롬프트 유출 공지가
+                    // `   > …` 로 렌더된다) Validate_WhenTheInstructionSitsOnAQuoteLine_
+                    // ShouldStillFail 이 그 정책을 못박는다. 그 시험이 예고한 「인용
+                    // 처리를 통일하자」는 리팩터가 실제로 왔고, 먼저 빨개져서 잡았다.
+                    //
+                    // 가르는 축은 「인용문인가」가 아니라 「그 인용이 이 검사 자신의
+                    // 발화인가」다. VerificationBanner 가 소진 시 잔존 오류를 인용문으로
+                    // 본문 앞에 싣는데, 그 메시지의 증거 부분이 트리거를 담는다. 그러면
+                    // 다음 검증에서 배너가 스스로를 오류로 만들고 **고칠 것이 없는데
+                    // 재시도가 소진된다** - 소진할 때마다 재발하므로 어떤 재생성으로도
+                    // 빠져나올 수 없다(그 편이 6회를 태우고 검증 미통과본으로 배송됐다).
+                    //
+                    // 판정자는 AuthorInstructionEvidenceMarker 다. 이 검사가 내는
+                    // 메시지에만 있는 문자열이라, 모델이 쓴 산문이 우연히 걸릴 수 없다.
+                    if (lines[i].TrimStart().StartsWith(">", StringComparison.Ordinal)
+                        && lines[i].Contains(AuthorInstructionEvidenceMarker, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
                     var match = AuthorInstructionRegex.Match(lines[i]);
                     if (!match.Success) continue;
 
