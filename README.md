@@ -290,14 +290,18 @@ ReSet/
             "Quantizations": [ "fp8" ],  // 품질 하한. fp4·unknown을 원천 배제합니다
             "AllowFallbacks": true       // 미등록 모델도 죽지 않습니다(밖이 이미 fp8뿐)
           },
-          "ByModel": {                   // 캐시 고착성 전용. 백엔드가 여럿인 모델에만
-            "z-ai/glm-5.3": { "Order": [ "gmicloud/fp8", "baseten/fp8" ] },
+          "ByModel": {                   // 백엔드를 못박습니다. 아래 넷은 AllowFallbacks:false
+            // 여기서는 가용성이 아니라 **재현성**을 골랐습니다. 폴백이 열려 있으면
+            // Order는 「선호」일 뿐이라 1순위가 붐비는 순간 목록 밖으로 나가고, 판마다
+            // 다른 백엔드가 섞입니다. 대가: Order의 후보가 전부 죽으면 그 요청은
+            // 폴백 없이 실패합니다. 되돌리려면 AllowFallbacks 줄만 지우면 됩니다.
+            "z-ai/glm-5.3": { "Order": [ "baidu/fp8", "novita/fp8" ], "AllowFallbacks": false },
             // 폐쇄 가중치 모델은 /endpoints가 양자화를 unknown으로만 보고해, Default의
             // fp8 하한을 그대로 물려받으면 후보가 0이 되어 404입니다. 그 두 항목만
             // Quantizations를 함께 적어 1차 벤더 엔드포인트를 엽니다(Default는 fp8 유지).
-            "openai/gpt-5.6-sol": { "Order": [ "openai", "azure" ], "Quantizations": [ "unknown" ] },
-            "qwen/qwen3.8-max-0902": { "Order": [ "alibaba" ], "Quantizations": [ "unknown" ] },
-            "moonshotai/kimi-k3": { "Order": [ "baseten/fp8" ] }   // fp8 백엔드가 여기 하나뿐
+            "openai/gpt-5.6-sol": { "Order": [ "openai" ], "Quantizations": [ "unknown" ], "AllowFallbacks": false },
+            "qwen/qwen3.8-max-0902": { "Order": [ "alibaba" ], "Quantizations": [ "unknown" ], "AllowFallbacks": false },
+            "moonshotai/kimi-k3": { "Order": [ "baseten/fp8" ], "AllowFallbacks": false }  // fp8이 여기 하나뿐
           }
         }
       },
@@ -678,4 +682,4 @@ dotnet run --project src/ReSet.Cli
 dotnet test
 ```
 
-<!-- synced-through: 1bc33ada -->
+<!-- synced-through: dd7cc47e -->
