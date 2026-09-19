@@ -121,9 +121,13 @@ namespace ReSet.Core.Tests
                 Load(relativePath), "OpenRouter", "z-ai/glm-5.3");
 
             Assert.NotNull(routing);
-            Assert.Equal(new[] { "gmicloud/fp8", "baseten/fp8" }, routing!.Order);
+            Assert.Equal(new[] { "baidu/fp8", "novita/fp8" }, routing!.Order);
             Assert.Equal(new[] { "fp8" }, routing.Quantizations);
-            Assert.True(routing.AllowFallbacks);
+            // [2026-09-19] 재현성을 골랐다 - 아래 세 항목 전부 false 다.
+            // 열려 있으면 Order 는 「선호」일 뿐이라 1 순위가 붐비면 목록 밖으로
+            // 나가고, 판마다 다른 백엔드가 섞인다(2026-09-13 실측: 같은 A/B 가
+            // 백엔드를 따라 -80% → -20% → -86% 로 세 번 뒤집혔다).
+            Assert.False(routing.AllowFallbacks);
         }
 
         // 폐쇄 가중치 모델은 벤더가 직접 서빙해 /endpoints가 양자화를 unknown으로만
@@ -132,8 +136,8 @@ namespace ReSet.Core.Tests
         // 이 두 항목의 Quantizations 재정의를 지우면 그 모델 호출만 조용히 그 404로
         // 돌아가고, 설정 파일에는 아무 이상도 남지 않는다 - 그 되돌림을 여기서 잡는다.
         [Theory]
-        [InlineData("src/ReSet.Cli/appsettings.json", "openai/gpt-5.6-sol", "openai", "azure")]
-        [InlineData("src/ReSet.Validator.Cli/appsettings.json", "openai/gpt-5.6-sol", "openai", "azure")]
+        [InlineData("src/ReSet.Cli/appsettings.json", "openai/gpt-5.6-sol", "openai", null)]
+        [InlineData("src/ReSet.Validator.Cli/appsettings.json", "openai/gpt-5.6-sol", "openai", null)]
         [InlineData("src/ReSet.Cli/appsettings.json", "qwen/qwen3.8-max-0902", "alibaba", null)]
         [InlineData("src/ReSet.Validator.Cli/appsettings.json", "qwen/qwen3.8-max-0902", "alibaba", null)]
         public void AppSettings_ClosedWeightModels_LowerQuantizationFloorToUnknown(
@@ -152,8 +156,13 @@ namespace ReSet.Core.Tests
                 : new[] { firstBackend, secondBackend };
             Assert.Equal(expectedOrder, routing.Order);
 
-            // 하한만 내리고 폴백까지 닫아 버리면 Order 밖으로 못 나가 가용성이 사라진다.
-            Assert.True(routing.AllowFallbacks);
+            // [2026-09-19] 이 자리는 종전에 `Assert.True` 였고 근거가 「하한만 내리고
+            // 폴백까지 닫아 버리면 Order 밖으로 못 나가 가용성이 사라진다」였다.
+            // 그 문장은 지금도 참이다 - 바뀐 것은 **무엇을 고르느냐**다. 측정 판이
+            // 백엔드 혼입으로 결론이 뒤집히는 대가가 가용성보다 크다고 보고
+            // 재현성을 골랐다. Default 는 여전히 true 이므로 ByModel 에 없는 모델의
+            // 가용성은 그대로다.
+            Assert.False(routing.AllowFallbacks);
         }
 
         // [한 판만 좁히기 - scripts/run-plan-only-job.sh 의 PLANONLY_OPENROUTER_ONLY_BACKEND]
@@ -215,7 +224,10 @@ namespace ReSet.Core.Tests
             Assert.NotNull(routing);
             Assert.Equal(new[] { "baseten/fp8" }, routing!.Order);
             Assert.Equal(new[] { "fp8" }, routing.Quantizations);
-            Assert.True(routing.AllowFallbacks);
+            // [2026-09-19] 이 모델은 후보가 baseten/fp8 하나뿐이라 false 의 대가가
+            // 가장 크다 - 그 하나가 죽으면 폴백 없이 실패한다. 그래도 같은 규칙을
+            // 적용한 이유는 **예외를 두면 그 예외가 조용한 혼입 경로가 되기** 때문이다.
+            Assert.False(routing.AllowFallbacks);
         }
 
         // AllowFallbacks=false는 "이 목록 밖으로 넘어가지 말라"는 뜻이므로 목록이 비어
