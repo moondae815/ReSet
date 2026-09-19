@@ -3609,6 +3609,12 @@ ON FAILURE observed by the application:
                 sbRules.Add($"{rIdx++}. In ## 파라미터 목록, detail all parameters defined in the DDL including their data type, nullability (state '명시 없음' if not defined), purpose, and whether they are OUTPUT parameters in a table format. Do not arbitrarily assume 'NOT NULL'.");
                 sbRules.Add($"{rIdx++}. In ## 파라미터 목록 and throughout the document, all table headers and column names must use correct and pure Korean (e.g., '매개변수 명칭', '파라미터명', '데이터 타입', 'Null 여부'). Do NOT mix foreign characters or Chinese/Japanese characters (e.g., do NOT use '매개参数' or '매개変数').");
                 sbRules.Add($"{rIdx++}. Clearly state whether this procedure returns a result set (Rowset). If the return behavior is unmanaged or depends on initial values, explicitly describe the caller's initialization responsibility or prerequisites.");
+                // [반환 귀착 계약 - 2026-09-19] 축 A 감사의 가장 넓은 가족(23 자리 · 🔴 3 전부).
+                // 실행 의미 표가 「무결과 시 NULL이 그대로 남습니다」까지 정확히 적는데 반환
+                // 서술이 「계산된 금액을 반환합니다」에서 멈춘다. 재료는 이미 이 갈래가 받고
+                // 있다(executionSemanticsPresentation: Reference). 빠진 것은 결론 한 문장이다.
+                // 절 이름도 함께 못박는다 - 코퍼스에서 여섯 가지로 갈려 있었다.
+                sbRules.Add($"{rIdx++}. Put the return description in a section headed exactly `### 반환 계약` inside `## 개요`. Do NOT name it `반환값`, `반환 값`, `반환코드 매핑` or anything else - one name, so that readers and tools find it. If the machine-derived execution-semantics material below lists any `비집계 대입` or `집계 대입` row, that section MUST also state, for each such variable, WHAT THIS OBJECT FINALLY RETURNS when that assignment does not happen. Stopping at the happy path (\"returns the calculated amount\") is the defect this rule exists for: a `DECLARE @x MONEY = 0` initialiser is very often overwritten by a later unconditional `SET`, so the value that actually leaves is NULL, not 0, and an implementer who reads only the happy path writes 0. State the outcome even when it IS the initial value - \"if the lookup returns no row, @x stays NULL and the function returns NULL\" and \"if no row matches, the initial 0 is returned unchanged\" are both complete; \"returns the commission amount\" is not.");
                 sbRules.Add($"{rIdx++}. 소스코드 DDL 내에 명시적으로 상숫값(예: RETURN -5)이 지정되어 있지 않은 에러 반환 단계(예: IF @@ERROR <> 0 분기)에 대해 임의로 -1, -2 등 순차적인 숫자를 창작하여 단정적으로 기술하지 마십시오. 근거가 없는 값은 반드시 '실패 시 에러 코드 반환(값 정의 미비로 추정)' 등으로 서술하여 환각을 원천 배제하십시오.");
                 // 배선 지점 2/2(객체 선언) - `## 개요` 소속이고 재료가 있을 때만
                 // (fact != null) 싣는다. 프로시저에는 WITH 옵션 자체가 없으므로
@@ -3677,7 +3683,8 @@ ON FAILURE observed by the application:
 
                 checklistText = @"🎯 [필수 검증 체크리스트]
 - [ ] '## 개요' 및 '## 파라미터 목록' 헤더가 명확하게 작성되었습니까?
-- [ ] 출력 파라미터의 역할 및 결과셋 반환 여부를 명확히 명시하셨습니까?";
+- [ ] 출력 파라미터의 역할 및 결과셋 반환 여부를 명확히 명시하셨습니까?
+- [ ] '### 반환 계약' 절이 그 이름 그대로 존재하며, 실행 의미 표의 비집계/집계 대입 행마다 '그 대입이 일어나지 않으면 이 객체가 최종적으로 무엇을 반환하는가'를 적었습니까? (초기값 0을 뒤의 무조건 대입이 덮어 실제로는 NULL이 나가는 모양이 흔합니다 - '계산된 금액을 반환합니다'에서 멈추면 이행자가 0으로 구현합니다.)";
             }
             else if (sectionType == "CrudAnalysis")
             {

@@ -126,6 +126,10 @@ namespace ReSet.Core.Services
         // 세트를 부르게 만든 처방 뒤, 단계 10 곳이 「기록한다」고 적힌 블록을 커밋 전
         // 차단으로 써서 🔴 15 가 났다. 실측(계획서 19 편): 블록 238 · 역할 표기 0.
         ValidationSetBlockRoleMissing,
+        // 실행 의미 표가 「무결과 시 NULL이 그대로 남습니다」를 적었는데 반환 계약
+        // 절이 그 귀착을 말하지 않는다. 축 A 에서 가장 넓은 가족(23 자리)이고
+        // 🔴 3 이 전부 여기다. 거짓 서술이 아니라 결론 한 문장이 빠진 것이다.
+        ReturnOutcomeNotStated,
         General
     }
 
@@ -274,6 +278,9 @@ namespace ReSet.Core.Services
                 // 아래가 잡는다 - CheckDocumentInstructsItsAuthor 주석 참고.
                 SafeCheck(() => CheckDocumentInstructsItsAuthor(cleansed, result));
                 SafeCheck(() => CheckMachineTableShape(cleansed, result));
+                // 재료가 문서 자신이다 - 실행 의미 표(기계 확정)가 전건을 준다.
+                // 그래서 expectations 블록 밖이다.
+                SafeCheck(() => CheckReturnOutcomeStated(cleansed, result));
 
                 if (expectations != null)
                 {
@@ -12808,6 +12815,122 @@ namespace ReSet.Core.Services
 
             return summary.ToString();
         }
+
+        /// <summary>
+        /// 명세서가 <b>무결과·NULL 경로의 최종 귀착</b>을 말하는가.
+        ///
+        /// [왜] 축 A 에서 가장 넓은 가족이다 - 23 자리이고 <b>🔴 3 이 전부 여기</b> 있다.
+        /// 모양이 한결같다: 실행 의미 표(기계 확정)가 「무결과 시 NULL이 그대로
+        /// 남습니다」까지 정확히 적는데 <b>반환 계약 절은 「계산된 금액을 반환합니다」에서
+        /// 멈춘다.</b> 거짓 서술이 아니라 <b>결론 한 문장이 빠진 것</b>이다.
+        ///
+        /// [전건] 실행 의미 표에 <b>대입 행</b>(비집계 대입 · 집계 대입)이 있을 때만 본다.
+        /// 실측(명세서 31 편): 비집계 52 · 집계 10 · 보유 16 편. 순수 연산 함수는 대입
+        /// 행이 0 이라 전건이 거짓이다 - 그 편들의 NULL 문제는 <b>인자 NULL → 반환
+        /// NULL</b> 이라 재료가 다르고, 전건을 넓히면 그 전량이 고발된다.
+        ///
+        /// [스코프를 반환 계약 절로 좁힌다] 문서 전수로 NULL 을 세면 이 가족은
+        /// <b>구조적으로</b> 안 걸린다 - 실행 의미 표 자신이 그 문장을 담기 때문이다.
+        /// 🔴 `UF_GET_EXTRACOMM4CLIENT` 는 산문에 NULL 을 5 회 쓰고 반환 계약 절에만
+        /// 안 쓴다(작성 계약 2).
+        ///
+        /// [절 이름은 하나다] 코퍼스의 반환 절 이름이 여섯 가지였다 - `반환 계약` 3 ·
+        /// `반환값` 5 · `반환 값` 1 · 그 밖 2 · 없음 7. 계약은 <c>### 반환 계약</c> 하나이고
+        /// 다른 이름은 「절 없음」으로 본다.
+        ///
+        /// [결론의 참·거짓은 안 본다] 「무결과 시 0 을 반환합니다」도 통과한다. 그것이
+        /// 참인지는 원본 DDL 만이 알고 이 검사의 축이 아니다.
+        /// </summary>
+        private static void CheckReturnOutcomeStated(string markdown, ValidationResult result)
+        {
+            var hits = CollectUnstatedReturnOutcomes(markdown);
+            if (hits.Count == 0) return;
+
+            var message =
+                "실행 의미 표가 무결과 시 변수에 남는 값을 확정했는데 반환 계약 절이 그 귀착을 말하지 않습니다. " +
+                "각 대입 변수가 무결과일 때 이 객체의 최종 반환값이 무엇이 되는지를 " +
+                "「### 반환 계약」 절에 한 문장으로 적으십시오. 초기값 0 을 뒤의 무조건 대입이 덮는 모양이 " +
+                "흔하므로 「계산된 금액을 반환합니다」에서 멈추면 이행자가 0 으로 구현합니다. " +
+                $"({SummarizeCodeTokenHits(hits)})";
+
+            result.Report(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.ReturnOutcomeNotStated,
+                Message = message,
+                RawContext = hits[0].Line,
+                // 작성 계약 9 - 토큰이 아니라 발화가 있던 원문 줄(대입 행)을 싣는다.
+                Lexemes = AttributionLexemes(hits)
+            });
+        }
+
+        /// <summary>
+        /// 실행 의미 표의 대입 행을 모으고, 반환 계약 절이 귀착을 말하면 비운다.
+        /// </summary>
+        private static List<CodeTokenHit> CollectUnstatedReturnOutcomes(string markdown)
+        {
+            var hits = new List<CodeTokenHit>();
+            var lines = markdown.Split('\n');
+
+            var semantics = LocateHeadingSectionByPrefix(lines, ExecutionSemanticsHeadingPrefix);
+            if (semantics.HeaderIndex < 0) return hits;
+
+            for (var i = semantics.HeaderIndex + 1; i < semantics.EndIndex; i++)
+            {
+                var cells = MarkdownTableCellCodec.SplitRow(lines[i]);
+                // 작성 계약 3 - 선행 파이프 앞의 빈 조각이 cells[0] 이다.
+                if (cells.Count < 4) continue;
+                if (!AssignmentRowKinds.Contains(cells[1].Trim())) continue;
+                hits.Add(new CodeTokenHit(cells[3].Trim(), lines[i].TrimEnd('\r')));
+            }
+
+            if (hits.Count == 0) return hits;
+
+            var contract = LocateHeadingSectionByPrefix(lines, ReturnContractHeading);
+            if (contract.HeaderIndex < 0) return hits;   // 절이 아예 없다
+
+            var body = string.Join("\n", lines[(contract.HeaderIndex + 1)..contract.EndIndex]);
+            if (ReturnOutcomePattern.IsMatch(body)) hits.Clear();
+            return hits;
+        }
+
+        /// <summary>
+        /// <see cref="LocateHeadingSection"/>의 접두사 판정 판. 기계 확정 표의 헤딩은
+        /// 「(기계 확정 — 수정 금지)」 꼬리를 달고 있어 완전 일치로는 못 찾는다.
+        /// 작성 계약 5 대로 <c>TrimStart</c> 뒤에 비교한다.
+        /// </summary>
+        private static (int HeaderIndex, int EndIndex) LocateHeadingSectionByPrefix(
+            IReadOnlyList<string> lines, string headingPrefix)
+        {
+            var headerIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0, line => line.TrimStart().StartsWith(headingPrefix, StringComparison.Ordinal));
+            if (headerIndex < 0) return (-1, -1);
+
+            var endIndex = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, headerIndex + 1,
+                line =>
+                {
+                    var trimmed = line.TrimStart();
+                    return trimmed.StartsWith("## ", StringComparison.Ordinal)
+                        || trimmed.StartsWith("### ", StringComparison.Ordinal);
+                });
+
+            return (headerIndex, endIndex < 0 ? lines.Count : endIndex);
+        }
+
+        private const string ExecutionSemanticsHeadingPrefix = "### 실행 의미";
+        private const string ReturnContractHeading = "### 반환 계약";
+
+        private static readonly HashSet<string> AssignmentRowKinds =
+            new(StringComparer.Ordinal) { "비집계 대입", "집계 대입" };
+
+        /// <summary>
+        /// 귀착을 말했는가. 어휘를 넓게 잡는다 - 결론은 NULL 일 수도 0 일 수도 있고,
+        /// 모델이 어느 말을 쓸지 재 보지 못했다(선언 §4-1).
+        /// </summary>
+        private static readonly Regex ReturnOutcomePattern = new(
+            @"NULL|무결과|결과가 없|행이 없|미조회|조회되지 않",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         /// <summary>
         /// 검증 SQL 세트의 블록이 <b>자기 역할을 선언하는가</b> - 「게이트」냐 「기록」이냐.

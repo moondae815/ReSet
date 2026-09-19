@@ -213,7 +213,9 @@ namespace ReSet.Core.Tests
             var counts = CountGuarded(File.ReadAllText(ValidatorSourcePath()), GuardedEntryPoints);
 
             // 31: 2026-09-10 에 CheckDocumentInstructsItsAuthor 가 무조건 검사로 더해졌다.
-            Assert.Equal(31, counts["Validate"]);
+            // 32: 2026-09-19 에 CheckReturnOutcomeStated(무결과·NULL 귀착을 반환 계약이
+            //     말하는가)가 무조건 검사로 더해졌다 - 재료가 문서 자신이다.
+            Assert.Equal(32, counts["Validate"]);
             // 12: 2026-09-16 에 CheckControlTableColumnContract(계약 밖 batch 표의 컬럼 계약 분열)와
             //     CheckPreRunIdRunIdWrites(발급 전 절이 run id 자리에 쓴다)가 차례로 더해졌다.
             // 13: 2026-09-19 에 CheckReservedWordAliasInSql(SQL 펜스의 예약어 별칭)가 더해졌다.

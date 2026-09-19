@@ -375,7 +375,30 @@ namespace ReSet.Core.Services
         //     바뀐다. 31 건 전량 재생성이 이 인상의 값이다.
         //
         //     번호는 main·feat/rejected-attempts-corpus 와 대조해 정했다 - 셋 다 21 이었다.
-        private const int CurrentCacheFormatVersion = 22;
+        //
+        // v23 (2026-09-19) 무결과·NULL 경로의 최종 귀착을 반환 계약이 말한다.
+        //     축 A 감사의 가장 넓은 가족이다 - 23 자리(함수 11 · SP 8 · 교차 4)이고
+        //     🔴 3 이 전부 여기다. 모양이 한결같다: 실행 의미 표(기계 확정)가 「무결과 시
+        //     NULL이 그대로 남습니다」까지 정확히 적는데 반환 서술이 「계산된 금액을
+        //     반환합니다」에서 멈춘다. 거짓 서술이 아니라 결론 한 문장이 빠진 것이다.
+        //
+        //     [프롬프트 입력과 출력 계약이 둘 다 바뀐다] `OverviewAndParameters` 갈래에
+        //     규칙 하나와 체크리스트 한 줄이 늘고, 반환 절의 이름을 `### 반환 계약` 하나로
+        //     못박는다(코퍼스에서 여섯 가지로 갈려 있었다 - 반환 계약 3 · 반환값 5 ·
+        //     반환 값 1 · 그 밖 2 · 없음 7).
+        //
+        //     [영향 객체가 0 이 아니다] 조건부 예외에 안 걸린다. 그 갈래는 모든 객체에
+        //     돌고, 새 규칙은 실행 의미 표의 유무와 무관하게 프롬프트 바이트를 바꾼다.
+        //     L1 검사(ReturnOutcomeNotStated)가 31 편 중 14 편에서 발화하므로, 인상 없이는
+        //     캐시 적중 편에서 그 검사가 영영 안 돈다(`IsCacheValid` 조기 반환).
+        //
+        //     [앞 회차와 다르다] 2026-09-19 의 검증 세트 역할 표기는 계획서 프롬프트였고,
+        //     계획서 경로(`RunConsolidatedPipelineAsync`)는 이 캐시를 타지 않아
+        //     (`_cacheManager` 사용 0 회) 올리지 않았다. 이번은 명세서 프롬프트이고
+        //     이 캐시가 바로 그 캐시다. **규정을 적용하기 전에 관할을 물어라.**
+        //
+        //     번호는 origin/main 과 대조해 정했다 - 22 였다.
+        private const int CurrentCacheFormatVersion = 23;
         private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
         private static readonly Regex ReferenceSectionRegex = new(
             @"(?ms)^## 참조 코드 객체(?:[ \t]*\r?\n|\z).*?(?=^##\s|\z)",
