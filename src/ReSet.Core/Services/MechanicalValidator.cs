@@ -114,6 +114,10 @@ namespace ReSet.Core.Services
         ControlTableColumnContract,
         // RunId 발급 절보다 먼저 도는 절이 계약의 run id 자리(NOT NULL)에 쓴다 - 그 단계는 채울 값이 없어 항상 실패한다.
         PreRunIdRunIdWrite,
+        // SQL 펜스가 예약어를 대괄호 없이 별칭으로 쓴다 - 실행 오류가 아니라 컴파일
+        // 오류다. B23 배송본이 `AS RowCount` 를 48 자리에 달고 게이트를 통과했고,
+        // 그중 12 가 다른 단계들이 부르는 검증 세트 정본에 있다.
+        ReservedWordAliasInSql,
         General
     }
 
@@ -357,6 +361,9 @@ namespace ReSet.Core.Services
                 // SQL 거처 축(규칙 3-1·10). 조사 §5의 A급 셋이다 - 그때까지 이 세
                 // 규칙은 기계 강제가 0건이었고, 프롬프트와 Critic 두 층만으로 서
                 // 있었다. 셋 다 재료를 받지 않으므로 시그니처가 그대로다.
+                // SQL 펜스의 예약어 별칭. 위 셋과 축이 다르다 - 저쪽은 「SQL 이 앱으로
+                // 옮겨졌는가」를 보고 이쪽은 「그 SQL 이 컴파일되는가」를 본다.
+                SafeCheck(() => CheckReservedWordAliasInSql(cleansed, result));
                 SafeCheck(() => CheckNoLockHints(cleansed, result));
                 SafeCheck(() => CheckPrescribedFrameworkType(cleansed, result));
                 SafeCheck(() => CheckSqlSideControlFlow(cleansed, result));
@@ -12788,6 +12795,113 @@ namespace ReSet.Core.Services
 
             return summary.ToString();
         }
+
+        /// <summary>
+        /// SQL 펜스가 예약어를 대괄호 없이 별칭으로 쓴 자리.
+        ///
+        /// [실행 오류가 아니라 컴파일 오류다] 로컬 SQL Server 2022 실측 -
+        /// <c>SELECT COUNT_BIG(*) AS RowCount FROM ...</c> 는
+        /// <c>Msg 156, Incorrect syntax near the keyword 'RowCount'</c> 로 죽고
+        /// <c>AS [RowCount]</c> 는 통과한다(132 반환). 데이터도 권한도 필요 없이 그
+        /// 전에 죽으므로 이 결함은 데이터 의존이 아니다 - 등급이 갈리지 않는다.
+        ///
+        /// [도달] B23 배송본에 <b>48 자리</b>(줄 기준)이고 48/48 이 전부 ```sql 펜스
+        /// 안이다(산문 0). 그중 <b>12 가 검증 SQL 세트</b>에 있다 - 다른 단계들이
+        /// 부르는 정본이다. 계획서 24 + 그것을 잘라 쓴 사본 24 이므로 통합 계획서
+        /// 한 자리에서 보면 전부 덮인다(<see cref="ValidateConsolidated"/>).
+        ///
+        /// [오라클이 파서인 이유] 예약어 목록을 손으로 적으면 빠뜨려 못 잡거나
+        /// 넓어서 오탐한다 - 둘 다 이 저장소가 겪은 실패다. 대신
+        /// <c>SELECT 1 AS &lt;별칭&gt;</c> 을 ScriptDom 에 물어 파싱되면 식별자,
+        /// 안 되면 예약어로 판정한다. 오라클이 산출물이 아니라 파서이고 SQL Server 와
+        /// 같은 문법 계열이라 판정이 실물과 같아진다.
+        ///
+        /// [`AS` 뒤가 타입인 자리를 왜 안 잡는가] <c>CAST(x AS INT)</c> 의 `INT` 는
+        /// 별칭이 아니다. 판정식이 그것도 예약어로 보므로 여는 괄호 앞의 `CAST`·
+        /// `CONVERT`·`TRY_CAST`·`TRY_CONVERT` 문맥을 먼저 제외한다 - 배송본에 CAST 가
+        /// 흔해서 이 제외가 없으면 오탐이 곧바로 재시도 소진이 된다(작성 계약 7).
+        /// </summary>
+        private static void CheckReservedWordAliasInSql(string markdown, ValidationResult result)
+        {
+            var hits = CollectReservedWordAliasHits(markdown);
+            if (hits.Count == 0) return;
+
+            var message =
+                "계획서의 SQL 블록이 예약어를 대괄호 없이 별칭으로 쓰고 있습니다. 이 SQL 은 " +
+                "실행되기 전에 **컴파일 단계에서** 죽습니다 - SQL Server 는 " +
+                "`Incorrect syntax near the keyword ...`(Msg 156)로 거부합니다. 별칭을 " +
+                "대괄호로 감싸거나(`AS [RowCount]`) 예약어가 아닌 이름으로 바꾸십시오" +
+                "(`AS RowCnt`). 검증 SQL 세트에 이 모양이 있으면 그것을 부르는 모든 " +
+                $"단계가 함께 죽습니다. ({SummarizeCodeTokenHits(hits)})";
+
+            result.Report(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.ReservedWordAliasInSql,
+                Message = message,
+                RawContext = hits[0].Line,
+                // 작성 계약 9 - 귀속 어휘는 토큰이 아니라 발화가 있던 원문 줄이다.
+                // 토큰(`RowCount`)을 실으면 산문의 인용에도 걸려 위반 없는 단계까지 연다.
+                Lexemes = AttributionLexemes(hits)
+            });
+        }
+
+        /// <summary>
+        /// SQL 펜스에서 예약어 별칭을 모은다.
+        ///
+        /// <see cref="CollectCodeTokenHits"/>를 쓰지 않는 이유는 판정이 정규식 하나로
+        /// 끝나지 않기 때문이다 - 후보를 정규식으로 뽑고 <b>파서에게 물어</b> 거른다.
+        /// </summary>
+        private static List<CodeTokenHit> CollectReservedWordAliasHits(string markdown)
+        {
+            var hits = new List<CodeTokenHit>();
+
+            foreach (var (cleaned, offset) in CleanedSqlFences(markdown))
+            {
+                foreach (Match candidate in AliasAfterAsPattern.Matches(cleaned))
+                {
+                    var alias = candidate.Groups["alias"].Value;
+                    if (!IsReservedWord(alias)) continue;
+
+                    hits.Add(new CodeTokenHit(
+                        alias,
+                        LineAt(markdown, offset + candidate.Groups["alias"].Index)));
+                }
+            }
+
+            return hits;
+        }
+
+        /// <summary>
+        /// `AS` 뒤에 오는 대괄호·따옴표 없는 별칭 후보.
+        ///
+        /// 대괄호 `[...]`·큰따옴표 `"..."` 로 감싼 별칭은 첫 글자가 식별자 시작이
+        /// 아니므로 이 식에 애초에 걸리지 않는다 - 그것이 정상 표기다.
+        /// </summary>
+        private static readonly Regex AliasAfterAsPattern = new(
+            @"\bAS\s+(?<alias>[A-Za-z_][A-Za-z0-9_$#]*)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>
+        /// 그 낱말이 T-SQL 예약어인가 - <b>오라클은 ScriptDom 파서다</b>.
+        ///
+        /// 목록을 손으로 들고 있지 않는 이유는 작성 계약 8 과 같다. 한 번 물은 답은
+        /// 캐시한다(계획서 한 편의 별칭 후보가 수백이다).
+        /// </summary>
+        private static bool IsReservedWord(string word)
+        {
+            if (string.IsNullOrEmpty(word)) return false;
+
+            return ReservedWordCache.GetOrAdd(word, static candidate =>
+            {
+                var parser = new TSql160Parser(initialQuotedIdentifiers: true);
+                parser.Parse(new StringReader($"SELECT 1 AS {candidate}"), out IList<ParseError> errors);
+                return errors is { Count: > 0 };
+            });
+        }
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool>
+            ReservedWordCache = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// 규칙 10 - 코드 블록에 남은 `NOLOCK` 잠금 힌트.

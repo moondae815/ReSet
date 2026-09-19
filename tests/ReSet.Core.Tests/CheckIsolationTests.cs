@@ -236,7 +236,8 @@ namespace ReSet.Core.Tests
             // 2026-09-14 CheckGateRequiresStepsBeforeRunId 를 더해 9 → 10.
             // 2026-09-16 CheckControlTableColumnContract(계약 밖 batch 표의 컬럼 계약 분열)를 더해 10 → 11.
             // 2026-09-16 CheckPreRunIdRunIdWrites(발급 전 절이 run id 자리에 쓴다)를 더해 11 → 12.
-            Assert.Equal(12, probe.SeenCheckExpressions.Count);
+            // 2026-09-19 CheckReservedWordAliasInSql(SQL 펜스의 예약어 별칭 - 컴파일 오류)를 더해 12 → 13.
+            Assert.Equal(13, probe.SeenCheckExpressions.Count);
             Assert.All(probe.SeenCheckExpressions, e => Assert.StartsWith("() => ", e!, StringComparison.Ordinal));
         }
 
@@ -250,7 +251,7 @@ namespace ReSet.Core.Tests
 
             probe.ValidateConsolidated(ConsolidatedMissingHeaders);
 
-            Assert.Equal(12, probe.SeenCheckExpressions.Count);
+            Assert.Equal(13, probe.SeenCheckExpressions.Count);
         }
 
         // ─────────────────────────────────────────────────────────────────────
