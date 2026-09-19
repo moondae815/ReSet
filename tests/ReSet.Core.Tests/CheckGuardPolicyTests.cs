@@ -219,7 +219,9 @@ namespace ReSet.Core.Tests
             // 13: 2026-09-19 에 CheckReservedWordAliasInSql(SQL 펜스의 예약어 별칭)가 더해졌다.
             // 14: 2026-09-19 에 CheckSqlFenceParses(펜스 전체가 파싱되는가)가 더해졌다 - 위 항목의
             //     상위 축이고, 둘 다 둔다(한쪽은 진단, 한쪽은 정확한 시정 문구).
-            Assert.Equal(14, counts["ValidateConsolidated"]);
+            // 15: 2026-09-19 에 CheckValidationSetBlockRole(검증 세트 블록이 게이트냐 기록이냐)가
+            //     더해졌다. 또 다른 축이다 - 「그 SQL 을 무엇으로 쓰는가」.
+            Assert.Equal(15, counts["ValidateConsolidated"]);
             // 27: 2026-09-11 에 CheckAnchoredStatementPredicateTerms(앵커 DML 최상위 술어 대조)가 더해졌다.
             // 28: 2026-09-12 에 CheckStepParameterTypeStated(규칙 5-2)가 더해졌다.
             // 29: 2026-09-13 에 CheckBatchControlTableAlias(제어 계약 표 별칭, K1)가 더해졌다.

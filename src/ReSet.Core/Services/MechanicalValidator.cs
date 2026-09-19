@@ -122,6 +122,10 @@ namespace ReSet.Core.Services
         // 실측에서 구문 오류 가족이 다섯이고 예약어 별칭은 67/72 다. 나머지 다섯 중
         // 넷(컬럼 참조·CTE 이름·EXEC 인자 식·미닫힌 문자열)은 위 검사가 못 잡는다.
         SqlFenceDoesNotParse,
+        // 검증 SQL 세트의 블록이 「게이트냐 기록이냐」를 선언하지 않는다. B23 에서
+        // 세트를 부르게 만든 처방 뒤, 단계 10 곳이 「기록한다」고 적힌 블록을 커밋 전
+        // 차단으로 써서 🔴 15 가 났다. 실측(계획서 19 편): 블록 238 · 역할 표기 0.
+        ValidationSetBlockRoleMissing,
         General
     }
 
@@ -365,12 +369,14 @@ namespace ReSet.Core.Services
                 // SQL 거처 축(규칙 3-1·10). 조사 §5의 A급 셋이다 - 그때까지 이 세
                 // 규칙은 기계 강제가 0건이었고, 프롬프트와 Critic 두 층만으로 서
                 // 있었다. 셋 다 재료를 받지 않으므로 시그니처가 그대로다.
-                // SQL 펜스의 예약어 별칭. 위 셋과 축이 다르다 - 저쪽은 「SQL 이 앱으로
-                // 옮겨졌는가」를 보고 이쪽은 「그 SQL 이 컴파일되는가」를 본다.
-                // 상위 축 - 「그 SQL 이 파싱되는가」. 바로 아래 검사는 그중
-                // 예약어 별칭(67/72)에 정확한 시정 문구를 준다.
+                // 아래 둘은 위 셋과 축이 다르다 - 저쪽은 「SQL 이 앱으로 옮겨졌는가」를
+                // 보고 이쪽은 「그 SQL 이 컴파일되는가」를 본다. 파싱 검사가 상위 축이고,
+                // 별칭 검사는 그중 67/72 에 정확한 시정 문구를 준다(진단과 처방).
                 SafeCheck(() => CheckSqlFenceParses(cleansed, result));
                 SafeCheck(() => CheckReservedWordAliasInSql(cleansed, result));
+                // 또 다른 축 - 「그 SQL 을 무엇으로 쓰는가」. 검증 세트의 블록이
+                // 게이트인지 기록인지 선언하게 한다(B23 🔴 15 의 가족).
+                SafeCheck(() => CheckValidationSetBlockRole(cleansed, result));
                 SafeCheck(() => CheckNoLockHints(cleansed, result));
                 SafeCheck(() => CheckPrescribedFrameworkType(cleansed, result));
                 SafeCheck(() => CheckSqlSideControlFlow(cleansed, result));
@@ -12802,6 +12808,112 @@ namespace ReSet.Core.Services
 
             return summary.ToString();
         }
+
+        /// <summary>
+        /// 검증 SQL 세트의 블록이 <b>자기 역할을 선언하는가</b> - 「게이트」냐 「기록」이냐.
+        ///
+        /// [왜] B23 축 B 감사의 🔴 18 중 <b>15</b> 가 한 가족이다. 세트를 부르게 만든
+        /// 처방 뒤 단계 10 곳이 같은 블록을 자기 트랜잭션 안에서 커밋 전에 돌리고
+        /// <c>ViolationCount != 0</c> 이면 전량 롤백했다. 세트 공통 규약은 「검증 실패는
+        /// S18 이 <c>batch.BatchValidationIssue</c> 에 <b>기록한다</b>」인데, 그 한 줄이
+        /// 블록마다 붙지 않아 238 블록을 덮지 못했다.
+        ///
+        /// <b>이 검사는 술어를 고치지 않는다 - 틀린 술어의 대가를 낮춘다.</b> 헐거운
+        /// 술어가 「배치 전면 중단」이 아니라 「이슈 한 줄」이 되게 한다.
+        ///
+        /// [거처가 SQL 주석인 이유는 사본이다] B23 의 실패 모양은 「단계가 세트 SQL 을
+        /// 자기 안에 복사해 고쳤다」이고 산문·제목은 복사에 안 따라간다. 역할이 SQL
+        /// 안에 있으면 사본에도 실린다. 코퍼스 펜스 240/379(63%)가 이미 `--` 로 연다.
+        ///
+        /// [블록을 이름으로 잡지 않는다] 이름 공간이 편마다 다르다 - `SQL-01`(B23) ·
+        /// `V01`(B15) · `4.1`(B1) · 제목뿐(B19). 이름으로 잡으면 19 편 중 <b>2 편만</b>
+        /// 걸린다(실측). 블록은 <b>H3 구간 중 ```sql 펜스를 가진 것</b>이고 238 개다.
+        ///
+        /// [어휘를 좁게 못박지 않는다] 이 검사의 음성 표본은 <b>코퍼스에 없다</b> -
+        /// 역할 표기가 0 이기 때문이다. 재생성에서 모델이 쓰는 말은 스윕에 없던 모양을
+        /// 내므로 결합을 넓게 잡는다. 그래서 이 검사는 「오탐 0」을 주장하지 못한다.
+        ///
+        /// [원문을 본다] <see cref="CleanedSqlFences"/>는 주석을 공백으로 지운다. 역할
+        /// 표기가 바로 그 주석에 있으므로 정화본을 보면 <b>전건이 고발된다.</b>
+        /// </summary>
+        private static void CheckValidationSetBlockRole(string markdown, ValidationResult result)
+        {
+            var hits = CollectRolelessValidationBlocks(markdown);
+            if (hits.Count == 0) return;
+
+            var message =
+                "검증 SQL 세트의 블록이 자기 역할을 선언하지 않습니다. 각 블록의 SQL 첫 주석 줄에 " +
+                "역할을 적으십시오 - 커밋 전에 돌려 위반이면 그 트랜잭션을 되돌리는 블록인지, " +
+                "사후에 돌려 batch.BatchValidationIssue 에 한 줄 남기고 배치는 계속되는 블록인지를 " +
+                "구분해야 합니다. 표기가 없으면 단계가 후자를 전자로 승격시켜 정상 데이터에서 " +
+                $"배치가 멈춥니다. ({SummarizeCodeTokenHits(hits)})";
+
+            result.Report(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.ValidationSetBlockRoleMissing,
+                Message = message,
+                RawContext = hits[0].Line,
+                // 작성 계약 9 - 토큰이 아니라 발화가 있던 원문 줄(블록 제목)을 싣는다.
+                Lexemes = AttributionLexemes(hits)
+            });
+        }
+
+        /// <summary>
+        /// 검증 SQL 세트 절의 블록 중 역할 표기가 없는 것을 모은다.
+        ///
+        /// 스코프를 자기 절로 좁힌다(작성 계약 2) - 문서 전체를 훑으면 단계별 이행 절의
+        /// SQL 을 자기 결함으로 오귀속한다. 계획서에서 그쪽 펜스가 훨씬 많다.
+        /// </summary>
+        private static List<CodeTokenHit> CollectRolelessValidationBlocks(string markdown)
+        {
+            var hits = new List<CodeTokenHit>();
+            var lines = markdown.Split('\n');
+
+            var start = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, 0,
+                // 작성 계약 5 - 프롬프트가 헤딩을 3칸 들여써서 렌더한다.
+                line => line.Trim() == ValidationSetHeading);
+            if (start < 0) return hits;
+
+            var end = MarkdownSectionLocator.FindIndexOutsideFence(
+                lines, start + 1,
+                line => line.TrimStart().StartsWith("## ", StringComparison.Ordinal));
+            if (end < 0) end = lines.Length;
+
+            // H3 마다 구간을 잘라 블록 후보로 본다. 산문만 있는 H3(「공통 실행 규약」 ·
+            // 「검증 실행 계약」)은 펜스가 없으므로 블록이 아니다.
+            var headings = new List<int>();
+            for (var i = start + 1; i < end; i++)
+                if (lines[i].TrimStart().StartsWith("### ", StringComparison.Ordinal))
+                    headings.Add(i);
+
+            for (var h = 0; h < headings.Count; h++)
+            {
+                var from = headings[h];
+                var to = h + 1 < headings.Count ? headings[h + 1] : end;
+                var block = string.Join("\n", lines[from..to]);
+                if (!SqlFenceOpenerPattern.IsMatch(block)) continue;
+                if (BlockRolePattern.IsMatch(block)) continue;
+                hits.Add(new CodeTokenHit(lines[from].TrimStart().TrimStart('#').Trim(),
+                                          lines[from].TrimEnd('\r')));
+            }
+
+            return hits;
+        }
+
+        private const string ValidationSetHeading = "## 통합 데이터 정합성 검증 SQL 세트";
+
+        private static readonly Regex SqlFenceOpenerPattern =
+            new(@"^\s*```sql\b", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>
+        /// 역할 표기. 어휘를 넓게 잡는 이유는 선언 §5-1 이다 - 음성 표본이 코퍼스에
+        /// 없어서 모델이 어느 말을 쓸지 재 보지 못했다. 좁게 잡으면 그 자리가 곧바로
+        /// 재시도 소진이 된다.
+        /// </summary>
+        private static readonly Regex BlockRolePattern =
+            new(@"역할\s*[:：]\s*(게이트|기록|차단|사후)", RegexOptions.Compiled);
 
         /// <summary>
         /// 계획서의 SQL 펜스가 <b>파싱되는가</b>.
