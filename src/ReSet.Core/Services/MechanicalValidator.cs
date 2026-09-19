@@ -114,6 +114,14 @@ namespace ReSet.Core.Services
         ControlTableColumnContract,
         // RunId 발급 절보다 먼저 도는 절이 계약의 run id 자리(NOT NULL)에 쓴다 - 그 단계는 채울 값이 없어 항상 실패한다.
         PreRunIdRunIdWrite,
+        // SQL 펜스가 예약어를 대괄호 없이 별칭으로 쓴다 - 실행 오류가 아니라 컴파일
+        // 오류다. B23 배송본이 `AS RowCount` 를 48 자리에 달고 게이트를 통과했고,
+        // 그중 12 가 다른 단계들이 부르는 검증 세트 정본에 있다.
+        ReservedWordAliasInSql,
+        // SQL 펜스가 파싱되지 않는다. 위 항목의 상위 축이다 - 계획서 19 편 2628 펜스
+        // 실측에서 구문 오류 가족이 다섯이고 예약어 별칭은 67/72 다. 나머지 다섯 중
+        // 넷(컬럼 참조·CTE 이름·EXEC 인자 식·미닫힌 문자열)은 위 검사가 못 잡는다.
+        SqlFenceDoesNotParse,
         General
     }
 
@@ -357,6 +365,12 @@ namespace ReSet.Core.Services
                 // SQL 거처 축(규칙 3-1·10). 조사 §5의 A급 셋이다 - 그때까지 이 세
                 // 규칙은 기계 강제가 0건이었고, 프롬프트와 Critic 두 층만으로 서
                 // 있었다. 셋 다 재료를 받지 않으므로 시그니처가 그대로다.
+                // SQL 펜스의 예약어 별칭. 위 셋과 축이 다르다 - 저쪽은 「SQL 이 앱으로
+                // 옮겨졌는가」를 보고 이쪽은 「그 SQL 이 컴파일되는가」를 본다.
+                // 상위 축 - 「그 SQL 이 파싱되는가」. 바로 아래 검사는 그중
+                // 예약어 별칭(67/72)에 정확한 시정 문구를 준다.
+                SafeCheck(() => CheckSqlFenceParses(cleansed, result));
+                SafeCheck(() => CheckReservedWordAliasInSql(cleansed, result));
                 SafeCheck(() => CheckNoLockHints(cleansed, result));
                 SafeCheck(() => CheckPrescribedFrameworkType(cleansed, result));
                 SafeCheck(() => CheckSqlSideControlFlow(cleansed, result));
@@ -12788,6 +12802,211 @@ namespace ReSet.Core.Services
 
             return summary.ToString();
         }
+
+        /// <summary>
+        /// 계획서의 SQL 펜스가 <b>파싱되는가</b>.
+        ///
+        /// [왜 <see cref="CheckReservedWordAliasInSql"/>로 모자란가] 그 검사는 B23 한 편
+        /// 325 펜스를 재고 만들었다. 계획서 <b>19 편 2628 펜스</b>로 넓혀 재니 구문 오류
+        /// 가족이 다섯이다 - `AS 예약어` 67 · 예약어를 컬럼 참조로 1 · 예약어를 CTE
+        /// 이름으로 1 · `EXEC` 인자에 식 2 · 미닫힌 문자열 1. 앞 검사가 잡는 것은 67 뿐이다.
+        /// 다섯 전부 실물 SQL Server 2022 로 교차 확인했다.
+        ///
+        /// [둘을 다 두는 이유] 이 검사는 파서 메시지를 그대로 실을 수밖에 없어
+        /// 「어디가 깨졌는지」만 말한다. 앞 검사는 「대괄호로 감싸거나 이름을 바꾸십시오」로
+        /// <b>무엇을 고칠지</b>를 말한다. 실패의 67/72 가 그 가족이라 그 자리만큼은
+        /// 정확한 시정 문구가 있어야 한다 - 같은 펜스가 둘 다에 걸리는 것은 중복이
+        /// 아니라 진단과 처방이다.
+        ///
+        /// [제외 둘] 정당하게 파싱되지 않는 펜스가 코퍼스에 넷이다.
+        /// 산문의 「교정본」·「참조용」을 읽지 않는다 - 문구가 바뀌면 조용히 꺼진다
+        /// (작성 계약 8). 실측으로 이 둘이 넷을 정확히 걷고 진짜 72 를 하나도 안 먹는다.
+        ///
+        /// [미선언 변수는 오류가 아니다] 계획서의 SQL 은 앱이 파라미터를 넣는다.
+        /// ScriptDom 은 순수 구문 검사라 바인딩을 안 한다 - SQL Server 의
+        /// <c>SET PARSEONLY</c>는 미선언 변수를 고발하고 그것이 구문 오류로 연쇄해
+        /// 하네스가 322/325 를 거짓 고발한 적이 있다(선언 §1-1).
+        /// </summary>
+        private static void CheckSqlFenceParses(string markdown, ValidationResult result)
+        {
+            var hits = new List<CodeTokenHit>();
+
+            foreach (Match fence in SqlFenceRegex.Matches(markdown))
+            {
+                var sql = fence.Groups["sql"].Value;
+                if (AngleBracketPlaceholderPattern.IsMatch(sql)) continue;
+                if (OpensWithATokenThatCannotBeginAStatement(sql)) continue;
+
+                var parser = new TSql160Parser(initialQuotedIdentifiers: true);
+                parser.Parse(new StringReader(sql), out IList<ParseError> errors);
+                if (errors is not { Count: > 0 }) continue;
+
+                var first = errors[0];
+                hits.Add(new CodeTokenHit(
+                    first.Message,
+                    LineAt(markdown, fence.Groups["sql"].Index + Math.Max(0, first.Offset))));
+            }
+
+            if (hits.Count == 0) return;
+
+            var message =
+                "계획서의 SQL 블록이 파싱되지 않습니다. 이 SQL 은 실행되기 전에 " +
+                "**컴파일 단계에서** 죽습니다 - 데이터도 권한도 필요 없이 그 전에 " +
+                "거부됩니다. 파서가 지목한 자리를 고치십시오. 예약어를 식별자로 쓴 " +
+                "자리라면 대괄호로 감싸고(`AS [RowCount]`·`WITH [Current] AS`), " +
+                "`EXEC` 인자에는 식을 넘길 수 없으므로 변수에 먼저 담으십시오. " +
+                $"({SummarizeCodeTokenHits(hits)})";
+
+            result.Report(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.SqlFenceDoesNotParse,
+                Message = message,
+                RawContext = hits[0].Line,
+                // 작성 계약 9 - 토큰이 아니라 발화가 있던 원문 줄을 싣는다.
+                Lexemes = AttributionLexemes(hits)
+            });
+        }
+
+        private static readonly Regex SqlFenceRegex = new(
+            @"```sql(?<sql>.*?)```", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+
+        /// <summary>
+        /// `&lt;식별자&gt;` 서식 자리표시자. 이것을 담은 펜스는 템플릿이라 파싱되지 않는 것이
+        /// 정상이다. 코퍼스 실측 - 걸리는 펜스 12, 그중 파싱 실패 2, <b>꺾쇠 안에 공백이
+        /// 든 것 0</b>(비교 연산자 <c>a&lt;b</c> 오인 없음).
+        /// </summary>
+        private static readonly Regex AngleBracketPlaceholderPattern = new(
+            @"<[A-Za-z_][A-Za-z0-9_ ]*>", RegexOptions.Compiled);
+
+        /// <summary>
+        /// 주석을 건너뛴 첫 토큰이 문장을 시작할 수 없으면 조각이다 - 계획서가 의도적으로
+        /// 절 하나만 인용한 자리(「교정본」·「원본 발췌」)가 그 모양이다.
+        /// </summary>
+        private static bool OpensWithATokenThatCannotBeginAStatement(string sql)
+        {
+            var first = FirstTokenPattern.Match(sql);
+            return first.Success && TokensThatCannotBeginAStatement.Contains(first.Groups["tok"].Value);
+        }
+
+        private static readonly Regex FirstTokenPattern = new(
+            @"\A\s*(?:(?:--[^\n]*\n|/\*.*?\*/)\s*)*(?<tok>[A-Za-z_]+|[),])",
+            RegexOptions.Singleline | RegexOptions.Compiled);
+
+        private static readonly HashSet<string> TokensThatCannotBeginAStatement =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                "AND", "OR", "CASE", "WHEN", "THEN", "ELSE", "END", ")", ",",
+                "ON", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS",
+                "GROUP", "ORDER", "HAVING", "WHERE", "FROM"
+            };
+
+        /// <summary>
+        /// SQL 펜스가 예약어를 대괄호 없이 별칭으로 쓴 자리.
+        ///
+        /// [실행 오류가 아니라 컴파일 오류다] 로컬 SQL Server 2022 실측 -
+        /// <c>SELECT COUNT_BIG(*) AS RowCount FROM ...</c> 는
+        /// <c>Msg 156, Incorrect syntax near the keyword 'RowCount'</c> 로 죽고
+        /// <c>AS [RowCount]</c> 는 통과한다(132 반환). 데이터도 권한도 필요 없이 그
+        /// 전에 죽으므로 이 결함은 데이터 의존이 아니다 - 등급이 갈리지 않는다.
+        ///
+        /// [도달] B23 배송본에 <b>48 자리</b>(줄 기준)이고 48/48 이 전부 ```sql 펜스
+        /// 안이다(산문 0). 그중 <b>12 가 검증 SQL 세트</b>에 있다 - 다른 단계들이
+        /// 부르는 정본이다. 계획서 24 + 그것을 잘라 쓴 사본 24 이므로 통합 계획서
+        /// 한 자리에서 보면 전부 덮인다(<see cref="ValidateConsolidated"/>).
+        ///
+        /// [오라클이 파서인 이유] 예약어 목록을 손으로 적으면 빠뜨려 못 잡거나
+        /// 넓어서 오탐한다 - 둘 다 이 저장소가 겪은 실패다. 대신
+        /// <c>SELECT 1 AS &lt;별칭&gt;</c> 을 ScriptDom 에 물어 파싱되면 식별자,
+        /// 안 되면 예약어로 판정한다. 오라클이 산출물이 아니라 파서이고 SQL Server 와
+        /// 같은 문법 계열이라 판정이 실물과 같아진다.
+        ///
+        /// [`AS` 뒤가 타입인 자리를 왜 안 잡는가] <c>CAST(x AS INT)</c> 의 `INT` 는
+        /// 별칭이 아니다. 판정식이 그것도 예약어로 보므로 여는 괄호 앞의 `CAST`·
+        /// `CONVERT`·`TRY_CAST`·`TRY_CONVERT` 문맥을 먼저 제외한다 - 배송본에 CAST 가
+        /// 흔해서 이 제외가 없으면 오탐이 곧바로 재시도 소진이 된다(작성 계약 7).
+        /// </summary>
+        private static void CheckReservedWordAliasInSql(string markdown, ValidationResult result)
+        {
+            var hits = CollectReservedWordAliasHits(markdown);
+            if (hits.Count == 0) return;
+
+            var message =
+                "계획서의 SQL 블록이 예약어를 대괄호 없이 별칭으로 쓰고 있습니다. 이 SQL 은 " +
+                "실행되기 전에 **컴파일 단계에서** 죽습니다 - SQL Server 는 " +
+                "`Incorrect syntax near the keyword ...`(Msg 156)로 거부합니다. 별칭을 " +
+                "대괄호로 감싸거나(`AS [RowCount]`) 예약어가 아닌 이름으로 바꾸십시오" +
+                "(`AS RowCnt`). 검증 SQL 세트에 이 모양이 있으면 그것을 부르는 모든 " +
+                $"단계가 함께 죽습니다. ({SummarizeCodeTokenHits(hits)})";
+
+            result.Report(message);
+            result.DetailedErrors.Add(new DetailedError
+            {
+                Type = ErrorType.ReservedWordAliasInSql,
+                Message = message,
+                RawContext = hits[0].Line,
+                // 작성 계약 9 - 귀속 어휘는 토큰이 아니라 발화가 있던 원문 줄이다.
+                // 토큰(`RowCount`)을 실으면 산문의 인용에도 걸려 위반 없는 단계까지 연다.
+                Lexemes = AttributionLexemes(hits)
+            });
+        }
+
+        /// <summary>
+        /// SQL 펜스에서 예약어 별칭을 모은다.
+        ///
+        /// <see cref="CollectCodeTokenHits"/>를 쓰지 않는 이유는 판정이 정규식 하나로
+        /// 끝나지 않기 때문이다 - 후보를 정규식으로 뽑고 <b>파서에게 물어</b> 거른다.
+        /// </summary>
+        private static List<CodeTokenHit> CollectReservedWordAliasHits(string markdown)
+        {
+            var hits = new List<CodeTokenHit>();
+
+            foreach (var (cleaned, offset) in CleanedSqlFences(markdown))
+            {
+                foreach (Match candidate in AliasAfterAsPattern.Matches(cleaned))
+                {
+                    var alias = candidate.Groups["alias"].Value;
+                    if (!IsReservedWord(alias)) continue;
+
+                    hits.Add(new CodeTokenHit(
+                        alias,
+                        LineAt(markdown, offset + candidate.Groups["alias"].Index)));
+                }
+            }
+
+            return hits;
+        }
+
+        /// <summary>
+        /// `AS` 뒤에 오는 대괄호·따옴표 없는 별칭 후보.
+        ///
+        /// 대괄호 `[...]`·큰따옴표 `"..."` 로 감싼 별칭은 첫 글자가 식별자 시작이
+        /// 아니므로 이 식에 애초에 걸리지 않는다 - 그것이 정상 표기다.
+        /// </summary>
+        private static readonly Regex AliasAfterAsPattern = new(
+            @"\bAS\s+(?<alias>[A-Za-z_][A-Za-z0-9_$#]*)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>
+        /// 그 낱말이 T-SQL 예약어인가 - <b>오라클은 ScriptDom 파서다</b>.
+        ///
+        /// 목록을 손으로 들고 있지 않는 이유는 작성 계약 8 과 같다. 한 번 물은 답은
+        /// 캐시한다(계획서 한 편의 별칭 후보가 수백이다).
+        /// </summary>
+        private static bool IsReservedWord(string word)
+        {
+            if (string.IsNullOrEmpty(word)) return false;
+
+            return ReservedWordCache.GetOrAdd(word, static candidate =>
+            {
+                var parser = new TSql160Parser(initialQuotedIdentifiers: true);
+                parser.Parse(new StringReader($"SELECT 1 AS {candidate}"), out IList<ParseError> errors);
+                return errors is { Count: > 0 };
+            });
+        }
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool>
+            ReservedWordCache = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// 규칙 10 - 코드 블록에 남은 `NOLOCK` 잠금 힌트.
